@@ -272,6 +272,8 @@ class Controller(Node):
                         self.get_logger().error(f"Service call raised exception: {e}")
                     finally:
                         self.future = None
+                else:
+                    # Previous request still pending — skip this tick
                     return
 
             # Send new request
@@ -305,12 +307,16 @@ class Controller(Node):
 
             if self.controller_type == 'MPC':
                 u = self.controller.solve(path=self.controller_path, x_current=current_state)
-
+                # Desired state for monitoring (first pose of the reference path)
+                desired_pose = self.controller_path.poses[0].pose
+                q = desired_pose.orientation
+                psi_d = R.from_quat([q.x, q.y, q.z, q.w]).as_euler('xyz')[2]
+                target = [desired_pose.position.x, desired_pose.position.y, psi_d]
+                
             if self.controller_type == 'PID':
                 target = cf.compute_target(self.controller_path, self.dt)
                 u,_ = self.controller.compute(current_state, target[:3])
                 self.get_logger().info(f'\nState: {current_state} \n Target: {target} \nThrust: {u}')
-
 
             if self.controller_type == 'LoS':
                 target = cf.compute_target(self.controller_path, self.dt)
@@ -329,9 +335,9 @@ class Controller(Node):
                 u = self.solve_LoS(target, current_time)
 
             # Publish controller target (for data recording)
-                msg = Float32MultiArray()
-                msg.data = target
-                self.thruster_input_publisher.publish(msg)
+            msg = Float32MultiArray()
+            msg.data = target
+            self.target_publisher.publish(msg)
 
         # Publish thruster input
         msg = Float32MultiArray()
@@ -342,17 +348,17 @@ class Controller(Node):
         # self.get_logger().info(f'Pose: {self.current_pose} \nTwist: {self.current_twist} \nComputed thrust: {u}')
 
         # Update and save monitoring metrics to be graphed later
-        if self.controller_path.poses:
-            x_m = current_state[0]
-            y_m = current_state[1]
+        if self.controller_path.poses or (self.use_pinger and self.pinger_target is not None):
+            x_m   = current_state[0]
+            y_m   = current_state[1]
             psi_m = current_state[2]
 
-            x_d_m = target[0]
-            y_d_m = target[1]
+            x_d_m   = target[0]
+            y_d_m   = target[1]
+            psi_d_m = target[2] if len(target) > 2 else 0.0   # pinger target may be 2D
 
-            psi_d_m = target[2]
-
-            data_array = [current_time, x_m, y_m, psi_m, x_d_m, y_d_m , psi_d_m, u[0],u[1]]
+            data_array = [current_time, x_m, y_m, psi_m,
+                        x_d_m, y_d_m, psi_d_m, u[0], u[1]]
 
             self.monitoring.append(data_array)
 

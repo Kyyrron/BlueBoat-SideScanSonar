@@ -35,15 +35,24 @@ def generate_launch_description():
     sl_pulse_len_percent = sl.declare_arg('pulse_len_percent', default_value=0.002)
 
     # ---- Logging ---------------------------------------------------------
-    # Per-side subdirectories (port/, starboard/) are appended automatically.
     sl_log_directory = sl.declare_arg('log_directory', default_value='data/SSS_data')
+
+    # ---- Processor geometry ----------------------------------------------
+    sl_transducer_x        = sl.declare_arg('transducer_x_m',        default_value=0.0)
+    sl_transducer_y_offset = sl.declare_arg('transducer_y_offset_m', default_value=0.0)
+    sl_transducer_z        = sl.declare_arg('transducer_z_m',        default_value=0.0)
+    sl_base_frame_id       = sl.declare_arg('base_frame_id',         default_value='base_link')
+
+    # ---- Processor pairing -----------------------------------------------
+    sl_match_tolerance_ms  = sl.declare_arg('match_tolerance_ms', default_value=50)
+    sl_pair_buffer_size    = sl.declare_arg('pair_buffer_size',   default_value=16)
 
     # ---- Frames ----------------------------------------------------------
     sl_port_frame_id      = sl.declare_arg('port_frame_id',      default_value='sss_port_link')
     sl_starboard_frame_id = sl.declare_arg('starboard_frame_id', default_value='sss_starboard_link')
 
     sl.node('blueboat_control', 'sss_node.py',
-            name='sss_node',
+            name='side_scan_sonar',
             output='screen',
             parameters={
                 'port_ip':            sl_port_ip,
@@ -59,6 +68,21 @@ def generate_launch_description():
                 'log_directory':      sl_log_directory,
                 'port_frame_id':      sl_port_frame_id,
                 'starboard_frame_id': sl_starboard_frame_id,
+            })
+
+    sl.node('blueboat_control', 'sss_processor_node.py',
+            name='sss_processor_node',
+            output='screen',
+            parameters={
+                'port_topic':            '/side_scan_sonar/port/profile',
+                'starboard_topic':       '/side_scan_sonar/starboard/profile',
+                'match_tolerance_ms':    sl_match_tolerance_ms,
+                'pair_buffer_size':      sl_pair_buffer_size,
+                'transducer_x_m':        sl_transducer_x,
+                'transducer_y_offset_m': sl_transducer_y_offset,
+                'transducer_z_m':        sl_transducer_z,
+                'base_frame_id':         sl_base_frame_id,
+                'log_directory':         sl_log_directory,
             })
 
     return sl.launch_description()

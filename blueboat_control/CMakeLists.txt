@@ -36,7 +36,9 @@ install(PROGRAMS src/robot_interaction/param_set.py
         DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS src/robot_interaction/uwgps_log.py
         DESTINATION lib/${PROJECT_NAME})
-install(PROGRAMS src/robot_interaction/sss_node.py
+install(PROGRAMS src/SSS/sss_node.py
+        DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS src/SSS/sss_processor_node.py
         DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS src/master_control.py

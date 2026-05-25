@@ -5,9 +5,9 @@ import time
 from datetime import datetime
 import numpy as np
 import pandas as pd
-import math
-from scipy.spatial.transform import Rotation as R
-import transformations as tf_transformations
+# import math
+# from scipy.spatial.transform import Rotation as R
+# import transformations as tf_transformations
 
 # ROS2 import
 import rclpy
@@ -17,7 +17,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 # msg import
 from std_msgs.msg import String, Bool, Float32MultiArray
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Quaternion
+# from geometry_msgs.msg import Quaternion
 from sensor_msgs.msg import Imu, NavSatFix
 from mavros_msgs.msg import State
 
@@ -49,7 +49,7 @@ class BlueBoatController(Node):
         self.odom_publisher = self.create_publisher(Odometry, '/blueboat/odom',10)
         self.pinger_publisher = self.create_publisher(Float32MultiArray, '/blueboat/pinger_coordinates', 10)
         self.set_controller_publisher = self.create_publisher(Bool, '/blueboat/controller_ready',10)
-        self.plot_publisher = self.create_publisher(Float32MultiArray, "blueboat/monitoring_data", 10)
+        #self.plot_publisher = self.create_publisher(Float32MultiArray, "blueboat/monitoring_data", 10)
 
         ## Subscribers
         # Node interaction
@@ -192,13 +192,13 @@ class BlueBoatController(Node):
 
         self.cmd_client.call_async(req)
 
-    def manualMove(self, input):
+    def manualMove(self, input, force=False):
         """
         Convert a newton input to pwm and send it to motor
         """
 
         # Safety
-        if not self.enable_motors:
+        if not self.enable_motors and not force:
             return
 
         def thrust_to_pwm(T): # Thrust in Newton
@@ -262,7 +262,7 @@ class BlueBoatController(Node):
         """
         Cancels any thruster input and set control parameters to False
         """
-        self.manualMove([0,0])
+        self.manualMove([0,0], force=True)
         self.setArmedStatus(False) 
         self.set_motors(False)
 
@@ -293,6 +293,8 @@ class BlueBoatController(Node):
     def str_input_callback(self, msg: String):
         """
         Read str_msg content and take required action
+        By default, any unrecognized command will be sent to the move_callback,
+        allowing for manual control through the input_str topic without needing to set the command to 'move'
         """
         input_string = msg.data.split()
         command = input_string[0]
@@ -314,7 +316,7 @@ class BlueBoatController(Node):
 
     def param_callback(self, msg: String):
         """
-        Returns true if the parameter changes are successful (used with the 'default' and 'override' command)
+        Prints true if the parameter changes are successful (used with the 'default' and 'override' command)
         """
         self.get_logger().info(f" Parameters ready: {msg.data}")
 
@@ -337,57 +339,6 @@ class BlueBoatController(Node):
         self.linear_acceleration = msg.linear_acceleration  # (m/s^2)
 
     def odom_callback(self, msg: Odometry):
-        def quaternion_to_yaw(q: Quaternion):
-            # yaw (Z axis rotation)
-            siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-            cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-            return math.atan2(siny_cosp, cosy_cosp)
-
-        def yaw_to_quaternion(yaw: float):
-            q = Quaternion()
-            q.w = math.cos(yaw * 0.5)
-            q.x = 0.0
-            q.y = 0.0
-            q.z = math.sin(yaw * 0.5)
-            return q
-
-        def normalize_angle(angle):
-            return math.atan2(math.sin(angle), math.cos(angle))
-
-        def transform_body_to_world(x_r, y_r, yaw, x_b, y_b):
-            c = math.cos(yaw)
-            s = math.sin(yaw)
-
-            x_w = x_r + (c * x_b - s * y_b)
-            y_w = y_r + (s * x_b + c * y_b)
-
-            return x_w, y_w
-
-        def enu_to_gps(lat0_deg, lon0_deg, east, north):
-            EARTH_RADIUS = 6378137.0  # meters
-
-            lat0 = math.radians(lat0_deg)
-            lon0 = math.radians(lon0_deg)
-
-            dlat = north / EARTH_RADIUS
-            dlon = east / (EARTH_RADIUS * math.cos(lat0))
-
-            lat = lat0 + dlat
-            lon = lon0 + dlon
-
-            return math.degrees(lat), math.degrees(lon)
-
-        def local_to_enu(x, y, yaw0):
-            # rotate local frame into ENU
-            theta = yaw0 - math.pi / 2.0
-
-            c = math.cos(theta)
-            s = math.sin(theta)
-
-            east  = c * x - s * y
-            north = s * x + c * y
-
-            return east, north
 
         # Set previous time measurement and compute dt
         t = self.get_clock().now().nanoseconds * 1e-9
@@ -402,7 +353,7 @@ class BlueBoatController(Node):
             self.x0 = msg.pose.pose.position.x
             self.y0 = msg.pose.pose.position.y
             self.z0 = msg.pose.pose.position.z
-            self.yaw0 = quaternion_to_yaw(msg.pose.pose.orientation)
+            self.yaw0 = cf.quaternion_to_yaw(msg.pose.pose.orientation)
             self.lat0 = self.gps_data[0]
             self.lon0 = self.gps_data[1]
             self.origin_set = True
@@ -413,8 +364,8 @@ class BlueBoatController(Node):
         z_rel = msg.pose.pose.position.z - self.z0
 
         # Yaw offset
-        yaw = quaternion_to_yaw(msg.pose.pose.orientation)        
-        yaw_rel = normalize_angle(yaw - self.yaw0)
+        yaw = cf.quaternion_to_yaw(msg.pose.pose.orientation)        
+        yaw_rel = cf.normalize_angle(yaw - self.yaw0)
 
         self.relative_coordinates = [x_rel,y_rel,yaw_rel]
 
@@ -426,7 +377,7 @@ class BlueBoatController(Node):
         odom_out.pose.pose.position.x = x_rel
         odom_out.pose.pose.position.y = y_rel
         odom_out.pose.pose.position.z = z_rel
-        odom_out.pose.pose.orientation = yaw_to_quaternion(yaw_rel)
+        odom_out.pose.pose.orientation = cf.yaw_to_quaternion(yaw_rel)
 
         # Preserve velocity and covariance
         odom_out.twist = msg.twist
@@ -443,7 +394,7 @@ class BlueBoatController(Node):
         av = self.angular_velocity
 
         # Apply sensor fusion to get a smoother approximation at higher frequency of pinger_coordinates
-        if not all(self.pinger_coordinates == np.zeros(3)): # Make sure the pinger has been detected
+        if av is not None and not all(self.pinger_coordinates == np.zeros(3)): # Make sure the pinger has been detected
             omega = np.array([0.0, 0.0, av.z])
             p = self.pinger_coordinates
 
@@ -458,14 +409,15 @@ class BlueBoatController(Node):
         x_body = self.pinger_coordinates[0]
         y_body = self.pinger_coordinates[1]
 
-        x_world, y_world = transform_body_to_world(x_rel, y_rel, yaw_rel, x_body, y_body)
+        x_world, y_world = cf.transform_body_to_world(x_rel, y_rel, yaw_rel, x_body, y_body) # now relative to the original frame of reference 
+
 
         self.corrected_pinger = [x_world, y_world]
 
         # convert local pinger into gps coordinates
-        east, north = local_to_enu(x_world,y_world,self.yaw0)
+        east, north = cf.local_to_enu(x_world, y_world, self.yaw0)
 
-        lat, lon = enu_to_gps(self.lat0, self.lon0, east, north)
+        lat, lon = cf.enu_to_gps(self.lat0, self.lon0, east, north)
 
         self.pinger_gps = [lat, lon]
 
@@ -478,14 +430,11 @@ class BlueBoatController(Node):
         """
 
         # Make sure the robot's data is available
-        if self.orientation is None:
+        if self.orientation is None or self.angular_velocity is None or self.linear_acceleration is None:
             return
 
         ## Compile data from gps, imu, and others
         self.uw_gps_log = msg.data
-
-        if self.linear_acceleration == None:
-            return
 
         df_tmp = pd.DataFrame(np.zeros(self.data_size).reshape(1, self.data_size), columns=self.data_columns)
 
@@ -500,8 +449,8 @@ class BlueBoatController(Node):
         df_tmp.iloc[0, 22] = self.orientation.w
 
         df_tmp.iloc[0, 23] = self.angular_velocity.x
-        df_tmp.iloc[0, 24] = self.angular_velocity.x
-        df_tmp.iloc[0, 25] = self.angular_velocity.x
+        df_tmp.iloc[0, 24] = self.angular_velocity.y
+        df_tmp.iloc[0, 25] = self.angular_velocity.z
 
         df_tmp.iloc[0, 26] = self.linear_acceleration.x
         df_tmp.iloc[0, 27] = self.linear_acceleration.y
@@ -529,7 +478,7 @@ class BlueBoatController(Node):
         
         self.df_log = pd.concat([self.df_log, df_tmp])
 
-        self.df_log.to_csv(self.path)
+        self.df_log.to_csv(self.path) # Rewrite the entire file every time for safety in case of unexpected shutdowns
 
     def target_callback(self, msg: Float32MultiArray):
         """
@@ -586,7 +535,7 @@ class BlueBoatController(Node):
 
         # If no controller is set, allow for manual input
         if self.controller_type == '' and current_time - self.initial_time >= self.manual_move_timer:
-            self.manualMove([0, 0])
+            self.manualMove([0, 0]) # If override + no controler, stop the robot after any manual move command
         else:
             self.manualMove(self.thruster_input)        
         

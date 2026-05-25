@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
 import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import Pose
-from nav_msgs.msg import Odometry
-from std_msgs.msg import String
+# from rclpy.node import Node
+from geometry_msgs.msg import Pose, Quaternion
+# from nav_msgs.msg import Odometry
+# from std_msgs.msg import String
 from visualization_msgs.msg import Marker
 from scipy.spatial.transform import Rotation as R
+import math
 import numpy as np
 import os
 from scipy.interpolate import PchipInterpolator
@@ -16,18 +17,6 @@ def generate_interpolator():
     pwm = np.array([1100,1110,1136,1162,1188,1214,1240,1266,1292,1318,1344,1370,1396,1422,1448,1474,1500,1526,1552,1578,1604,1630,1656,1682,1708,1734,1760,1786,1812,1838,1864,1890,1900])
     thr = 9.80665*np.array([-2.81,-2.78,-2.64,-2.42,-2.21,-2.04,-1.83,-1.57,-1.42,-1.2,-0.98,-0.82,-0.6,-0.41,-0.24,-0.09,0,0.21,0.5,0.82,1.17,1.58,1.93,2.37,2.76,3.23,3.57,3.99,4.36,4.84,5.22,5.45,5.63])
     return PchipInterpolator(thr, pwm)
-
-#################### BlueBoat Interaction ####################
-class BlueBoat():
-    def __init__(self, node: Node):
-
-        self.node = node
-        
-        # Pose
-        self.current_pose = None
-        self.current_twist = None
-
-        self.odom_sub = node.create_subscription(Odometry, 'odom', self.odom_cb, 1)
 
 #################### Gazebo interaction ####################
 def pause_gz(pause):
@@ -320,3 +309,55 @@ def seabed_scanning(t):
         psir = rr*velmin*12*np.pi 
 
     return xr, yr, zr, phir, thetar, psir
+
+def quaternion_to_yaw(q: Quaternion):
+            # yaw (Z axis rotation)
+            siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+            cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            return math.atan2(siny_cosp, cosy_cosp)
+
+def yaw_to_quaternion(yaw: float):
+    q = Quaternion()
+    q.w = math.cos(yaw * 0.5)
+    q.x = 0.0
+    q.y = 0.0
+    q.z = math.sin(yaw * 0.5)
+    return q
+
+def normalize_angle(angle):
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+def transform_body_to_world(x_r, y_r, yaw, x_b, y_b):
+    c = math.cos(yaw)
+    s = math.sin(yaw)
+
+    x_w = x_r + (c * x_b - s * y_b)
+    y_w = y_r + (s * x_b + c * y_b)
+
+    return x_w, y_w
+
+def enu_to_gps(lat0_deg, lon0_deg, east, north):
+    EARTH_RADIUS = 6378137.0  # meters
+
+    lat0 = math.radians(lat0_deg)
+    lon0 = math.radians(lon0_deg)
+
+    dlat = north / EARTH_RADIUS
+    dlon = east / (EARTH_RADIUS * math.cos(lat0))
+
+    lat = lat0 + dlat
+    lon = lon0 + dlon
+
+    return math.degrees(lat), math.degrees(lon)
+
+def local_to_enu(x, y, yaw0):
+    # rotate local frame into ENU
+    theta = yaw0 - math.pi / 2.0
+
+    c = math.cos(theta)
+    s = math.sin(theta)
+
+    east  = c * x - s * y
+    north = s * x + c * y
+
+    return east, north

@@ -23,6 +23,11 @@ ros2 launch blueboat_control SSS_launch.py \
     log_directory:=/Data/SSS_data
 ```
 
+Typical launch line:
+```bash
+ros2 launch blueboat_control SSS_launch.py range_length_mm:=50000
+```
+
 From another launch file (for the future "boat + sss" composite):
 
 ```python
@@ -59,6 +64,21 @@ ros2 topic hz /sss_node/port/profile
 ros2 topic hz /sss_node/starboard/profile
 ```
 
+### Publishing rate
+
+One ROS message is published per ping packet received — no batching.
+The effective rate is set by the `msec_per_ping` parameter:
+
+- `msec_per_ping = 0` (default) — pings as fast as the hardware can
+  manage, which depends on range. Two-way travel time at 1500 m/s sets
+  the ceiling: roughly **20–25 Hz at 30 m range**, **10 Hz at 75 m**,
+  **~7 Hz at 100 m**.
+- `msec_per_ping = N > 0` — lower-bounds the period at N ms. Set
+  `msec_per_ping=50` for a steady **20 Hz** per side, `100` for 10 Hz,
+  etc. Useful when downstream code expects a constant rate.
+
+### Changing parameters mid-mission
+
 The acquisition parameters (`range_length_mm`, `gain_index`,
 `num_results`, `pulse_len_percent`, `msec_per_ping`, `range_start_mm`)
 are read fresh on every "start". If you want to change range mid-mission:
@@ -76,9 +96,11 @@ ros2 topic pub --once /sss_node/ping/enable std_msgs/msg/Bool 'data: true'
 
 ## Start / stop raw logging
 
-Logging writes the raw packet stream straight to `.svlog` files (the
-SonarView log format). It happens *in addition to* the ROS topic
-publishing — independent switch.
+Logging writes the raw packet stream to a `.svlog` file in the
+**SonarView single-file format**: both sides interleaved in one file,
+distinguished by the per-packet `channel_number` field. This is the
+same layout SonarView produces when you click its **Record** button —
+the file opens directly in SonarView with both channels visible.
 
 ```bash
 # Start logging
@@ -88,9 +110,10 @@ ros2 topic pub --once /sss_node/log/enable std_msgs/msg/Bool 'data: true'
 ros2 topic pub --once /sss_node/log/enable std_msgs/msg/Bool 'data: false'
 ```
 
-Logging only writes when packets are arriving, so **enable pinging
-first** (or both at the same time). Logging with pinging off creates the
-file but it stays empty until pings start.
+Logging only writes packets that are actually arriving from the
+devices, so **enable pinging first** (or both at the same time).
+Logging with pinging off creates the file with only its metadata
+header — nothing else gets written until pings start.
 
 Each off→on transition rolls a brand new `.svlog` file. So a typical
 recording session looks like:
@@ -105,8 +128,7 @@ ros2 topic pub --once /sss_node/ping/enable std_msgs/msg/Bool 'data: false'
 
 ## Choosing the log folder
 
-The folder is the `log_directory` parameter. Default is `~/data/SSS_data`
-(tilde expansion is handled by the node).
+The folder is the `log_directory` parameter. Default is `/data/SSS_data`.
 
 Override at launch time:
 
@@ -130,22 +152,30 @@ integration guide).
 
 ## What ends up on disk
 
-The node creates two subdirectories under `log_directory`, one per
-transducer, and the bluerobotics-ping library writes timestamped
-`.svlog` files into each:
+One `.svlog` file per recording session, in the directory you
+configured:
 
 ```
 /data/SSS_data/
-├── port/
-│   └── 2026_05_08_14_03_27.svlog
-└── starboard/
-    └── 2026_05_08_14_03_27.svlog
+├── 2026-05-08-14-03-27.svlog      # session 1 (started 14:03:27)
+└── 2026-05-08-14-19-02.svlog      # session 2 (started 14:19:02)
 ```
 
-Each `.svlog` is the raw binary stream of Ping-Protocol packets the
-device sent during the recording window — primarily `os_mono_profile`
-(id 2198) packets at the configured ping rate, plus occasional metadata
-packets. You can:
+Each file:
+
+- Opens with a **JSON metadata packet** that declares both transducers
+  in `session_devices` (`tcp://192.168.2.92:51200` and
+  `tcp://192.168.2.93:51200` by default). SonarView reads this to set
+  up the two display channels.
+- Is then a stream of raw Ping-Protocol `os_mono_profile` packets from
+  both devices, **interleaved in arrival order**. Each packet's
+  `channel_number` field tells the player which side it came from.
+- Each packet is framed exactly as Cerulean defines: `BR` sync bytes,
+  little-endian payload length, message id (2198), device IDs, the
+  52-byte fixed payload plus the `pwr_results` array (length =
+  `num_results`), and a 2-byte checksum.
+
+What you can do with it:
 
 - **Replay them in SonarView** — open the file in the SonarView desktop
   or BlueOS extension to get the same waterfall view you'd see live.

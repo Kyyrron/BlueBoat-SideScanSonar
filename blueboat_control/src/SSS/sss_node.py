@@ -21,8 +21,7 @@ Run-dependent parameters
 Network        port_ip, port_tcp_port, starboard_ip, starboard_tcp_port
 Acquisition    range_start_mm, range_length_mm, msec_per_ping, gain_index,
                num_results, pulse_len_percent
-Logging        log_directory  (created if missing; per-side subdirs are
-                               appended automatically)
+Logging        log_directory  (created if missing)
 Frames         port_frame_id, starboard_frame_id
 
 The acquisition parameters are re-read each time pinging is enabled, so
@@ -31,9 +30,15 @@ The acquisition parameters are re-read each time pinging is enabled, so
 
 from __future__ import annotations
 
+import json
 import os
+import platform
+import struct
+import sys
 import threading
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -44,7 +49,7 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool
 
 # bluerobotics-ping -- install with:  pip install --user bluerobotics-ping --upgrade
-from brping import Omniscan450, definitions
+from brping import Omniscan450, definitions, pingmessage
 
 from blueboat_interfaces.msg import OmniscanProfile
 
@@ -54,6 +59,7 @@ from blueboat_interfaces.msg import OmniscanProfile
 # ---------------------------------------------------------------------------
 FILTER_DURATION_PERCENT: float = 0.0015     # Cerulean docs: 0.0015 typical
 WORKER_JOIN_TIMEOUT_S: float = 3.0
+MAX_LOG_SIZE_BYTES: int = 500 * 1000 * 1000  # mirrors brping's MAX_LOG_SIZE_MB (500 MB default)
 
 
 @dataclass(frozen=True)
@@ -67,12 +73,149 @@ class PingParams:
     num_results: int
     pulse_len_percent: float
 
+# ---------------------------------------------------------------------------
+# Shared svlog writer -- one file, two channels, SonarView-compatible
+# ---------------------------------------------------------------------------
+class SvlogWriter:
+    """Thread-safe single-file SonarView log writer for two Omniscan devices.
 
+    Mirrors what `brping.Omniscan450.write_data()` does, but for both
+    devices at once:
+      1. On `start()`, write one JSON metadata packet whose
+         `session_devices` lists BOTH transducers.
+      2. On every subsequent `write()` call, append the raw packet bytes
+         (already framed by the library as 'BR' + len + id + payload +
+         checksum). The per-packet `channel_number` field tells SonarView
+         which side each packet came from.
+      3. On reaching MAX_LOG_SIZE_BYTES, roll to a new file (re-writes
+         metadata).
+    """
+
+    def __init__(self, log_dir: Path, port_url: str, starboard_url: str) -> None:
+        self._log_dir = log_dir
+        self._port_url = port_url
+        self._starboard_url = starboard_url
+
+        self._lock = threading.Lock()
+        self._active = False
+        self._path: Optional[Path] = None
+        self._bytes_written = 0
+
+    # ----- public API ------------------------------------------------------
+    @property
+    def active(self) -> bool:
+        with self._lock:
+            return self._active
+
+    @property
+    def current_path(self) -> Optional[Path]:
+        with self._lock:
+            return self._path
+
+    def start(self) -> Optional[Path]:
+        """Open a new .svlog with the dual-device metadata header."""
+        with self._lock:
+            if self._active:
+                return self._path
+            self._log_dir.mkdir(parents=True, exist_ok=True)
+            self._roll_unlocked()
+            self._active = True
+            return self._path
+
+    def stop(self) -> None:
+        with self._lock:
+            self._active = False
+            self._path = None
+            self._bytes_written = 0
+
+    def write(self, raw_bytes: bytes) -> None:
+        """Append one already-framed Ping-Protocol packet."""
+        with self._lock:
+            if not self._active or self._path is None:
+                return
+            if self._bytes_written > MAX_LOG_SIZE_BYTES:
+                self._roll_unlocked()
+            try:
+                with open(self._path, "ab") as f:
+                    f.write(raw_bytes)
+                self._bytes_written += len(raw_bytes)
+            except OSError:
+                # Disk full / unmounted / permissions -- stop quietly.
+                self._active = False
+                self._path = None
+
+    # ----- internals -------------------------------------------------------
+    def _roll_unlocked(self) -> None:
+        """Open a fresh .svlog and write the dual-device metadata packet."""
+        save_name = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        path = self._log_dir / f"{save_name}.svlog"
+        if path.exists():
+            path.unlink()
+        self._path = path
+        self._bytes_written = 0
+
+        meta = self._build_dual_metadata_packet()
+        with open(path, "ab") as f:
+            f.write(meta)
+        self._bytes_written += len(meta)
+
+    def _build_dual_metadata_packet(self) -> bytes:
+        """SonarView session-header JSON wrapped in a JSON_WRAPPER packet."""
+        content = {
+            "session_id": 1,
+            "session_uptime": 0.0,
+            "session_devices": [
+                {"url": self._port_url, "product_id": "os450"},
+                {"url": self._starboard_url, "product_id": "os450"},
+            ],
+            "session_platform": None,
+            "session_clients": [],
+            "session_plan_name": None,
+            "is_recording": True,
+            "sonarlink_version": "",
+            "os_hostname": platform.node(),
+            "os_uptime": None,
+            "os_version": platform.version(),
+            "os_platform": platform.system().lower(),
+            "os_release": platform.release(),
+            "process_path": sys.executable,
+            "process_version": f"v{platform.python_version()}",
+            "process_uptime": time.process_time(),
+            "process_arch": platform.machine(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp_timezone_offset":
+                datetime.now().astimezone().utcoffset().total_seconds() // 60,
+        }
+
+        json_bytes = json.dumps(content, indent=2).encode("utf-8")
+
+        m = pingmessage.PingMessage(definitions.OMNISCAN450_JSON_WRAPPER)
+        m.payload = json_bytes
+        m.payload_length = len(json_bytes)
+
+        msg_data = bytearray()
+        msg_data += b"BR"
+        msg_data += m.payload_length.to_bytes(2, "little")
+        msg_data += m.message_id.to_bytes(2, "little")
+        msg_data += m.dst_device_id.to_bytes(1, "little")
+        msg_data += m.src_device_id.to_bytes(1, "little")
+        msg_data += m.payload
+
+        checksum = sum(msg_data) & 0xFFFF
+        msg_data += bytearray(
+            struct.pack(
+                pingmessage.PingMessage.endianess
+                + pingmessage.PingMessage.checksum_format,
+                checksum,
+            )
+        )
+        return bytes(msg_data)
+    
 # ---------------------------------------------------------------------------
 # Per-device worker
 # ---------------------------------------------------------------------------
 class OmniscanWorker:
-    """Owns one Omniscan450 device. Thread receives, lock guards control."""
+    """Owns one Omniscan450. Receive loop publishes + forwards to shared log."""
 
     def __init__(
         self,
@@ -82,7 +225,7 @@ class OmniscanWorker:
         tcp_port: int,
         publisher,
         frame_id: str,
-        log_dir: Path,
+        log_writer: SvlogWriter,
     ) -> None:
         self._node = node
         self._side = side
@@ -90,30 +233,21 @@ class OmniscanWorker:
         self._tcp_port = tcp_port
         self._publisher = publisher
         self._frame_id = frame_id
-        self._log_dir = log_dir
+        self._log_writer = log_writer
 
         self._device: Optional[Omniscan450] = None
         self._thread: Optional[threading.Thread] = None
         self._running = threading.Event()
-        self._lock = threading.Lock()
+        self._control_lock = threading.Lock()
         self._pinging = False
-        self._logging = False
 
     # ----- lifecycle -------------------------------------------------------
     def start(self) -> bool:
-        """Connect to the device and start the receive thread; pinging stays OFF."""
         log = self._node.get_logger()
 
-        try:
-            self._log_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            log.error(f"[{self._side}] cannot create log dir {self._log_dir}: {exc}")
-            return False
-
-        # logging=True only enables the *capability* -- writing only happens
-        # between start_logging() and stop_logging() on the device.
-        self._device = Omniscan450(logging=True, log_directory=str(self._log_dir))
-
+        # logging=False -- we don't use brping's per-device logger, the
+        # shared SvlogWriter handles file output for both sides.
+        self._device = Omniscan450(logging=False)
         log.info(
             f"[{self._side}] connecting to Omniscan450 at "
             f"{self._ip}:{self._tcp_port} (TCP)"
@@ -128,7 +262,7 @@ class OmniscanWorker:
             log.error(f"[{self._side}] Omniscan450.initialize() returned False")
             return False
 
-        # Start in a known clean state on the device side too.
+        # Known clean state on the device side too.
         try:
             self._device.control_os_ping_params(enable=0)
         except Exception:  # noqa: BLE001
@@ -139,15 +273,10 @@ class OmniscanWorker:
             target=self._spin, name=f"omniscan-{self._side}", daemon=True
         )
         self._thread.start()
-        log.info(f"[{self._side}] connected, idle (ping OFF, log OFF)")
+        log.info(f"[{self._side}] connected, idle (ping OFF)")
         return True
 
     def stop(self) -> None:
-        # Stop logging first, then pinging, then drain the thread.
-        try:
-            self.set_logging(False)
-        except Exception:  # noqa: BLE001
-            pass
         try:
             self.set_pinging(False)
         except Exception:  # noqa: BLE001
@@ -164,14 +293,12 @@ class OmniscanWorker:
 
     # ----- control ---------------------------------------------------------
     def set_pinging(self, enable: bool, params: Optional[PingParams] = None) -> bool:
-        """Toggle pinging. `params` is required when enabling."""
         log = self._node.get_logger()
-        with self._lock:
+        with self._control_lock:
             if self._device is None:
                 return False
             if enable == self._pinging:
-                return True  # idempotent
-
+                return True
             try:
                 if enable:
                     if params is None:
@@ -198,33 +325,7 @@ class OmniscanWorker:
             except Exception as exc:  # noqa: BLE001
                 log.error(f"[{self._side}] set_pinging({enable}) failed: {exc}")
                 return False
-
             self._pinging = enable
-            return True
-
-    def set_logging(self, enable: bool) -> bool:
-        log = self._node.get_logger()
-        with self._lock:
-            if self._device is None:
-                return False
-            if enable == self._logging:
-                return True  # idempotent
-
-            try:
-                if enable:
-                    # new_log=True rolls a fresh .svlog file each time we
-                    # transition off->on, instead of appending to the
-                    # previous one. Easier to keep recordings tidy.
-                    self._device.start_logging(new_log=True)
-                    log.info(f"[{self._side}] logging -> {self._log_dir}")
-                else:
-                    self._device.stop_logging()
-                    log.info(f"[{self._side}] logging stopped")
-            except Exception as exc:  # noqa: BLE001
-                log.error(f"[{self._side}] set_logging({enable}) failed: {exc}")
-                return False
-
-            self._logging = enable
             return True
 
     # ----- internals -------------------------------------------------------
@@ -232,8 +333,6 @@ class OmniscanWorker:
         log = self._node.get_logger()
         target = [definitions.OMNISCAN450_OS_MONO_PROFILE]
 
-        # When pinging is disabled the device sends nothing; wait_message()
-        # returns None on its internal timeout and we just loop again.
         while self._running.is_set() and rclpy.ok():
             try:
                 data = self._device.wait_message(target)
@@ -243,6 +342,11 @@ class OmniscanWorker:
             if data is None:
                 continue
             self._publish(data)
+            # Forward the raw framed bytes to the shared svlog (no-op if
+            # logging isn't active). brping populates msg_data inside
+            # wait_message before returning.
+            if data.msg_data:
+                self._log_writer.write(bytes(data.msg_data))
 
     def _publish(self, data) -> None:
         msg = OmniscanProfile()
@@ -278,7 +382,7 @@ class SideScanSonarNode(Node):
     """ROS 2 node managing the port + starboard Omniscan 450 SS devices."""
 
     def __init__(self) -> None:
-        super().__init__("sss_node")
+        super().__init__("side_scan_sonar")
 
         # ---- Run-dependent parameters --------------------------------------
         self.declare_parameter("port_ip", "192.168.2.92")
@@ -293,7 +397,7 @@ class SideScanSonarNode(Node):
         self.declare_parameter("num_results", 600)
         self.declare_parameter("pulse_len_percent", 0.002)
 
-        self.declare_parameter("log_directory", "~/sss_logs")
+        self.declare_parameter("log_directory", "data/SSS_data")
 
         self.declare_parameter("port_frame_id", "sss_port_link")
         self.declare_parameter("starboard_frame_id", "sss_starboard_link")
@@ -311,28 +415,40 @@ class SideScanSonarNode(Node):
             OmniscanProfile, "~/starboard/profile", sonar_qos
         )
 
-        # ---- Workers --------------------------------------------------------
+        # ---- Shared log writer (single file, both channels) ----------------
         log_root = Path(os.path.expanduser(self._str_param("log_directory")))
-        self.get_logger().info(f"log root: {log_root}")
+        port_ip = self._str_param("port_ip")
+        port_tcp = self._int_param("port_tcp_port")
+        starboard_ip = self._str_param("starboard_ip")
+        starboard_tcp = self._int_param("starboard_tcp_port")
 
+        self.get_logger().info(f"log directory: {log_root}")
+        self._log_writer = SvlogWriter(
+            log_dir=log_root,
+            port_url=f"tcp://{port_ip}:{port_tcp}",
+            starboard_url=f"tcp://{starboard_ip}:{starboard_tcp}",
+        )
+
+        # ---- Workers --------------------------------------------------------
         self._port_worker = OmniscanWorker(
             self,
             side="port",
-            ip=self._str_param("port_ip"),
-            tcp_port=self._int_param("port_tcp_port"),
+            ip=port_ip,
+            tcp_port=port_tcp,
             publisher=self._port_pub,
             frame_id=self._str_param("port_frame_id"),
-            log_dir=log_root / "port",
+            log_writer=self._log_writer,
         )
         self._starboard_worker = OmniscanWorker(
             self,
             side="starboard",
-            ip=self._str_param("starboard_ip"),
-            tcp_port=self._int_param("starboard_tcp_port"),
+            ip=starboard_ip,
+            tcp_port=starboard_tcp,
             publisher=self._starboard_pub,
             frame_id=self._str_param("starboard_frame_id"),
-            log_dir=log_root / "starboard",
+            log_writer=self._log_writer,
         )
+
 
         if not self._port_worker.start():
             self.get_logger().error("port-side Omniscan failed to start")
@@ -345,9 +461,9 @@ class SideScanSonarNode(Node):
         self.create_subscription(Bool, "~/log/enable", self._on_log_enable, 10)
 
         self.get_logger().info(
-            "sss_node ready, ping OFF, log OFF. Toggle with:\n"
-            "  ros2 topic pub --once /sss_node/ping/enable std_msgs/msg/Bool 'data: true'\n"
-            "  ros2 topic pub --once /sss_node/log/enable  std_msgs/msg/Bool 'data: true'"
+            "side_scan_sonar ready, ping OFF, log OFF. Toggle with:\n"
+            "  ros2 topic pub --once /side_scan_sonar/ping/enable std_msgs/msg/Bool 'data: true'\n"
+            "  ros2 topic pub --once /side_scan_sonar/log/enable  std_msgs/msg/Bool 'data: true'"
         )
 
     # ----- callbacks --------------------------------------------------------
@@ -361,12 +477,20 @@ class SideScanSonarNode(Node):
             self._starboard_worker.set_pinging(False)
 
     def _on_log_enable(self, msg: Bool) -> None:
-        self._port_worker.set_logging(msg.data)
-        self._starboard_worker.set_logging(msg.data)
+        if msg.data:
+            path = self._log_writer.start()
+            if path is not None:
+                self.get_logger().info(f"logging -> {path}")
+        else:
+            path = self._log_writer.current_path
+            self._log_writer.stop()
+            if path is not None:
+                self.get_logger().info(f"stopped logging ({path})")
 
     # ----- shutdown ---------------------------------------------------------
     def shutdown(self) -> None:
         self.get_logger().info("stopping side scan sonar node")
+        self._log_writer.stop()
         self._port_worker.stop()
         self._starboard_worker.stop()
 

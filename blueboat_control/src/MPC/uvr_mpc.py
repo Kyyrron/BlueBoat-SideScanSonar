@@ -31,7 +31,7 @@ def export_underwater_model(
 ):
 
     model = AcadosModel()
-    model.name = "ur_robot_model"
+    model.name = "uvr_robot_model"
 
     # States
     x   = ca.SX.sym('x')

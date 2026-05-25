@@ -9,7 +9,8 @@ find_package(nav_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/RequestPath.srv"
   "msg/OmniscanProfile.msg"
-  DEPENDENCIES std_msgs nav_msgs
+  "msg/ProcessedSSSPing.msg"
+  DEPENDENCIES std_msgs nav_msgs builtin_interfaces
 )
 
 ament_package()

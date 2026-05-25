@@ -9,7 +9,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from blueboat_interfaces.srv import RequestPath
 import math
-import custom_functions as f
+import custom_functions as cf
 
 """
 Creates a services that handle path generation requests. Receives a an array of time values and responds with the associated path.
