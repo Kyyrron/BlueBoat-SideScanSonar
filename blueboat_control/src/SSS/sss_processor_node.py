@@ -2,39 +2,59 @@
 """
 Side Scan Sonar processor node for the BlueBoat.
 
-Consumes raw `OmniscanProfile` packets from the port + starboard transducers
-and produces a single merged `ProcessedSSSPing` per matched pair, with:
+Two responsibilities, both consumers of the side scan sonar streams:
 
-  * raw u16 power samples converted to dB,
-  * transducer altitude above the seabed estimated via First-Bottom-Return
-    (FBR) detection, fused across the two sides and stabilised across pings,
-  * slant-range correction applied (assuming the seabed is flat locally to
-    each ping; altitude is allowed to vary between pings — i.e. non-flat
-    seabed across the survey),
-  * water-column samples dropped per side,
-  * robot pose at ping time snapped from the nearest /blueboat/odom sample.
+1. **Processing.** Consume parsed `OmniscanProfile` packets from the port +
+   starboard transducers and produce one merged `ProcessedSSSPing` per
+   matched pair: dB-scaled samples, FBR-based altitude tracking, slant-range
+   correction, water-column drop, robot pose snapped from /blueboat/odom.
+
+2. **SonarView .svlog logging.** Consume the raw framed packets published
+   on `~/raw` topics by `sss_node`, interleave them with mavlink wrapper
+   packets built from mavros telemetry, and write a single SonarView-
+   compatible .svlog file. Logging is OFF on startup; toggle via
+   `~/log/enable`.
+
+The two responsibilities are independent: processing runs whether or not
+logging is enabled, and logging needs no processing-side bootstrap.
 
 Note on non-flat seabed: this node performs per-ping altitude tracking
 (altitude varies between pings) but assumes the seabed is flat within a
-single ping's swath. This is standard SSS practice with single-beam
-data; truer across-swath bathymetric correction would require extra
-information (DVL, MBES, or a bathymetric prior) that we don't have on
-this platform.
+single ping's swath. Standard SSS practice with single-beam data.
 
 Topics
 ------
-Sub  /side_scan_sonar/port/profile       blueboat_interfaces/OmniscanProfile
-Sub  /side_scan_sonar/starboard/profile  blueboat_interfaces/OmniscanProfile
-Sub  /blueboat/odom                      nav_msgs/Odometry
-Pub  ~/processed                         blueboat_interfaces/ProcessedSSSPing
+Sub  /side_scan_sonar/port/profile         blueboat_interfaces/OmniscanProfile
+Sub  /side_scan_sonar/starboard/profile    blueboat_interfaces/OmniscanProfile
+Sub  /side_scan_sonar/port/raw             std_msgs/UInt8MultiArray
+Sub  /side_scan_sonar/starboard/raw        std_msgs/UInt8MultiArray
+Sub  /blueboat/odom                        nav_msgs/Odometry
+Sub  /mavros/imu/data                      sensor_msgs/Imu
+Sub  /mavros/global_position/global        sensor_msgs/NavSatFix
+Sub  /mavros/global_position/rel_alt       std_msgs/Float64
+Sub  /mavros/global_position/compass_hdg   std_msgs/Float64
+Sub  ~/log/enable                          std_msgs/Bool
+Pub  ~/processed                           blueboat_interfaces/ProcessedSSSPing
 """
 
 from __future__ import annotations
 
 import math
+import os
+import sys
 import threading
+import time
 from collections import deque
-from typing import Deque, List, Optional, Tuple
+from pathlib import Path
+from typing import Deque, Optional, Tuple
+
+# Flat-file imports: pick up svlog.py and sss_processing.py from the same
+# install directory as this script. ament_cmake_python installs all four
+# .py files into install/<pkg>/lib/<pkg>/, and Python auto-prepends the
+# script's directory to sys.path when invoked directly; the explicit
+# insert below makes that behaviour robust to alternative invocations
+# (e.g. importlib, IDE runners, packaged launch wrappers).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import rclpy
 from rclpy.node import Node
@@ -42,44 +62,49 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 from builtin_interfaces.msg import Time as TimeMsg
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Imu, NavSatFix
+from std_msgs.msg import Bool, Float64, UInt8MultiArray
 
 from blueboat_interfaces.msg import OmniscanProfile, ProcessedSSSPing
 
+from svlog import (
+    DEFAULT_MAVLINK_FILTER,
+    DEVICE_ID_PORT,
+    DEVICE_ID_STBD,
+    SvlogWriter,
+    build_mavlink_wrapper,
+    build_session_metadata,
+    retag_packet_src_device_id,
+)
+from sss_processing import (
+    FBRTracker,
+    detect_fbr_slant_m,
+    project_side,
+    scale_to_db,
+)
+
 
 # ---------------------------------------------------------------------------
-# Transducer geometry — measure on the physical BlueBoat and fill in.
+# Transducer geometry -- measure on the physical BlueBoat and fill in.
 # All in meters, expressed in base_link (REP-103: +x forward, +y left = port,
-# +z up). The y offsets are positive magnitudes; the port/starboard sign is
-# applied in code.
+# +z up). y offsets are positive magnitudes; port/starboard sign is in code.
 # ---------------------------------------------------------------------------
-TRANSDUCER_X_OFFSET_M:        float = 0.0   # TODO: forward offset (probably negative — transducers are aft)
-TRANSDUCER_Y_OFFSET_PORT_M:   float = 0.0   # TODO: lateral offset of the port transducer (positive)
-TRANSDUCER_Y_OFFSET_STBD_M:   float = 0.0   # TODO: lateral offset of the starboard transducer (positive magnitude)
-TRANSDUCER_SUBMERSION_M:      float = 0.0   # TODO: depth of transducers below the waterline (positive)
+TRANSDUCER_X_OFFSET_M:      float = 0.0  # TODO: forward offset (probably negative)
+TRANSDUCER_Y_OFFSET_PORT_M: float = 0.0  # TODO: lateral offset of port transducer
+TRANSDUCER_Y_OFFSET_STBD_M: float = 0.0  # TODO: lateral offset of starboard transducer
+TRANSDUCER_SUBMERSION_M:    float = 0.0  # TODO: depth below the waterline
 
 
 # ---------------------------------------------------------------------------
-# FBR / altitude tracking parameters.
-# All callable out as constants here so the first field experiment can tune
-# them without touching the rest of the code.
+# FBR / altitude-tracking parameters (tunable on first field experiment).
 # ---------------------------------------------------------------------------
-# Within-ping detection: first sample whose dB rises above the noise floor by
-# FBR_THRESHOLD_DELTA_DB and stays there for WITHIN_PING_PERSISTENCE samples.
-NOISE_FLOOR_WINDOW:       int   = 20    # samples at the start of a ping used to estimate water-column noise
-FBR_THRESHOLD_DELTA_DB:   float = 8.0   # dB above the noise floor
-WITHIN_PING_PERSISTENCE:  int   = 3     # consecutive samples needed above threshold
-
-# Cross-ping bootstrap: need this many consecutive successful detections that
-# agree within ALTITUDE_AGREEMENT_TOL_M before we start publishing. Once
-# bootstrapped, every successful FBR updates the altitude; failed detections
-# fall back to the last known value.
+NOISE_FLOOR_WINDOW:       int   = 20    # samples used to estimate noise floor
+FBR_THRESHOLD_DELTA_DB:   float = 8.0   # dB above noise floor
+WITHIN_PING_PERSISTENCE:  int   = 3     # consecutive samples above threshold
 BOOTSTRAP_PINGS:          int   = 10
-ALTITUDE_AGREEMENT_TOL_M: float = 0.30  # max spread (max-min) across bootstrap window
+ALTITUDE_AGREEMENT_TOL_M: float = 0.30  # bootstrap window max spread
 
-# Time matcher tolerance for pairing port + starboard pings.
-TIME_MATCH_TOLERANCE_NS:  int   = 50_000_000  # 50 ms
-
-# Odom buffer length.
+TIME_MATCH_TOLERANCE_NS:  int   = 50_000_000  # port-vs-starboard pairing window
 ODOM_BUFFER_SECONDS:      float = 5.0
 
 
@@ -90,93 +115,31 @@ def _stamp_to_ns(stamp: TimeMsg) -> int:
     return stamp.sec * 1_000_000_000 + stamp.nanosec
 
 
-def _scale_to_db(pwr_u16, min_pwr_db: float, max_pwr_db: float) -> List[float]:
-    """Convert raw u16 power samples to dB.
-
-    Formula from bluerobotics-ping's Omniscan450 template:
-      db = min_pwr_db + (raw / 65535) * (max_pwr_db - min_pwr_db)
-    https://github.com/bluerobotics/ping-python/blob/master/generate/templates/omniscan450.py.in
-    """
-    span = max_pwr_db - min_pwr_db
-    return [min_pwr_db + (s / 65535.0) * span for s in pwr_u16]
-
-
-def _detect_fbr_slant_m(
-    pwr_db: List[float],
-    start_mm: int,
-    length_mm: int,
-    num_results: int,
-) -> Optional[float]:
-    """Return the slant range (meters) of the first bottom return, or None.
-
-    Algorithm:
-      1. Estimate the water-column noise floor as the mean dB of the first
-         NOISE_FLOOR_WINDOW samples.
-      2. Set the detection threshold to noise + FBR_THRESHOLD_DELTA_DB.
-      3. Find the first index i such that samples i .. i + WITHIN_PING_PERSISTENCE - 1
-         are all above the threshold.
-      4. Convert i to a slant range using the ping's start_mm + length_mm range.
-    """
-    n = len(pwr_db)
-    if n < NOISE_FLOOR_WINDOW + WITHIN_PING_PERSISTENCE:
-        return None
-    noise = sum(pwr_db[:NOISE_FLOOR_WINDOW]) / NOISE_FLOOR_WINDOW
-    threshold = noise + FBR_THRESHOLD_DELTA_DB
-    denom = max(num_results - 1, 1)
-    for i in range(NOISE_FLOOR_WINDOW, n - WITHIN_PING_PERSISTENCE + 1):
-        # Cheap early-out before the all() check.
-        if pwr_db[i] <= threshold:
-            continue
-        if all(pwr_db[i + k] > threshold for k in range(WITHIN_PING_PERSISTENCE)):
-            slant_mm = start_mm + (i / denom) * length_mm
-            return slant_mm / 1000.0
-    return None
-
-
-def _project_side(
-    pwr_db: List[float],
-    start_mm: int,
-    length_mm: int,
-    num_results: int,
-    altitude_m: float,
-    transducer_y_offset_m: float,
-    side_sign: float,
-) -> Tuple[List[float], List[float]]:
-    """Slant-range correct one side and drop water-column samples.
-
-    Returns (y_coords_in_base_link, intensities_db) — same length, sample i
-    of one is the y / dB of the i-th post-correction sample.
-
-    side_sign = +1 for port, -1 for starboard.
-    """
-    y_out: List[float] = []
-    db_out: List[float] = []
-    start_m = start_mm / 1000.0
-    length_m = length_mm / 1000.0
-    denom = max(num_results - 1, 1)
-    # Iterate over the actual number of samples we received.
-    n = len(pwr_db)
-    for i in range(n):
-        slant = start_m + (i / denom) * length_m
-        if slant <= altitude_m:
-            continue  # water column
-        ground = math.sqrt(slant * slant - altitude_m * altitude_m)
-        y_out.append(float(side_sign * (transducer_y_offset_m + ground)))
-        db_out.append(float(pwr_db[i]))
-    return y_out, db_out
+def _quat_to_euler_rpy(x: float, y: float, z: float, w: float) -> Tuple[float, float, float]:
+    """Quaternion -> (roll, pitch, yaw) in radians (ZYX intrinsic, ROS convention)."""
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+    sinp = 2.0 * (w * y - z * x)
+    if abs(sinp) >= 1.0:
+        pitch = math.copysign(math.pi / 2.0, sinp)
+    else:
+        pitch = math.asin(sinp)
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return roll, pitch, yaw
 
 
 # ---------------------------------------------------------------------------
 # Odom buffer
 # ---------------------------------------------------------------------------
 class _OdomBuffer:
-    """Thread-safe sliding buffer of recent /blueboat/odom samples.
-
-    Supports nearest-stamp lookup. A linear scan is fine here: at 20 Hz odom
-    and a 5 s window the buffer holds ~100 entries.
+    """Thread-safe sliding buffer of /blueboat/odom samples with nearest-stamp
+    lookup. A linear scan is fine: at 20 Hz odom + 5 s window, ~100 entries.
     """
 
-    def __init__(self, max_age_ns: int):
+    def __init__(self, max_age_ns: int) -> None:
         self._max_age_ns = max_age_ns
         self._samples: Deque[Tuple[int, Odometry]] = deque()
         self._lock = threading.Lock()
@@ -207,109 +170,86 @@ class _OdomBuffer:
 
 
 # ---------------------------------------------------------------------------
-# Altitude tracker (FBR + bootstrap + last-known fallback)
-# ---------------------------------------------------------------------------
-class _FBRTracker:
-    """Cross-ping altitude estimator.
-
-    Per-ping inputs are the FBR slant ranges from port and starboard. They
-    are fused with max(port, stbd) so that we never under-estimate the
-    seabed depth (which would create false 'holes' in the study area, per
-    the project's spec).
-
-    Bootstrap: hold off publishing until BOOTSTRAP_PINGS consecutive ping
-    pairs produce an estimate AND those estimates span ≤ ALTITUDE_AGREEMENT_TOL_M.
-    The bootstrap altitude is the mean of those BOOTSTRAP_PINGS estimates.
-
-    Operational: a successful per-ping estimate replaces the current
-    altitude. A failed detection (no FBR on either side) keeps the last
-    known value.
-    """
-
-    def __init__(self) -> None:
-        # maxlen = BOOTSTRAP_PINGS turns this into a sliding window — once the
-        # earliest entry falls out, the new entry takes its place, so we
-        # naturally retry bootstrap with the most recent N estimates.
-        self._bootstrap_window: Deque[float] = deque(maxlen=BOOTSTRAP_PINGS)
-        self._altitude: Optional[float] = None  # None until bootstrapped
-
-    @property
-    def is_bootstrapped(self) -> bool:
-        return self._altitude is not None
-
-    @property
-    def altitude(self) -> Optional[float]:
-        return self._altitude
-
-    def update(
-        self, port_alt: Optional[float], stbd_alt: Optional[float]
-    ) -> Optional[float]:
-        """Feed one ping pair's FBR results. Returns the current valid altitude
-        (or None during bootstrap)."""
-
-        # Fuse the two sides.
-        if port_alt is not None and stbd_alt is not None:
-            candidate: Optional[float] = max(port_alt, stbd_alt)
-        elif port_alt is not None:
-            candidate = port_alt
-        elif stbd_alt is not None:
-            candidate = stbd_alt
-        else:
-            candidate = None
-
-        if self._altitude is None:
-            # Bootstrap phase.
-            if candidate is None:
-                # A failed ping breaks the run — clear the window and start over.
-                self._bootstrap_window.clear()
-                return None
-            self._bootstrap_window.append(candidate)
-            if len(self._bootstrap_window) == BOOTSTRAP_PINGS:
-                spread = max(self._bootstrap_window) - min(self._bootstrap_window)
-                if spread <= ALTITUDE_AGREEMENT_TOL_M:
-                    self._altitude = sum(self._bootstrap_window) / BOOTSTRAP_PINGS
-                # else: sliding window absorbs the next ping and we retry.
-            return self._altitude
-        else:
-            # Operational phase: update if available, otherwise keep last.
-            if candidate is not None:
-                self._altitude = candidate
-            return self._altitude
-
-
-# ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
 class SSSProcessorNode(Node):
-    """Process raw OmniscanProfile streams into merged ProcessedSSSPing."""
+    """Process OmniscanProfile streams; also write SonarView .svlog files."""
 
     def __init__(self) -> None:
         super().__init__("sss_processor")
 
-        # ---- Parameters (topics only; geometry is class constants) ---------
-        self.declare_parameter("port_topic", "/side_scan_sonar/port/profile")
-        self.declare_parameter("starboard_topic", "/side_scan_sonar/starboard/profile")
-        self.declare_parameter("odom_topic", "/blueboat/odom")
-        self.declare_parameter("processed_topic", "~/processed")
+        # ---- Parameters ----------------------------------------------------
+        # Sonar topics
+        self.declare_parameter("port_topic",          "/side_scan_sonar/port/profile")
+        self.declare_parameter("starboard_topic",     "/side_scan_sonar/starboard/profile")
+        self.declare_parameter("port_raw_topic",      "/side_scan_sonar/port/raw")
+        self.declare_parameter("starboard_raw_topic", "/side_scan_sonar/starboard/raw")
+        self.declare_parameter("odom_topic",          "/blueboat/odom")
+        self.declare_parameter("processed_topic",     "~/processed")
 
-        port_topic = self._str_param("port_topic")
-        stbd_topic = self._str_param("starboard_topic")
-        odom_topic = self._str_param("odom_topic")
+        # Device addresses (used to fill svlog session_devices URLs)
+        self.declare_parameter("port_ip",            "192.168.2.92")
+        self.declare_parameter("port_tcp_port",      51200)
+        self.declare_parameter("starboard_ip",       "192.168.2.93")
+        self.declare_parameter("starboard_tcp_port", 51200)
+
+        # Logging
+        self.declare_parameter("log_directory", "data/SSS_data")
+
+        # Mavros telemetry (set mavros_enabled=False to write svlog without
+        # platform telemetry; the file still plays but without georeferencing).
+        self.declare_parameter("mavros_enabled",            True)
+        self.declare_parameter("mavros_imu_topic",          "/mavros/imu/data")
+        self.declare_parameter("mavros_navsat_topic",       "/mavros/global_position/global")
+        self.declare_parameter("mavros_rel_alt_topic",      "/mavros/global_position/rel_alt")
+        self.declare_parameter("mavros_compass_hdg_topic",  "/mavros/global_position/compass_hdg")
+        self.declare_parameter("mavlink_system_id", 1)
+        # Used purely as a descriptive string in session_platform.url so
+        # SonarView shows a sensible source name on replay.
+        self.declare_parameter("mavlink_url_for_session", "ws://blueos.local:6040/v1/ws/mavlink")
+        self.declare_parameter("mavlink_filter_for_session", DEFAULT_MAVLINK_FILTER)
+
+        port_topic      = self._str_param("port_topic")
+        stbd_topic      = self._str_param("starboard_topic")
+        port_raw_topic  = self._str_param("port_raw_topic")
+        stbd_raw_topic  = self._str_param("starboard_raw_topic")
+        odom_topic      = self._str_param("odom_topic")
         processed_topic = self._str_param("processed_topic")
 
-        # ---- State ---------------------------------------------------------
+        # ---- Processing state ---------------------------------------------
         self._port_buf: Deque[OmniscanProfile] = deque()
         self._stbd_buf: Deque[OmniscanProfile] = deque()
         self._buf_lock = threading.Lock()
         self._tol_ns = TIME_MATCH_TOLERANCE_NS
 
         self._odom_buf = _OdomBuffer(int(ODOM_BUFFER_SECONDS * 1e9))
-        self._fbr = _FBRTracker()
+        self._fbr = FBRTracker(
+            bootstrap_pings=BOOTSTRAP_PINGS,
+            agreement_tol_m=ALTITUDE_AGREEMENT_TOL_M,
+        )
 
-        # Drop counters (for sparing logs).
         self._dropped_no_odom = 0
         self._dropped_bootstrap = 0
         self._already_bootstrapped_logged = False
+
+        # ---- Logging + mavlink envelope state ------------------------------
+        log_root = Path(os.path.expanduser(self._str_param("log_directory")))
+        self.get_logger().info(f"side scan sonar log directory: {log_root}")
+        self._svlog = SvlogWriter(
+            log_dir=log_root,
+            metadata_provider=self._build_metadata,
+        )
+
+        # Aux mavros signals used to enrich GLOBAL_POSITION_INT.
+        self._aux_lock = threading.Lock()
+        self._latest_rel_alt_mm:        Optional[int] = None
+        self._latest_compass_hdg_cdeg:  Optional[int] = None
+
+        # Monotonic per-message sequence counter for mavlink2rest envelopes
+        # (matches mavlink's 0..255 wrap).
+        self._mav_seq = 0
+        self._mav_seq_lock = threading.Lock()
+        self._node_boot_ns = time.monotonic_ns()
 
         # ---- QoS -----------------------------------------------------------
         sonar_qos = QoSProfile(
@@ -324,22 +264,58 @@ class SSSProcessorNode(Node):
         )
 
         # ---- IO ------------------------------------------------------------
+        # Parsed profiles -> processing pipeline.
         self.create_subscription(OmniscanProfile, port_topic, self._on_port, sonar_qos)
         self.create_subscription(OmniscanProfile, stbd_topic, self._on_starboard, sonar_qos)
+        # Raw bytes -> svlog (independent of processing).
+        self.create_subscription(UInt8MultiArray, port_raw_topic, self._on_port_raw, sonar_qos)
+        self.create_subscription(UInt8MultiArray, stbd_raw_topic, self._on_starboard_raw, sonar_qos)
+        # Pose for processing.
         self.create_subscription(Odometry, odom_topic, self._on_odom, odom_qos)
+        # Mavros telemetry -> svlog mavlink wrappers.
+        if self._bool_param("mavros_enabled"):
+            self.create_subscription(
+                Imu, self._str_param("mavros_imu_topic"),
+                self._on_mavros_imu, sonar_qos,
+            )
+            self.create_subscription(
+                NavSatFix, self._str_param("mavros_navsat_topic"),
+                self._on_mavros_navsat, sonar_qos,
+            )
+            self.create_subscription(
+                Float64, self._str_param("mavros_rel_alt_topic"),
+                self._on_mavros_rel_alt, 10,
+            )
+            self.create_subscription(
+                Float64, self._str_param("mavros_compass_hdg_topic"),
+                self._on_mavros_compass_hdg, 10,
+            )
+            self.get_logger().info("mavros telemetry subscriptions active")
+        # Logging toggle.
+        self.create_subscription(Bool, "~/log/enable", self._on_log_enable, 10)
+
         self._pub = self.create_publisher(ProcessedSSSPing, processed_topic, sonar_qos)
 
         self.get_logger().info(
-            "sss_processor ready:\n"
+            "sss_processor ready (log OFF):\n"
             f"  port  ← {port_topic}\n"
             f"  stbd  ← {stbd_topic}\n"
+            f"  port raw  ← {port_raw_topic}\n"
+            f"  stbd raw  ← {stbd_raw_topic}\n"
             f"  odom  ← {odom_topic}\n"
             f"  out   → {processed_topic}\n"
             f"  bootstrap: {BOOTSTRAP_PINGS} ping pairs within "
-            f"{ALTITUDE_AGREEMENT_TOL_M*100:.0f} cm"
+            f"{ALTITUDE_AGREEMENT_TOL_M*100:.0f} cm\n"
+            "  Toggle logging with:\n"
+            "  ros2 topic pub --once /sss_processor/log/enable std_msgs/msg/Bool 'data: true'"
         )
 
-    # ----- subscribers ------------------------------------------------------
+    # ----- shutdown ---------------------------------------------------------
+    def shutdown(self) -> None:
+        self.get_logger().info("stopping sss_processor")
+        self._svlog.stop()
+
+    # ----- sonar subscribers ------------------------------------------------
     def _on_port(self, msg: OmniscanProfile) -> None:
         with self._buf_lock:
             self._port_buf.append(msg)
@@ -353,13 +329,162 @@ class SSSProcessorNode(Node):
     def _on_odom(self, msg: Odometry) -> None:
         self._odom_buf.push(msg)
 
+    def _on_port_raw(self, msg: UInt8MultiArray) -> None:
+        self._write_raw_with_src_tag(msg, DEVICE_ID_PORT)
+
+    def _on_starboard_raw(self, msg: UInt8MultiArray) -> None:
+        self._write_raw_with_src_tag(msg, DEVICE_ID_STBD)
+
+    def _on_log_enable(self, msg: Bool) -> None:
+        if msg.data:
+            path = self._svlog.start()
+            if path is not None:
+                self.get_logger().info(f"logging -> {path}")
+        else:
+            path = self._svlog.current_path
+            self._svlog.stop()
+            if path is not None:
+                self.get_logger().info(f"stopped logging ({path})")
+
+    # ----- mavros subscribers -----------------------------------------------
+    def _on_mavros_rel_alt(self, msg: Float64) -> None:
+        if math.isnan(msg.data) or math.isinf(msg.data):
+            return
+        with self._aux_lock:
+            self._latest_rel_alt_mm = int(round(msg.data * 1000.0))
+
+    def _on_mavros_compass_hdg(self, msg: Float64) -> None:
+        if math.isnan(msg.data) or math.isinf(msg.data):
+            return
+        # mavros publishes degrees; mavlink GLOBAL_POSITION_INT.hdg is cdeg.
+        cdeg = int(round(msg.data * 100.0)) % 36000
+        with self._aux_lock:
+            self._latest_compass_hdg_cdeg = cdeg
+
+    def _on_mavros_imu(self, msg: Imu) -> None:
+        if not self._svlog.active:
+            return
+        envelope = self._build_attitude_envelope(msg)
+        if envelope is None:
+            return
+        try:
+            self._svlog.write(build_mavlink_wrapper(envelope))
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f"mavlink ATTITUDE write failed: {exc}")
+
+    def _on_mavros_navsat(self, msg: NavSatFix) -> None:
+        if not self._svlog.active:
+            return
+        envelope = self._build_global_position_envelope(msg)
+        if envelope is None:
+            return
+        try:
+            self._svlog.write(build_mavlink_wrapper(envelope))
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f"mavlink GLOBAL_POSITION_INT write failed: {exc}")
+
+    # ----- mavlink envelope builders ----------------------------------------
+    def _next_seq(self) -> int:
+        with self._mav_seq_lock:
+            s = self._mav_seq
+            self._mav_seq = (self._mav_seq + 1) & 0xFF
+        return s
+
+    def _time_boot_ms(self) -> int:
+        return ((time.monotonic_ns() - self._node_boot_ns) // 1_000_000) & 0xFFFFFFFF
+
+    def _mavlink_header(self) -> dict:
+        return {
+            "system_id":    int(self._int_param("mavlink_system_id")),
+            "component_id": 1,
+            "sequence":     self._next_seq(),
+        }
+
+    def _build_attitude_envelope(self, imu: Imu) -> Optional[dict]:
+        q = imu.orientation
+        # Reject obviously-invalid quaternions (mavros publishes (0,0,0,0)
+        # when it hasn't received AHRS yet).
+        if (q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w) < 1e-6:
+            return None
+        roll, pitch, yaw = _quat_to_euler_rpy(q.x, q.y, q.z, q.w)
+        return {
+            "header": self._mavlink_header(),
+            "message": {
+                "type":         "ATTITUDE",
+                "time_boot_ms": self._time_boot_ms(),
+                "roll":         float(roll),
+                "pitch":        float(pitch),
+                "yaw":          float(yaw),
+                "rollspeed":    float(imu.angular_velocity.x),
+                "pitchspeed":   float(imu.angular_velocity.y),
+                "yawspeed":     float(imu.angular_velocity.z),
+            },
+        }
+
+    def _build_global_position_envelope(self, fix: NavSatFix) -> Optional[dict]:
+        # status.status == -1 (STATUS_NO_FIX) means lat/lon are meaningless.
+        if fix.status.status < 0:
+            return None
+        if (math.isnan(fix.latitude) or math.isnan(fix.longitude)
+                or math.isnan(fix.altitude)):
+            return None
+        with self._aux_lock:
+            rel_alt_mm = self._latest_rel_alt_mm or 0
+            hdg_cdeg = self._latest_compass_hdg_cdeg or 0
+        return {
+            "header": self._mavlink_header(),
+            "message": {
+                "type":         "GLOBAL_POSITION_INT",
+                "time_boot_ms": self._time_boot_ms(),
+                "lat":          int(round(fix.latitude  * 1e7)),
+                "lon":          int(round(fix.longitude * 1e7)),
+                "alt":          int(round(fix.altitude  * 1000.0)),  # mm AMSL
+                "relative_alt": int(rel_alt_mm),
+                "vx":           0,
+                "vy":           0,
+                "vz":           0,
+                "hdg":          int(hdg_cdeg),
+            },
+        }
+
+    # ----- svlog helpers ----------------------------------------------------
+    def _write_raw_with_src_tag(self, msg: UInt8MultiArray, src_device_id: int) -> None:
+        if not self._svlog.active:
+            return
+        try:
+            tagged = retag_packet_src_device_id(
+                bytes(bytearray(msg.data)), src_device_id
+            )
+            self._svlog.write(tagged)
+        except ValueError as exc:
+            self.get_logger().warn(f"dropping malformed raw packet: {exc}")
+
+    def _build_metadata(self) -> bytes:
+        """Called by SvlogWriter on each new file (params read at roll time)."""
+        port_url = (
+            f"tcp://{self._str_param('port_ip')}:{self._int_param('port_tcp_port')}"
+        )
+        stbd_url = (
+            f"tcp://{self._str_param('starboard_ip')}:"
+            f"{self._int_param('starboard_tcp_port')}"
+        )
+        mavlink_url: Optional[str] = None
+        if self._bool_param("mavros_enabled"):
+            mavlink_url = self._str_param("mavlink_url_for_session")
+        return build_session_metadata(
+            port_url=port_url,
+            starboard_url=stbd_url,
+            mavlink_url=mavlink_url,
+            mavlink_filter=self._str_param("mavlink_filter_for_session"),
+        )
+
     # ----- two-pointer time matcher -----------------------------------------
     def _drain_matches(self) -> None:
-        """Emit every possible match from the head of both buffers.
+        """Emit every possible match from the heads of both buffers.
+
         Called under self._buf_lock. Standard two-pointer merge: if the
         oldest port and oldest starboard are within tolerance, match;
-        otherwise drop whichever is older (it's never going to find a
-        partner).
+        otherwise drop whichever is older (no partner left to find).
         """
         while self._port_buf and self._stbd_buf:
             p = self._port_buf[0]
@@ -372,10 +497,8 @@ class SSSProcessorNode(Node):
                 self._stbd_buf.popleft()
                 self._emit_merged(p, s)
             elif dt > 0:
-                # Port is newer; starboard at head has no chance of matching.
                 self._stbd_buf.popleft()
             else:
-                # Starboard is newer; port at head has no chance.
                 self._port_buf.popleft()
 
     # ----- processing -------------------------------------------------------
@@ -393,12 +516,22 @@ class SSSProcessorNode(Node):
             return
 
         # 2. dB conversion.
-        port_db = _scale_to_db(port.pwr_results, port.min_pwr_db, port.max_pwr_db)
-        stbd_db = _scale_to_db(stbd.pwr_results, stbd.min_pwr_db, stbd.max_pwr_db)
+        port_db = scale_to_db(port.pwr_results, port.min_pwr_db, port.max_pwr_db)
+        stbd_db = scale_to_db(stbd.pwr_results, stbd.min_pwr_db, stbd.max_pwr_db)
 
         # 3. FBR detection per side.
-        port_alt = _detect_fbr_slant_m(port_db, port.start_mm, port.length_mm, port.num_results)
-        stbd_alt = _detect_fbr_slant_m(stbd_db, stbd.start_mm, stbd.length_mm, stbd.num_results)
+        port_alt = detect_fbr_slant_m(
+            port_db, port.start_mm, port.length_mm, port.num_results,
+            noise_floor_window=NOISE_FLOOR_WINDOW,
+            threshold_delta_db=FBR_THRESHOLD_DELTA_DB,
+            persistence=WITHIN_PING_PERSISTENCE,
+        )
+        stbd_alt = detect_fbr_slant_m(
+            stbd_db, stbd.start_mm, stbd.length_mm, stbd.num_results,
+            noise_floor_window=NOISE_FLOOR_WINDOW,
+            threshold_delta_db=FBR_THRESHOLD_DELTA_DB,
+            persistence=WITHIN_PING_PERSISTENCE,
+        )
 
         # 4. Update the cross-ping altitude tracker.
         altitude = self._fbr.update(port_alt, stbd_alt)
@@ -415,57 +548,56 @@ class SSSProcessorNode(Node):
             log.info(f"FBR bootstrapped: altitude = {altitude:.2f} m above seabed")
             self._already_bootstrapped_logged = True
 
-        # 5. Water depth = transducer altitude above seabed + transducer submersion.
+        # 5. Water depth = transducer altitude + submersion.
         water_depth = altitude + TRANSDUCER_SUBMERSION_M
 
         # 6. Slant-range correct each side; drop water-column samples.
-        port_y, port_int = _project_side(
+        port_y, port_int = project_side(
             port_db, port.start_mm, port.length_mm, port.num_results,
             altitude_m=altitude,
             transducer_y_offset_m=TRANSDUCER_Y_OFFSET_PORT_M,
             side_sign=+1.0,
         )
-        stbd_y, stbd_int = _project_side(
+        stbd_y, stbd_int = project_side(
             stbd_db, stbd.start_mm, stbd.length_mm, stbd.num_results,
             altitude_m=altitude,
             transducer_y_offset_m=TRANSDUCER_Y_OFFSET_STBD_M,
             side_sign=-1.0,
         )
 
-        # 7. Snap robot pose: use port stamp as the merged-pair reference
-        #    (port and stbd are within TIME_MATCH_TOLERANCE_NS by construction).
+        # 7. Snap robot pose using port stamp (pair is within tolerance).
         merged_ns = _stamp_to_ns(port.header.stamp)
         odom = self._odom_buf.nearest(merged_ns)
         if odom is None:
-            # Should be impossible given the has_data() check above, but be safe.
             self._dropped_no_odom += 1
             return
 
         # 8. Assemble + publish.
         out = ProcessedSSSPing()
-
         out.port_stamp = port.header.stamp
         out.starboard_stamp = stbd.header.stamp
         out.port_ping_number = port.ping_number
         out.starboard_ping_number = stbd.ping_number
-
         out.robot_x = float(odom.pose.pose.position.x)
         out.robot_y = float(odom.pose.pose.position.y)
         out.robot_orientation = odom.pose.pose.orientation
-
         out.water_depth = float(water_depth)
         out.transducer_x_offset = float(TRANSDUCER_X_OFFSET_M)
-
         out.port_intensity_db = port_int
         out.port_y = port_y
         out.starboard_intensity_db = stbd_int
         out.starboard_y = stbd_y
-
         self._pub.publish(out)
 
-    # ----- helpers ----------------------------------------------------------
+    # ----- param helpers ----------------------------------------------------
     def _str_param(self, name: str) -> str:
         return self.get_parameter(name).get_parameter_value().string_value
+
+    def _int_param(self, name: str) -> int:
+        return self.get_parameter(name).get_parameter_value().integer_value
+
+    def _bool_param(self, name: str) -> bool:
+        return self.get_parameter(name).get_parameter_value().bool_value
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +611,7 @@ def main(args=None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        node.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
