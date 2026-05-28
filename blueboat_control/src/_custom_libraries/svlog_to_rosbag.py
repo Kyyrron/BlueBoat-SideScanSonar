@@ -44,6 +44,8 @@ import sys
 from pathlib import Path
 from typing import Iterator, Optional, Tuple
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import rclpy
 from rclpy.serialization import serialize_message
 
@@ -237,9 +239,15 @@ class Converter:
             (TOPIC_ODOM,         "nav_msgs/msg/Odometry"),
         ]
         for name, type_name in topics:
-            self._writer.create_topic(TopicMetadata(
-                name=name, type=type_name, serialization_format="cdr",
-            ))
+            self._writer.create_topic(
+                TopicMetadata(
+                    id=0,
+                    name=name,
+                    type=type_name,
+                    serialization_format="cdr",
+                    offered_qos_profiles=[]
+                )
+            )
 
     # ---- packet entry point --------------------------------------------
     def handle_packet(self, packet: bytes) -> None:
@@ -265,7 +273,7 @@ class Converter:
         if src == DEVICE_ID_PORT:
             side, topic_prof, topic_raw = "port", TOPIC_PORT_PROFILE, TOPIC_PORT_RAW
         elif src == DEVICE_ID_STBD:
-            side, topic_prof, topic_raw = "starboard", TOPIC_STBD_PROFILE, TOPIC_STBD_RAW
+            side, topic_prof, topic_raw = "stbd", TOPIC_STBD_PROFILE, TOPIC_STBD_RAW
         else:
             # Untagged or unexpected device_id; can't route.
             self.counts["skipped_non_target"] += 1
@@ -417,8 +425,8 @@ class Converter:
 
 def main() -> None:
 
-    INPUT_FILE = "/path/to/file.svlog"
-    OUTPUT_BAG = "/path/to/output_bag"
+    INPUT_FILE = "55_svlog.svlog"
+    OUTPUT_BAG = "./output_bag" # Must not exist
     STORAGE_FORMAT = "mcap"
 
     input_path = Path(INPUT_FILE)

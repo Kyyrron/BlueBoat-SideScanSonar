@@ -1,0 +1,23 @@
+1.
+cd /blueboat_ws && . .venv/bin/activate && . install/setup.bash
+ros2 launch blueboat_control BlueBoat_launch.py enable_motors:=True note:='NEDO'
+ros2 launch blueboat_control BlueBoat_launch.py enable_motors:=True
+
+2.
+ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: default" 
+ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: override" 
+
+3.
+./QGroundControl.AppImage
+
+
+-- SSS
+
+1. Start logging 
+ros2 topic pub --once /sss_processor/log/enable std_msgs/msg/Bool "{data: true}"
+
+2. Start processor node 
+ros2 run blueboat_control sss_processor
+
+3. Start rosbag playing
+ros2 bag play output_bag
