@@ -271,9 +271,15 @@ class Converter:
             (TOPIC_ODOM,         "nav_msgs/msg/Odometry"),
         ]
         for name, type_name in topics:
-            self._writer.create_topic(TopicMetadata(
-                name=name, type=type_name, serialization_format="cdr",
-            ))
+            self._writer.create_topic(
+                TopicMetadata(
+                    id=0,
+                    name=name,
+                    type=type_name,
+                    serialization_format="cdr",
+                    offered_qos_profiles=[]
+                )
+            )
 
     # ----- packet entry point -------------------------------------------
     def handle_packet(self, packet: bytes) -> None:
@@ -533,7 +539,7 @@ class Converter:
 def main() -> None:
 
     INPUT_FILE = "55_svlog.svlog"
-    OUTPUT_BAG = "./output_bag" # Must not exist
+    OUTPUT_BAG = "./output_bag2" # Must not exist
     STORAGE_FORMAT = "mcap"
 
     input_path = Path(INPUT_FILE)
