@@ -61,6 +61,9 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 from builtin_interfaces.msg import Time as TimeMsg
+from geographic_msgs.msg import GeoPointStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
+from mavros_msgs.msg import HomePosition, VfrHud
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, NavSatFix
 from std_msgs.msg import Bool, Float64, UInt8MultiArray
@@ -203,6 +206,11 @@ class SSSProcessorNode(Node):
         self.declare_parameter("mavros_navsat_topic",       "/mavros/global_position/global")
         self.declare_parameter("mavros_rel_alt_topic",      "/mavros/global_position/rel_alt")
         self.declare_parameter("mavros_compass_hdg_topic",  "/mavros/global_position/compass_hdg")
+        self.declare_parameter("mavros_local_pose_topic",   "/mavros/local_position/pose")
+        self.declare_parameter("mavros_local_vel_topic",    "/mavros/local_position/velocity_local")
+        self.declare_parameter("mavros_home_pos_topic",     "/mavros/home_position/home")
+        self.declare_parameter("mavros_gp_origin_topic",    "/mavros/global_position/gp_origin")
+        self.declare_parameter("mavros_vfr_hud_topic",      "/mavros/vfr_hud")
         self.declare_parameter("mavlink_system_id", 1)
         # Used purely as a descriptive string in session_platform.url so
         # SonarView shows a sensible source name on replay.
@@ -244,6 +252,10 @@ class SSSProcessorNode(Node):
         self._aux_lock = threading.Lock()
         self._latest_rel_alt_mm:        Optional[int] = None
         self._latest_compass_hdg_cdeg:  Optional[int] = None
+        # Latest local-position velocity (paired with PoseStamped to build
+        # LOCAL_POSITION_NED). Holding the most recent twist is fine -- on
+        # the robot they're published at the same rate from the same source.
+        self._latest_local_twist:       Optional[TwistStamped] = None
 
         # Monotonic per-message sequence counter for mavlink2rest envelopes
         # (matches mavlink's 0..255 wrap).
@@ -289,6 +301,26 @@ class SSSProcessorNode(Node):
             self.create_subscription(
                 Float64, self._str_param("mavros_compass_hdg_topic"),
                 self._on_mavros_compass_hdg, 10,
+            )
+            self.create_subscription(
+                TwistStamped, self._str_param("mavros_local_vel_topic"),
+                self._on_mavros_local_vel, sonar_qos,
+            )
+            self.create_subscription(
+                PoseStamped, self._str_param("mavros_local_pose_topic"),
+                self._on_mavros_local_pose, sonar_qos,
+            )
+            self.create_subscription(
+                HomePosition, self._str_param("mavros_home_pos_topic"),
+                self._on_mavros_home_position, 10,
+            )
+            self.create_subscription(
+                GeoPointStamped, self._str_param("mavros_gp_origin_topic"),
+                self._on_mavros_gp_origin, 10,
+            )
+            self.create_subscription(
+                VfrHud, self._str_param("mavros_vfr_hud_topic"),
+                self._on_mavros_vfr_hud, sonar_qos,
             )
             self.get_logger().info("mavros telemetry subscriptions active")
         # Logging toggle.
@@ -383,6 +415,50 @@ class SSSProcessorNode(Node):
         except Exception as exc:  # noqa: BLE001
             self.get_logger().warn(f"mavlink GLOBAL_POSITION_INT write failed: {exc}")
 
+    def _on_mavros_local_vel(self, msg: TwistStamped) -> None:
+        # Cache only -- LOCAL_POSITION_NED is emitted on the pose callback,
+        # so we can pair this twist with the next pose.
+        with self._aux_lock:
+            self._latest_local_twist = msg
+
+    def _on_mavros_local_pose(self, msg: PoseStamped) -> None:
+        if not self._svlog.active:
+            return
+        with self._aux_lock:
+            twist = self._latest_local_twist
+        try:
+            envelope = self._build_local_position_envelope(msg, twist)
+            self._svlog.write(build_mavlink_wrapper(envelope))
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f"mavlink LOCAL_POSITION_NED write failed: {exc}")
+
+    def _on_mavros_home_position(self, msg: HomePosition) -> None:
+        if not self._svlog.active:
+            return
+        try:
+            self._svlog.write(build_mavlink_wrapper(
+                self._build_home_position_envelope(msg)))
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f"mavlink HOME_POSITION write failed: {exc}")
+
+    def _on_mavros_gp_origin(self, msg: GeoPointStamped) -> None:
+        if not self._svlog.active:
+            return
+        try:
+            self._svlog.write(build_mavlink_wrapper(
+                self._build_gp_origin_envelope(msg)))
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f"mavlink GPS_GLOBAL_ORIGIN write failed: {exc}")
+
+    def _on_mavros_vfr_hud(self, msg: VfrHud) -> None:
+        if not self._svlog.active:
+            return
+        try:
+            self._svlog.write(build_mavlink_wrapper(
+                self._build_vfr_hud_envelope(msg)))
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f"mavlink VFR_HUD write failed: {exc}")
+
     # ----- mavlink envelope builders ----------------------------------------
     def _next_seq(self) -> int:
         with self._mav_seq_lock:
@@ -390,8 +466,21 @@ class SSSProcessorNode(Node):
             self._mav_seq = (self._mav_seq + 1) & 0xFF
         return s
 
-    def _time_boot_ms(self) -> int:
-        return ((time.monotonic_ns() - self._node_boot_ns) // 1_000_000) & 0xFFFFFFFF
+    def _time_boot_ms(self, stamp: TimeMsg) -> int:
+        """Derive `time_boot_ms` from a ROS header.stamp.
+
+        Critical: SonarView pairs ATTITUDE / GLOBAL_POSITION_INT /
+        LOCAL_POSITION_NED by `time_boot_ms` to compute heading-corrected
+        position. ROS messages from the same source mavlink burst carry
+        identical `header.stamp` (set by mavros from the source timestamp;
+        set by the svlog-to-rosbag converter from the source mavlink burst).
+        Deriving `time_boot_ms` from the stamp preserves that coherence.
+
+        The offset (relative to node start, modulo 2^32) is arbitrary --
+        SonarView only looks at value equality, not absolute meaning.
+        """
+        stamp_ns = stamp.sec * 1_000_000_000 + stamp.nanosec
+        return ((stamp_ns - self._node_boot_ns) // 1_000_000) & 0xFFFFFFFF
 
     def _mavlink_header(self) -> dict:
         return {
@@ -411,7 +500,7 @@ class SSSProcessorNode(Node):
             "header": self._mavlink_header(),
             "message": {
                 "type":         "ATTITUDE",
-                "time_boot_ms": self._time_boot_ms(),
+                "time_boot_ms": self._time_boot_ms(imu.header.stamp),
                 "roll":         float(roll),
                 "pitch":        float(pitch),
                 "yaw":          float(yaw),
@@ -435,7 +524,7 @@ class SSSProcessorNode(Node):
             "header": self._mavlink_header(),
             "message": {
                 "type":         "GLOBAL_POSITION_INT",
-                "time_boot_ms": self._time_boot_ms(),
+                "time_boot_ms": self._time_boot_ms(fix.header.stamp),
                 "lat":          int(round(fix.latitude  * 1e7)),
                 "lon":          int(round(fix.longitude * 1e7)),
                 "alt":          int(round(fix.altitude  * 1000.0)),  # mm AMSL
@@ -444,6 +533,69 @@ class SSSProcessorNode(Node):
                 "vy":           0,
                 "vz":           0,
                 "hdg":          int(hdg_cdeg),
+            },
+        }
+
+    def _build_local_position_envelope(self, pose: 'PoseStamped',
+                                       twist: Optional['TwistStamped']) -> dict:
+        """Build LOCAL_POSITION_NED from /mavros/local_position/pose (ENU)
+        plus an optional matching velocity_local TwistStamped. The pose
+        provides position only; we convert ENU -> NED. Velocity is
+        optional -- zeros are acceptable per the mavlink schema."""
+        px, py, pz = pose.pose.position.x, pose.pose.position.y, pose.pose.position.z
+        # ENU -> NED: x_n = y_e (ROS y), y_e = x_e (ROS x), z_d = -z_u
+        x_n, y_e, z_d = py, px, -pz
+        vx = vy = vz = 0.0
+        if twist is not None:
+            tx, ty, tz = (twist.twist.linear.x, twist.twist.linear.y,
+                          twist.twist.linear.z)
+            vx, vy, vz = ty, tx, -tz
+        return {
+            "header": self._mavlink_header(),
+            "message": {
+                "type":         "LOCAL_POSITION_NED",
+                "time_boot_ms": self._time_boot_ms(pose.header.stamp),
+                "x":  float(x_n), "y":  float(y_e), "z":  float(z_d),
+                "vx": float(vx),  "vy": float(vy),  "vz": float(vz),
+            },
+        }
+
+    def _build_home_position_envelope(self, h: 'HomePosition') -> dict:
+        return {
+            "header": self._mavlink_header(),
+            "message": {
+                "type":      "HOME_POSITION",
+                "latitude":  int(round(h.geo.latitude  * 1e7)),
+                "longitude": int(round(h.geo.longitude * 1e7)),
+                "altitude":  int(round(h.geo.altitude  * 1000.0)),
+                "x": 0.0, "y": 0.0, "z": 0.0,
+                "q": [1.0, 0.0, 0.0, 0.0],
+                "approach_x": 0.0, "approach_y": 0.0, "approach_z": 0.0,
+            },
+        }
+
+    def _build_gp_origin_envelope(self, g: 'GeoPointStamped') -> dict:
+        return {
+            "header": self._mavlink_header(),
+            "message": {
+                "type":      "GPS_GLOBAL_ORIGIN",
+                "latitude":  int(round(g.position.latitude  * 1e7)),
+                "longitude": int(round(g.position.longitude * 1e7)),
+                "altitude":  int(round(g.position.altitude  * 1000.0)),
+            },
+        }
+
+    def _build_vfr_hud_envelope(self, v: 'VfrHud') -> dict:
+        return {
+            "header": self._mavlink_header(),
+            "message": {
+                "type":        "VFR_HUD",
+                "airspeed":    float(v.airspeed),
+                "groundspeed": float(v.groundspeed),
+                "heading":     int(v.heading),
+                "throttle":    int(round(v.throttle * 100.0)),
+                "alt":         float(v.altitude),
+                "climb":       float(v.climb),
             },
         }
 

@@ -73,6 +73,22 @@ DEFAULT_MAVLINK_FILTER: str = (
     "PARAM_VALUE|VFR_HUD|STATUSTEXT|AUTOPILOT_VERSION"
 )
 
+# Mavlink message subscription list reported in session_platform.options.
+# These are the mavlink message_id + rate pairs the SonarView/SonarLink
+# server requests from BlueOS. Purely descriptive in our case -- mavros
+# does the real subscribing on the robot. Values match what SonarView
+# itself writes in reference .svlog files.
+DEFAULT_PERIODIC_MESSAGES: list = [
+    {"message_id": 0,   "frequency_hz": 1.0},          # HEARTBEAT
+    {"message_id": 30,  "frequency_hz": 30.0},         # ATTITUDE
+    {"message_id": 33,  "frequency_hz": 30.0},         # GLOBAL_POSITION_INT
+    {"message_id": 32,  "frequency_hz": 30.0},         # LOCAL_POSITION_NED
+    {"message_id": 137, "frequency_hz": 3.0},          # SCALED_PRESSURE2
+    {"message_id": 74,  "frequency_hz": 3.0},          # VFR_HUD
+    {"message_id": 49,  "frequency_hz": 1.0},          # GPS_GLOBAL_ORIGIN
+    {"message_id": 148, "frequency_hz": 1.0 / 60.0},   # AUTOPILOT_VERSION
+]
+
 
 # ---------------------------------------------------------------------------
 # Framing
@@ -171,7 +187,10 @@ def build_session_metadata(
             else {
                 "url": f"{mavlink_url}?filter={mavlink_filter}",
                 "protocol": "mavlink2rest",
-                "options": {"system_id": 1, "periodic_messages": []},
+                "options": {
+                    "system_id": 1,
+                    "periodic_messages": list(DEFAULT_PERIODIC_MESSAGES),
+                },
                 "nickname": "BlueBoat",
                 "model": "blue_boat",
                 "device_id": DEVICE_ID_PLATFORM,
