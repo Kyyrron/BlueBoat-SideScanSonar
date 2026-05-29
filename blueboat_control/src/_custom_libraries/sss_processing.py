@@ -88,29 +88,102 @@ def project_side(
     return y_out, db_out
 
 
-class FBRTracker:
-    """Cross-ping altitude estimator with bootstrap and last-known fallback.
+class _SideTracker:
+    """Single-side altitude tracker bootstrapped from temporal self-consistency.
 
-    Per-ping inputs are the FBR slant ranges from each side. They are fused
-    with max() so the seabed depth is never under-estimated (which would
-    create false 'holes' in the survey area).
+    A side is considered locked once `bootstrap_pings` of its most recent
+    detections all fall within `agreement_tol_m` of each other (a stable,
+    plausible seabed return) -- it does NOT need to agree with the other
+    side. This makes the system robust to one transducer (e.g. a low-gain
+    channel) returning noise: the good side carries the estimate alone.
 
-    Bootstrap: hold off until `bootstrap_pings` consecutive ping pairs
-    produce an estimate AND those estimates span <= `agreement_tol_m`. The
-    bootstrap altitude is the mean of those estimates.
-
-    Operational: a successful per-ping estimate replaces the current
-    altitude. A failed detection (no FBR on either side) keeps the last
-    known value.
+    After lock, each new detection within `outlier_tol_m` of the current
+    altitude updates it; detections further away are rejected as outliers
+    (a fish, a rock edge, a noise spike) and the last value is held. A
+    long run of rejects (longer than `relock_after`) forces a re-bootstrap,
+    so the tracker recovers if the seabed genuinely steps.
     """
 
-    def __init__(self, bootstrap_pings: int, agreement_tol_m: float) -> None:
+    def __init__(self, bootstrap_pings: int, agreement_tol_m: float,
+                 outlier_tol_m: float, relock_after: int) -> None:
         self._bootstrap_pings = bootstrap_pings
         self._agreement_tol_m = agreement_tol_m
-        # maxlen turns this into a sliding window -- once the earliest entry
-        # falls out the new one takes its place, so bootstrap retries
-        # naturally with the latest N estimates.
+        self._outlier_tol_m = outlier_tol_m
+        self._relock_after = relock_after
         self._window: Deque[float] = deque(maxlen=bootstrap_pings)
+        self._altitude: Optional[float] = None
+        self._reject_streak = 0
+        self._miss_streak = 0
+
+    @property
+    def altitude(self) -> Optional[float]:
+        return self._altitude
+
+    @property
+    def locked(self) -> bool:
+        return self._altitude is not None
+
+    def update(self, fbr: Optional[float]) -> Optional[float]:
+        if self._altitude is None:
+            # --- bootstrap phase ---
+            # An occasional missed detection (None) shouldn't wipe progress;
+            # we just don't add to the window. Because the window is a
+            # fixed-size sliding deque, stale early values age out on their
+            # own, so a slowly-drifting seabed still locks once the most
+            # recent `bootstrap_pings` detections are mutually consistent.
+            if fbr is None:
+                self._miss_streak += 1
+                # Only a long blackout (no bottom at all) clears progress.
+                if self._miss_streak >= self._relock_after:
+                    self._window.clear()
+                    self._miss_streak = 0
+                return None
+            self._miss_streak = 0
+            self._window.append(fbr)
+            if len(self._window) == self._bootstrap_pings:
+                if (max(self._window) - min(self._window)) <= self._agreement_tol_m:
+                    self._altitude = sum(self._window) / len(self._window)
+            return self._altitude
+
+        # --- operational phase ---
+        if fbr is None:
+            self._reject_streak += 1
+        elif abs(fbr - self._altitude) <= self._outlier_tol_m:
+            self._altitude = fbr
+            self._reject_streak = 0
+        else:
+            self._reject_streak += 1
+
+        if self._reject_streak >= self._relock_after:
+            # Lost the bottom -- drop the lock and re-bootstrap.
+            self._altitude = None
+            self._window.clear()
+            self._reject_streak = 0
+            self._miss_streak = 0
+        return self._altitude
+
+
+class FBRTracker:
+    """Dual-side altitude estimator: each side bootstraps independently.
+
+    Per-ping inputs are the FBR slant ranges from each side. Each side runs
+    its own `_SideTracker`; the fused altitude is the max() of whichever
+    sides are currently locked (max so the seabed is never under-estimated,
+    which would push samples into the water column and create false holes).
+
+    The critical property vs the old design: bootstrap no longer requires
+    the two sides to agree with each other. If one transducer is low-gain
+    and returns noise, the other side bootstraps and carries the estimate
+    by itself. The system produces an altitude as soon as EITHER side is
+    self-consistent for `bootstrap_pings` detections.
+    """
+
+    def __init__(self, bootstrap_pings: int, agreement_tol_m: float,
+                 outlier_tol_m: float = 1.0, relock_after: int = 15) -> None:
+        self._port = _SideTracker(bootstrap_pings, agreement_tol_m,
+                                  outlier_tol_m, relock_after)
+        self._stbd = _SideTracker(bootstrap_pings, agreement_tol_m,
+                                  outlier_tol_m, relock_after)
         self._altitude: Optional[float] = None
 
     @property
@@ -124,28 +197,16 @@ class FBRTracker:
     def update(
         self, port_alt: Optional[float], stbd_alt: Optional[float]
     ) -> Optional[float]:
-        if port_alt is not None and stbd_alt is not None:
-            candidate: Optional[float] = max(port_alt, stbd_alt)
-        elif port_alt is not None:
-            candidate = port_alt
-        elif stbd_alt is not None:
-            candidate = stbd_alt
-        else:
-            candidate = None
+        p = self._port.update(port_alt)
+        s = self._stbd.update(stbd_alt)
 
-        if self._altitude is None:
-            # Bootstrap phase.
-            if candidate is None:
-                # A failed ping breaks the run -- start over.
-                self._window.clear()
-                return None
-            self._window.append(candidate)
-            if len(self._window) == self._bootstrap_pings:
-                spread = max(self._window) - min(self._window)
-                if spread <= self._agreement_tol_m:
-                    self._altitude = sum(self._window) / self._bootstrap_pings
-            return self._altitude
-        # Operational phase.
-        if candidate is not None:
-            self._altitude = candidate
+        if p is not None and s is not None:
+            self._altitude = max(p, s)
+        elif p is not None:
+            self._altitude = p
+        elif s is not None:
+            self._altitude = s
+        # else: neither side locked -- keep last altitude (may be None during
+        # initial bootstrap, or a held value if both sides transiently lost
+        # the bottom before re-locking).
         return self._altitude

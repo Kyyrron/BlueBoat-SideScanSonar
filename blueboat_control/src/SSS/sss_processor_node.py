@@ -104,8 +104,10 @@ TRANSDUCER_SUBMERSION_M:    float = 0.0  # TODO: depth below the waterline
 NOISE_FLOOR_WINDOW:       int   = 20    # samples used to estimate noise floor
 FBR_THRESHOLD_DELTA_DB:   float = 8.0   # dB above noise floor
 WITHIN_PING_PERSISTENCE:  int   = 3     # consecutive samples above threshold
-BOOTSTRAP_PINGS:          int   = 10
-ALTITUDE_AGREEMENT_TOL_M: float = 0.30  # bootstrap window max spread
+BOOTSTRAP_PINGS:          int   = 10    # per-side self-consistency window
+ALTITUDE_AGREEMENT_TOL_M: float = 0.30  # max spread within a side's bootstrap window
+ALTITUDE_OUTLIER_TOL_M:   float = 1.0   # post-lock per-ping jump rejected as outlier
+ALTITUDE_RELOCK_AFTER:    int   = 15    # consecutive rejects force a side to re-bootstrap
 
 TIME_MATCH_TOLERANCE_NS:  int   = 50_000_000  # port-vs-starboard pairing window
 ODOM_BUFFER_SECONDS:      float = 5.0
@@ -234,6 +236,8 @@ class SSSProcessorNode(Node):
         self._fbr = FBRTracker(
             bootstrap_pings=BOOTSTRAP_PINGS,
             agreement_tol_m=ALTITUDE_AGREEMENT_TOL_M,
+            outlier_tol_m=ALTITUDE_OUTLIER_TOL_M,
+            relock_after=ALTITUDE_RELOCK_AFTER,
         )
 
         self._dropped_no_odom = 0
@@ -242,7 +246,7 @@ class SSSProcessorNode(Node):
 
         # ---- Logging + mavlink envelope state ------------------------------
         log_root = Path(os.path.expanduser(self._str_param("log_directory")))
-        self.get_logger().info(f"side scan sonar log directory: {log_root}")
+        self.get_logger().info(f"log directory: {log_root}")
         self._svlog = SvlogWriter(
             log_dir=log_root,
             metadata_provider=self._build_metadata,
@@ -336,8 +340,8 @@ class SSSProcessorNode(Node):
             f"  stbd raw  ← {stbd_raw_topic}\n"
             f"  odom  ← {odom_topic}\n"
             f"  out   → {processed_topic}\n"
-            f"  bootstrap: {BOOTSTRAP_PINGS} ping pairs within "
-            f"{ALTITUDE_AGREEMENT_TOL_M*100:.0f} cm\n"
+            f"  bootstrap: {BOOTSTRAP_PINGS} self-consistent pings per side within "
+            f"{ALTITUDE_AGREEMENT_TOL_M*100:.0f} cm (either side suffices)\n"
             "  Toggle logging with:\n"
             "  ros2 topic pub --once /sss_processor/log/enable std_msgs/msg/Bool 'data: true'"
         )
