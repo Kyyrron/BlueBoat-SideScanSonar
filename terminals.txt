@@ -16,6 +16,9 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: override"
 1. Start logging 
 ros2 topic pub --once /sss_processor/log/enable std_msgs/msg/Bool "{data: true}"
 
+1.5 Start visualizing 
+ros2 run blueboat_control processed_sss_listener.py
+
 2. Start processor node 
 ros2 run blueboat_control sss_processor_node.py
 

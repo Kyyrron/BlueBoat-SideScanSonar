@@ -2,6 +2,7 @@
 
 import math
 import numpy as np
+import csv
 
 import rclpy
 from rclpy.node import Node
@@ -19,7 +20,7 @@ from blueboat_interfaces.msg import ProcessedSSSPing
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
-from _custom_libraries.custom_functions import quaternion_to_yaw
+from custom_functions import quaternion_to_yaw
 
 def sonar_to_world(robot_x: float, robot_y: float, q: Quaternion, left_y: list[float], right_y: list[float]):
     """
@@ -104,9 +105,9 @@ class RawSSSImage(Node):
             sonar_qos
         )
 
-        self.get_logger().info(
-            'Custom listener started with BEST_EFFORT QoS.'
-        )
+        self.seabed_x_data = []
+        self.seabed_y_data = []
+        self.intensity_data = []
 
         # Matplotlib interactive mode
         plt.ion()
@@ -126,39 +127,42 @@ class RawSSSImage(Node):
 
         self.get_logger().info("Live Depth plot ready.")
         
-        # Seabed profile image plot
+    def save_to_csv(self):
 
-        self.cmap = mcolors.LinearSegmentedColormap.from_list(
-            "sonar_orange",
-            [
-                (0.0, 0.0, 0.0),   # noir
-                (1.0, 0.5, 0.0),   # orange
-            ]
+        filename = "sonar_mosaic.csv"
+
+        with open(filename, mode='w', newline='') as file:
+
+            writer = csv.writer(file)
+
+            # Header
+            writer.writerow(["x_world","y_world","intensity_db"])
+
+            # Data
+            for x, y, intensity in zip(self.seabed_x_data, self.seabed_y_data, self.intensity_data):
+                writer.writerow([x,y,intensity])
+
+        self.get_logger().info(
+            f"Saved {len(self.intensity_data)} points to {filename}"
         )
 
-        self.fig_seabed, self.ax_seabed = plt.subplots()
-        self.scatter_seabed = self.ax_seabed.scatter(
-            [],
-            [],
-            c=[],
-            cmap=self.cmap,
-            s=3
+    def save_to_npz(self):
+
+        filename = "sonar_mosaic.npz"
+
+        np.savez(
+            filename,
+
+            x=np.array(self.seabed_x_data),
+            y=np.array(self.seabed_y_data),
+            intensity=np.array(self.intensity_data)
         )
 
-        self.ax_seabed.set_xlabel("x (m)")
-        self.ax_seabed.set_ylabel("y (m)")
-        self.ax_seabed.set_title("Live seabed mosaic")
-        self.ax_seabed.grid(True)
-        self.ax_seabed.axis("equal")
+        self.get_logger().info(
+            f"Saved {len(self.intensity_data)} points to {filename}"
+        )
 
-        self.seabed_x_data = []
-        self.seabed_y_data = []
-        self.intensity_data = []
-
-        self.get_logger().info("Live Seabed profile plot ready.")
-
-
-    def listener_callback(self, msg):
+    def _on_processed_ping(self, msg):
         # Traceability
         port_stamp = msg.port_stamp
         starboard_stamp = msg.starboard_stamp
@@ -191,10 +195,11 @@ class RawSSSImage(Node):
 
         self.get_logger().info(
             f'Ping received | '
-            f'port={port_ping_number} '
-            f'starboard={starboard_ping_number} '
+            f'port_number={port_ping_number} '
+            f'starboard_number={starboard_ping_number} '
             f'port_samples={len(port_intensity_db)} '
-            f'starboard_samples={len(starboard_intensity_db)}'
+            f'starboard_samples={len(starboard_intensity_db)} '
+            f'Robot Coordinates in World: ({robot_x}, {robot_y})'
         )
 
         # 1. -> Depth live plotting
@@ -225,29 +230,6 @@ class RawSSSImage(Node):
         self.seabed_y_data += all_y
         self.intensity_data += port_intensity_db + starboard_intensity_db
 
-        intensity_array = np.array(self.intensity_data)
-
-        intensity_normalizer = mcolors.Normalize(
-            vmin=np.min(intensity_array),
-            vmax=np.max(intensity_array)
-        )
-        
-        normalized_colors = intensity_normalizer(intensity_array)
-        
-        # Update scatter plot
-        points = np.column_stack((
-            self.seabed_x_data,
-            self.seabed_y_data
-        ))
-
-        self.scatter.set_offsets(points)
-        self.scatter.set_array(normalized_colors)
-        self.ax_seabed.relim()
-        self.ax_seabed.autoscale_view()
-
-        self.fig_seabed.canvas.draw() # draw.idle() if blocking ?
-        self.fig_seabed.canvas.flush_events()
-
 def main(args=None):
     rclpy.init(args=args)
 
@@ -256,10 +238,13 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info("CTRL+C detected")
+        # Save data before shutdown
+        node.save_to_npz()
 
-    node.destroy_node()
-    rclpy.shutdown()
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

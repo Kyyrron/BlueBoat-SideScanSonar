@@ -44,7 +44,7 @@ install(PROGRAMS src/SSS/sss_node.py
         DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS src/SSS/sss_processor_node.py
         DESTINATION lib/${PROJECT_NAME})
-install(PROGRAMS src/SSS/processor_sss_listener.py
+install(PROGRAMS src/SSS/processed_sss_listener.py
         DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS src/master_control.py
