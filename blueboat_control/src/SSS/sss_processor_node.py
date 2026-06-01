@@ -499,18 +499,25 @@ class SSSProcessorNode(Node):
         # when it hasn't received AHRS yet).
         if (q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w) < 1e-6:
             return None
-        roll, pitch, yaw = _quat_to_euler_rpy(q.x, q.y, q.z, q.w)
+        # mavros publishes orientation in ENU/FLU per REP-103. Mavlink
+        # ATTITUDE expects NED/FRD, so we invert the same rotation the
+        # converter applies (NED -> ENU): roll unchanged, pitch and yaw
+        # signed by the ENU<->NED frame swap.
+        roll_enu, pitch_enu, yaw_enu = _quat_to_euler_rpy(q.x, q.y, q.z, q.w)
+        roll_ned  =  roll_enu
+        pitch_ned = -pitch_enu
+        yaw_ned   = math.pi / 2.0 - yaw_enu
         return {
             "header": self._mavlink_header(),
             "message": {
                 "type":         "ATTITUDE",
                 "time_boot_ms": self._time_boot_ms(imu.header.stamp),
-                "roll":         float(roll),
-                "pitch":        float(pitch),
-                "yaw":          float(yaw),
+                "roll":         float(roll_ned),
+                "pitch":        float(pitch_ned),
+                "yaw":          float(yaw_ned),
                 "rollspeed":    float(imu.angular_velocity.x),
-                "pitchspeed":   float(imu.angular_velocity.y),
-                "yawspeed":     float(imu.angular_velocity.z),
+                "pitchspeed":  -float(imu.angular_velocity.y),
+                "yawspeed":    -float(imu.angular_velocity.z),
             },
         }
 

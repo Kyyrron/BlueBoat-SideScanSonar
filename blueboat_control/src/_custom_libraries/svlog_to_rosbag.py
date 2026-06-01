@@ -189,6 +189,25 @@ def ned_to_enu_xyz(x_n: float, y_e: float, z_d: float) -> Tuple[float, float, fl
     return (y_e, x_n, -z_d)
 
 
+def ned_to_enu_rpy(roll_ned: float, pitch_ned: float, yaw_ned: float
+                   ) -> Tuple[float, float, float]:
+    """Convert NED-frame body roll/pitch/yaw (mavlink ATTITUDE) to ENU.
+
+    Mavlink ATTITUDE is in NED world / FRD body conventions:
+      yaw_ned = 0 -> nose points North,  yaw increases clockwise (toward East)
+    ROS REP-103 conventions are ENU world / FLU body:
+      yaw_enu = 0 -> nose points East,   yaw increases counter-clockwise (toward N)
+
+    The transformation between the two body/world conventions reduces to:
+        roll_enu  =  roll_ned
+        pitch_enu = -pitch_ned
+        yaw_enu   =  π/2 - yaw_ned
+    (See REP-103 + REP-105; e.g. mavros uses this same rotation when
+    republishing autopilot attitude on /mavros/imu/data.)
+    """
+    return (roll_ned, -pitch_ned, math.pi / 2.0 - yaw_ned)
+
+
 def ns_to_time_msg(ns: int) -> TimeMsg:
     t = TimeMsg()
     t.sec = ns // 1_000_000_000
@@ -271,15 +290,9 @@ class Converter:
             (TOPIC_ODOM,         "nav_msgs/msg/Odometry"),
         ]
         for name, type_name in topics:
-            self._writer.create_topic(
-                TopicMetadata(
-                    id=0,
-                    name=name,
-                    type=type_name,
-                    serialization_format="cdr",
-                    offered_qos_profiles=[]
-                )
-            )
+            self._writer.create_topic(TopicMetadata(
+                name=name, type=type_name, serialization_format="cdr",
+            ))
 
     # ----- packet entry point -------------------------------------------
     def handle_packet(self, packet: bytes) -> None:
@@ -383,9 +396,13 @@ class Converter:
 
     # ----- mavlink emitters ---------------------------------------------
     def _emit_attitude(self, m: dict, stamp_ns: int) -> None:
-        roll  = float(m.get("roll",  0.0))
-        pitch = float(m.get("pitch", 0.0))
-        yaw   = float(m.get("yaw",   0.0))
+        # mavlink ATTITUDE is in NED world / FRD body frame; mavros (on the
+        # real robot) republishes /mavros/imu/data in ENU/FLU per REP-103,
+        # so we replicate that rotation here for replay consistency.
+        roll_ned  = float(m.get("roll",  0.0))
+        pitch_ned = float(m.get("pitch", 0.0))
+        yaw_ned   = float(m.get("yaw",   0.0))
+        roll, pitch, yaw = ned_to_enu_rpy(roll_ned, pitch_ned, yaw_ned)
         qx, qy, qz, qw = rpy_to_quat(roll, pitch, yaw)
         self._latest_quat = (qx, qy, qz, qw)
 
@@ -396,9 +413,10 @@ class Converter:
         imu.orientation.y = qy
         imu.orientation.z = qz
         imu.orientation.w = qw
-        imu.angular_velocity.x = float(m.get("rollspeed",  0.0))
-        imu.angular_velocity.y = float(m.get("pitchspeed", 0.0))
-        imu.angular_velocity.z = float(m.get("yawspeed",   0.0))
+        # Body-frame angular velocity: FRD -> FLU is also (x, -y, -z).
+        imu.angular_velocity.x =  float(m.get("rollspeed",  0.0))
+        imu.angular_velocity.y = -float(m.get("pitchspeed", 0.0))
+        imu.angular_velocity.z = -float(m.get("yawspeed",   0.0))
         self._writer.write(TOPIC_IMU, serialize_message(imu), stamp_ns)
         self.counts["imu"] += 1
         self._maybe_publish_odom(stamp_ns)
