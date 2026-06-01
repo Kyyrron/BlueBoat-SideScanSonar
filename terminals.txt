@@ -13,6 +13,9 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: override"
 
 -- SSS
 
+0. Rosbag conversion from svlog (from ros2_ws)
+python3 src/BlueBoat-SideScanSonar/blueboat_control/src/_custom_libraries/svlog_to_rosbag.py 
+
 1. Start logging 
 ros2 topic pub --once /sss_processor/log/enable std_msgs/msg/Bool "{data: true}"
 
@@ -24,3 +27,6 @@ ros2 run blueboat_control sss_processor_node.py
 
 3. Start rosbag playing (in the rosbag's folder folder)
 ros2 bag play output_bag
+
+4. (offline - in /ros2_ws)
+python3 src/BlueBoat-SideScanSonar/blueboat_control/src/_custom_libraries/processed_sss_printer.py 
