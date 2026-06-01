@@ -1,251 +1,351 @@
 #!/usr/bin/env python3
+"""
+Live listener for /sss_processor/processed.
+"""
 
-import math
-import numpy as np
+from __future__ import annotations
+
 import csv
+import math
+from pathlib import Path
+from typing import Optional
 
+import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 from geometry_msgs.msg import Quaternion
-
-from rclpy.qos import (
-    QoSProfile,
-    ReliabilityPolicy,
-    HistoryPolicy
-)
-
 from blueboat_interfaces.msg import ProcessedSSSPing
-
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-
 from custom_functions import quaternion_to_yaw
 
-def sonar_to_world(robot_x: float, robot_y: float, q: Quaternion, left_y: list[float], right_y: list[float]):
+import matplotlib.pyplot as plt
+
+
+# ---------------------------------------------------------------------------
+# Tuning constants
+# ---------------------------------------------------------------------------
+# Mosaic resolution. 25 cm/pixel is a good default for a small-boat survey
+# at ~0.5-1 m/s where consecutive pings are ~5-30 cm apart along-track.
+# Finer cells (10 cm) leave along-track gaps when the boat is slow; coarser
+# (50 cm) loses across-track detail. Tune based on your typical survey speed.
+CELL_SIZE_M: float = 0.25
+
+# Initial mosaic extent (m). Grows automatically as the survey expands.
+INITIAL_HALF_EXTENT_M: float = 50.0
+
+# Display update cadence. Updating the figures on every ping at ~28 Hz is
+# pointless and slows everything down -- redraw a few times per second.
+REDRAW_EVERY_N_PINGS: int = 20
+
+# Depth smoothing: simple moving-average over the last N pings.
+DEPTH_SMOOTH_N: int = 15
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def project_to_world(
+    robot_x: float, robot_y: float, yaw: float,
+    y_local: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Rotate a ping's lateral samples into world coordinates.
+
+    The ping is purely lateral in the boat frame: each sample sits at
+    (x_body=0, y_body=y_local[i]). REP-103 conventions:
+      * +y_body = port  -> processor publishes positive `port_y[i]`
+      * -y_body = stbd  -> processor publishes negative `starboard_y[i]`
+
+    The 2D rotation by yaw of (0, y_body) into world frame is:
+        x_w = -sin(yaw) * y_body
+        y_w =  cos(yaw) * y_body
     """
-    From left_y and right_y in the robot's local frame to world coordinates.
+    x_world = robot_x - math.sin(yaw) * y_local
+    y_world = robot_y + math.cos(yaw) * y_local
+    return x_world, y_world
 
-    Parameters
-    ----------
-    robot_x, robot_y : float
-        Robot in world (relative to the starting point)
 
-    q : Quaternion
-        Quaternion orientation robot 
+# ---------------------------------------------------------------------------
+# Mosaic grid
+# ---------------------------------------------------------------------------
+class MosaicGrid:
+    """Auto-growing 2D running-mean raster of sonar intensity.
 
-    left_y : list[float]
-        y-shift from port (+y)
-
-    right_y : list[float]
-        y-shift from starboard (-y)
-
-    Returns
-    -------
-    left_world : list[(x,y)] 
-        left_world[i] = (x,y) in world coordinates of the i-th port ping sample
-    right_world : list[(x,y)]
-        right_world[i] = (x,y) in world coordinates of the i-th starboard ping sample
+    World extent is anchored at (0, 0) and grows in `chunk` increments as
+    samples land outside the current bounds. Each cell stores (sum, count)
+    so the displayed image is the mean intensity per cell.
     """
 
-    left_world: list[tuple[float, float]] = []
-    right_world: list[tuple[float, float]] = []
+    def __init__(self, cell_size_m: float = CELL_SIZE_M,
+                 initial_half_extent_m: float = INITIAL_HALF_EXTENT_M) -> None:
+        self._cell = cell_size_m
+        n = int(math.ceil(2 * initial_half_extent_m / cell_size_m))
+        self._sum:   np.ndarray = np.zeros((n, n), dtype=np.float64)
+        self._count: np.ndarray = np.zeros((n, n), dtype=np.uint32)
+        # World coordinates of the lower-left corner of cell [0, 0].
+        self._x0: float = -initial_half_extent_m
+        self._y0: float = -initial_half_extent_m
+        self._chunk = int(math.ceil(50.0 / cell_size_m))  # grow by 50 m
 
-    yaw = quaternion_to_yaw(q)
-    cos_yaw = math.cos(yaw)
-    sin_yaw = math.sin(yaw)
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self._sum.shape
 
-    # left (port)
-    for y_local in left_y:
+    @property
+    def extent(self) -> tuple[float, float, float, float]:
+        h, w = self._sum.shape
+        return (self._x0, self._x0 + w * self._cell,
+                self._y0, self._y0 + h * self._cell)
 
-        # In robot local frame, x is 0 (ping is directly to the side), y is given by the ping
+    def _world_to_cell(self, x: np.ndarray, y: np.ndarray
+                       ) -> tuple[np.ndarray, np.ndarray]:
+        cx = ((x - self._x0) / self._cell).astype(np.int32)
+        cy = ((y - self._y0) / self._cell).astype(np.int32)
+        return cx, cy
 
-        # Rotation applied
-        x_rot = -y_local * sin_yaw
-        y_rot = y_local * cos_yaw
+    def _ensure_contains(self, xmin: float, xmax: float,
+                         ymin: float, ymax: float) -> None:
+        h, w = self._sum.shape
+        pad_left = pad_right = pad_bot = pad_top = 0
+        if xmin < self._x0:
+            pad_left = int(math.ceil((self._x0 - xmin) / self._cell))
+            pad_left = max(pad_left, self._chunk)
+        if xmax >= self._x0 + w * self._cell:
+            pad_right = int(math.ceil(
+                (xmax - (self._x0 + w * self._cell)) / self._cell)) + 1
+            pad_right = max(pad_right, self._chunk)
+        if ymin < self._y0:
+            pad_bot = int(math.ceil((self._y0 - ymin) / self._cell))
+            pad_bot = max(pad_bot, self._chunk)
+        if ymax >= self._y0 + h * self._cell:
+            pad_top = int(math.ceil(
+                (ymax - (self._y0 + h * self._cell)) / self._cell)) + 1
+            pad_top = max(pad_top, self._chunk)
+        if pad_left or pad_right or pad_bot or pad_top:
+            self._sum = np.pad(
+                self._sum, ((pad_bot, pad_top), (pad_left, pad_right))
+            )
+            self._count = np.pad(
+                self._count, ((pad_bot, pad_top), (pad_left, pad_right))
+            )
+            self._x0 -= pad_left * self._cell
+            self._y0 -= pad_bot * self._cell
 
-        # Translation monde
-        x_world = robot_x + x_rot
-        y_world = robot_y + y_rot
+    def add_samples(self, x: np.ndarray, y: np.ndarray,
+                    intensity: np.ndarray) -> None:
+        if x.size == 0:
+            return
+        self._ensure_contains(float(x.min()), float(x.max()),
+                              float(y.min()), float(y.max()))
+        cx, cy = self._world_to_cell(x, y)
+        h, w = self._sum.shape
+        ok = (cx >= 0) & (cx < w) & (cy >= 0) & (cy < h)
+        # `np.add.at` does unbuffered scatter-add so duplicate (cx,cy)
+        # indices accumulate properly.
+        np.add.at(self._sum,   (cy[ok], cx[ok]), intensity[ok])
+        np.add.at(self._count, (cy[ok], cx[ok]), 1)
 
-        left_world.append((x_world, y_world))
+    def render(self) -> np.ndarray:
+        """Return the mean-intensity raster (NaN where no samples)."""
+        with np.errstate(invalid="ignore", divide="ignore"):
+            img = np.where(self._count > 0, self._sum / self._count, np.nan)
+        return img
 
-    # right (starboard)
-    for y_local in right_y:
+    def save(self, prefix: str | Path) -> tuple[Path, Path]:
+        """Save raster as compact .npz and quick-look .png."""
+        prefix = Path(prefix)
+        img = self.render()
+        npz_path = prefix.with_suffix(".npz")
+        png_path = prefix.with_suffix(".png")
+        np.savez_compressed(
+            npz_path,
+            mean_intensity=img.astype(np.float32),
+            count=self._count,
+            cell_size_m=self._cell,
+            x0=self._x0,
+            y0=self._y0,
+        )
+        # Quick-look PNG with sensible percentile contrast.
+        valid = img[np.isfinite(img)]
+        if valid.size > 0:
+            vmin, vmax = np.percentile(valid, [2, 98])
+        else:
+            vmin, vmax = 0.0, 1.0
+        plt.imsave(png_path, img,
+                   origin="lower", cmap="copper", vmin=vmin, vmax=vmax)
+        return npz_path, png_path
 
-        # Rotation applied
-        x_rot = - y_local * sin_yaw
-        y_rot =  y_local * cos_yaw
 
-        # Translation monde
-        x_world = robot_x + x_rot
-        y_world = robot_y + y_rot
+# ---------------------------------------------------------------------------
+# Node
+# ---------------------------------------------------------------------------
+class ProcessedSSSListener(Node):
 
-        right_world.append((x_world, y_world))
+    def __init__(self) -> None:
+        super().__init__("processed_sss_listener")
 
-    return left_world, right_world
-
-class RawSSSImage(Node):
-
-    def __init__(self):
-        super().__init__('sss_image_publisher')
-
-        # QoS profile
-        sonar_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
+        qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
+                         history=HistoryPolicy.KEEP_LAST, depth=10)
+        self.create_subscription(
+            ProcessedSSSPing, "/sss_processor/processed",
+            self._on_processed_ping, qos,
         )
 
-        # Subscriber
-        self.subscription = self.create_subscription(
-            ProcessedSSSPing,
-            '/sss_processor/processed',
-            self._on_processed_ping,
-            sonar_qos
-        )
+        self._mosaic = MosaicGrid()
 
-        self.seabed_x_data = []
-        self.seabed_y_data = []
-        self.intensity_data = []
+        # Time series for depth + boat trajectory.
+        self._t_first: Optional[float] = None
+        self._depth_t: list[float] = []
+        self._depth_z: list[float] = []
+        self._traj_x:  list[float] = []
+        self._traj_y:  list[float] = []
 
-        # Matplotlib interactive mode
+        self._ping_count = 0
+
+        # ---- Matplotlib live figures (interactive) -----------------------
         plt.ion()
+        self._fig_mosaic, self._ax_mosaic = plt.subplots(figsize=(8, 8))
+        self._ax_mosaic.set_xlabel("X world (m)")
+        self._ax_mosaic.set_ylabel("Y world (m)")
+        self._ax_mosaic.set_title("Side-scan mosaic")
+        self._ax_mosaic.set_aspect("equal")
+        self._ax_mosaic.grid(True, alpha=0.3)
+        self._mosaic_im = None
+        self._traj_line, = self._ax_mosaic.plot(
+            [], [], "-", color="cyan", linewidth=1.2, label="boat track"
+        )
+        self._traj_marker, = self._ax_mosaic.plot(
+            [], [], "o", color="white", markeredgecolor="red", markersize=6,
+        )
+        self._ax_mosaic.legend(loc="upper right")
 
-        # Depth plot
-        self.fig_depth, self.ax_depth = plt.subplots()
-
-        self.line_depth, = self.ax_depth.plot([], [])
-
-        self.ax_depth.set_xlabel("Time")
-        self.ax_depth.set_ylabel("Depth (m)")
-        self.ax_depth.set_title("Live sonar plot")
-        self.ax_depth.grid(True)
-
-        self.depth_x_data = []
-        self.depth_y_data = []
-
-        self.get_logger().info("Live Depth plot ready.")
-        
-    def save_to_csv(self):
-
-        filename = "sonar_mosaic.csv"
-
-        with open(filename, mode='w', newline='') as file:
-
-            writer = csv.writer(file)
-
-            # Header
-            writer.writerow(["x_world","y_world","intensity_db"])
-
-            # Data
-            for x, y, intensity in zip(self.seabed_x_data, self.seabed_y_data, self.intensity_data):
-                writer.writerow([x,y,intensity])
+        self._fig_depth, self._ax_depth = plt.subplots(figsize=(8, 3.5))
+        self._ax_depth.set_xlabel("Time since first ping (s)")
+        self._ax_depth.set_ylabel("Depth (m)")
+        self._ax_depth.set_title("Estimated seabed depth")
+        self._ax_depth.grid(True, alpha=0.3)
+        self._depth_raw_line,    = self._ax_depth.plot(
+            [], [], color="steelblue", linewidth=0.6, alpha=0.4, label="raw")
+        self._depth_smooth_line, = self._ax_depth.plot(
+            [], [], color="darkred", linewidth=1.5, label=f"smoothed (N={DEPTH_SMOOTH_N})")
+        self._ax_depth.legend(loc="upper right")
+        # Depth increases downward in marine convention.
+        self._ax_depth.invert_yaxis()
 
         self.get_logger().info(
-            f"Saved {len(self.intensity_data)} points to {filename}"
+            f"listener ready: cell={CELL_SIZE_M*100:.0f} cm, "
+            f"redraw every {REDRAW_EVERY_N_PINGS} pings"
         )
 
-    def save_to_npz(self):
+    # ----- callback -----------------------------------------------------
+    def _on_processed_ping(self, msg: ProcessedSSSPing) -> None:
+        # Robot pose snapshot.
+        rx, ry = float(msg.robot_x), float(msg.robot_y)
+        yaw = quaternion_to_yaw(msg.robot_orientation)
 
-        filename = "sonar_mosaic.npz"
+        # Project both sides into world frame -- the sign of y_local
+        # encodes the side (port=+, stbd=-) so one rotation suffices.
+        port_y      = np.asarray(msg.port_y,                dtype=np.float64)
+        port_db     = np.asarray(msg.port_intensity_db,     dtype=np.float32)
+        stbd_y      = np.asarray(msg.starboard_y,           dtype=np.float64)
+        stbd_db     = np.asarray(msg.starboard_intensity_db, dtype=np.float32)
 
-        np.savez(
-            filename,
+        all_y_local = np.concatenate([port_y, stbd_y])
+        all_db      = np.concatenate([port_db, stbd_db])
+        xw, yw = project_to_world(rx, ry, yaw, all_y_local)
 
-            x=np.array(self.seabed_x_data),
-            y=np.array(self.seabed_y_data),
-            intensity=np.array(self.intensity_data)
-        )
+        self._mosaic.add_samples(xw, yw, all_db)
 
+        # Time series.
+        t_now = msg.port_stamp.sec + msg.port_stamp.nanosec * 1e-9
+        if self._t_first is None:
+            self._t_first = t_now
+        self._depth_t.append(t_now - self._t_first)
+        self._depth_z.append(float(msg.water_depth))
+        self._traj_x.append(rx)
+        self._traj_y.append(ry)
+
+        self._ping_count += 1
+        if self._ping_count % REDRAW_EVERY_N_PINGS == 0:
+            self._redraw()
+
+    # ----- drawing ------------------------------------------------------
+    def _redraw(self) -> None:
+        img = self._mosaic.render()
+        valid = img[np.isfinite(img)]
+        if valid.size == 0:
+            return
+        vmin, vmax = np.percentile(valid, [2, 98])
+        extent = self._mosaic.extent
+
+        if self._mosaic_im is None:
+            self._mosaic_im = self._ax_mosaic.imshow(
+                img, origin="lower", extent=extent,
+                cmap="copper", vmin=vmin, vmax=vmax,
+                interpolation="nearest",
+            )
+        else:
+            self._mosaic_im.set_data(img)
+            self._mosaic_im.set_extent(extent)
+            self._mosaic_im.set_clim(vmin, vmax)
+
+        # Trajectory overlay + current position marker.
+        self._traj_line.set_data(self._traj_x, self._traj_y)
+        self._traj_marker.set_data([self._traj_x[-1]], [self._traj_y[-1]])
+        self._ax_mosaic.relim()
+        self._ax_mosaic.autoscale_view()
+
+        # Depth (raw + smoothed).
+        self._depth_raw_line.set_data(self._depth_t, self._depth_z)
+        if len(self._depth_z) >= DEPTH_SMOOTH_N:
+            kernel = np.ones(DEPTH_SMOOTH_N) / DEPTH_SMOOTH_N
+            smoothed = np.convolve(self._depth_z, kernel, mode="valid")
+            # Align smoothed values with their centre time.
+            offset = DEPTH_SMOOTH_N // 2
+            t_smooth = self._depth_t[offset:offset + len(smoothed)]
+            self._depth_smooth_line.set_data(t_smooth, smoothed)
+        self._ax_depth.relim()
+        self._ax_depth.autoscale_view()
+
+        self._fig_mosaic.canvas.draw_idle()
+        self._fig_mosaic.canvas.flush_events()
+        self._fig_depth.canvas.draw_idle()
+        self._fig_depth.canvas.flush_events()
+
+    # ----- save ---------------------------------------------------------
+    def save(self) -> None:
+        npz_path, png_path = self._mosaic.save("sonar_mosaic")
         self.get_logger().info(
-            f"Saved {len(self.intensity_data)} points to {filename}"
+            f"saved mosaic: {png_path} (preview)  {npz_path} (data)"
         )
+        # Boat trajectory + depth CSV (small file: O(num_pings), not O(samples)).
+        traj_path = Path("boat_trajectory.csv")
+        with open(traj_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["t_since_first_s", "x_m", "y_m", "depth_m"])
+            for t, x, y, z in zip(self._depth_t, self._traj_x,
+                                  self._traj_y, self._depth_z):
+                w.writerow([f"{t:.3f}", f"{x:.3f}", f"{y:.3f}", f"{z:.3f}"])
+        self.get_logger().info(f"saved trajectory: {traj_path}")
 
-    def _on_processed_ping(self, msg):
-        # Traceability
-        port_stamp = msg.port_stamp
-        starboard_stamp = msg.starboard_stamp
 
-        port_ping_number = msg.port_ping_number
-        starboard_ping_number = msg.starboard_ping_number
-
-        # Robot state
-        robot_x = msg.robot_x
-        robot_y = msg.robot_y
-
-        robot_orientation = msg.robot_orientation
-
-        # Quaternion components
-        q = robot_orientation
-
-        # Bathymetry
-        water_depth = msg.water_depth
-
-        # Geometry
-        transducer_x_offset = msg.transducer_x_offset
-
-        # Sides
-        port_intensity_db = list(msg.port_intensity_db)
-        port_y = list(msg.port_y)
-        starboard_intensity_db = list(msg.starboard_intensity_db)
-        starboard_y = list(msg.starboard_y)
-
-        # Example debug
-
-        self.get_logger().info(
-            f'Ping received | '
-            f'port_number={port_ping_number} '
-            f'starboard_number={starboard_ping_number} '
-            f'port_samples={len(port_intensity_db)} '
-            f'starboard_samples={len(starboard_intensity_db)} '
-            f'Robot Coordinates in World: ({robot_x}, {robot_y})'
-        )
-
-        # 1. -> Depth live plotting
-
-        # Convert ROS time -> float seconds
-        self.depth_x_data.append(port_stamp.sec + port_stamp.nanosec * 1e-9)
-
-        self.depth_y_data.append(water_depth)
-        
-        # Update plot
-        self.line_depth.set_xdata(self.depth_x_data)
-        self.line_depth.set_ydata(self.depth_y_data)
-
-        self.ax_depth.relim()
-        self.ax_depth.autoscale_view()
-
-        self.fig_depth.canvas.draw()
-        self.fig_depth.canvas.flush_events()
-
-        # 2. -> seabed profile image creation
-
-        left_world, right_world = sonar_to_world(robot_x, robot_y, q, port_y, starboard_y) # left_world[i] = (x,y) in world coordinates of the i-th port ping sample
-
-        all_x = [x for x, _ in left_world] + [x for x, _ in right_world]
-        all_y = [y for _, y in left_world] + [y for _, y in right_world]
-
-        self.seabed_x_data += all_x
-        self.seabed_y_data += all_y
-        self.intensity_data += port_intensity_db + starboard_intensity_db
-
-def main(args=None):
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def main(args=None) -> None:
     rclpy.init(args=args)
-
-    node = RawSSSImage()
-
+    node = ProcessedSSSListener()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         node.get_logger().info("CTRL+C detected")
-        # Save data before shutdown
-        node.save_to_npz()
-
+        node.save()
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
