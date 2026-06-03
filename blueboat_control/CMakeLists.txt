@@ -29,22 +29,12 @@ install(PROGRAMS src/_custom_libraries/path_generation.py
         DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS src/_custom_libraries/custom_functions.py
         DESTINATION lib/${PROJECT_NAME})
-install(PROGRAMS src/_custom_libraries/sss_processing.py
-        DESTINATION lib/${PROJECT_NAME})        
-install(PROGRAMS src/_custom_libraries/svlog.py
-        DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS src/robot_interaction/robot_interface.py
         DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS src/robot_interaction/param_set.py
         DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS src/robot_interaction/uwgps_log.py
-        DESTINATION lib/${PROJECT_NAME})
-install(PROGRAMS src/SSS/sss_node.py
-        DESTINATION lib/${PROJECT_NAME})
-install(PROGRAMS src/SSS/sss_processor_node.py
-        DESTINATION lib/${PROJECT_NAME})
-install(PROGRAMS src/SSS/processed_sss_listener.py
         DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS src/master_control.py
