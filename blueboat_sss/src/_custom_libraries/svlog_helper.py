@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """SonarView .svlog file format support.
+Used by the processor node to write .svlog files that can be opened directly in SonarView for
+easy visualization and comparision. 
 
 The .svlog format is a stream of Cerulean Ping Protocol packets:
 https://docs.ceruleansonar.com/c/cerulean-ping-protocol/universal-packet-format

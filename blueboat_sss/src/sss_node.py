@@ -23,10 +23,8 @@ Sub  ~/ping/enable          std_msgs/Bool   true=start, false=stop
 
 Run-dependent parameters
 ------------------------
-Network        port_ip, port_tcp_port, starboard_ip, starboard_tcp_port
 Acquisition    range_start_mm, range_length_mm, msec_per_ping, gain_index,
                num_results, pulse_len_percent
-Frames         port_frame_id, starboard_frame_id
 
 Acquisition parameters are re-read each time pinging is enabled, so
 `ros2 param set ...` between runs takes effect on the next "start".
@@ -54,7 +52,8 @@ from blueboat_interfaces.msg import OmniscanProfile
 # Pinned (non run-dependent) parameters
 # ---------------------------------------------------------------------------
 FILTER_DURATION_PERCENT: float = 0.0015     # Cerulean docs: 0.0015 typical
-WORKER_JOIN_TIMEOUT_S:   float = 3.0
+WORKER_JOIN_TIMEOUT_S:   float = 5.0
+RECONNECT_DELAY_S:       float = 2.0        # wait between reconnect attempts
 
 
 @dataclass(frozen=True)
@@ -73,7 +72,18 @@ class PingParams:
 # Per-device worker
 # ---------------------------------------------------------------------------
 class OmniscanWorker:
-    """Owns one Omniscan450. Publishes parsed + raw packets for one side."""
+    """Owns one Omniscan450. Publishes parsed + raw packets for one side.
+
+    Lifecycle is fully driven by the worker thread:
+      1. Try to connect. On failure, sleep RECONNECT_DELAY_S and retry.
+      2. Once connected, (re-)apply the desired pinging state.
+      3. Run the receive loop. If wait_message errors out (socket dead),
+         tear down and loop back to step 1.
+
+    `set_pinging()` updates the *desired* state -- it pushes the command
+    to the device immediately if connected, and the desired state is
+    automatically re-applied after every reconnection.
+    """
 
     def __init__(
         self,
@@ -93,114 +103,199 @@ class OmniscanWorker:
         self._raw_pub = raw_publisher
         self._frame_id = frame_id
 
+        # Device + thread state. `_device` is reassigned by the worker
+        # thread on connect/disconnect; CPython makes pointer
+        # reads/writes atomic, so other threads can sample it directly.
         self._device: Optional[Omniscan450] = None
         self._thread: Optional[threading.Thread] = None
-        self._running = threading.Event()
+        self._stop_event = threading.Event()
+
+        # Desired vs applied pinging state. Updated by set_pinging(),
+        # consumed by _apply_desired_state(). The lock serializes the
+        # check-then-send logic so two callbacks racing don't both
+        # trigger a duplicate enable command.
         self._control_lock = threading.Lock()
-        self._pinging = False
+        self._desired_ping_enable = False
+        self._desired_ping_params: Optional[PingParams] = None
+        self._currently_pinging = False
 
     # ----- lifecycle -------------------------------------------------------
-    def start(self) -> bool:
-        log = self._node.get_logger()
-        # logging=False -- on-disk logging is the processor node's job.
-        self._device = Omniscan450(logging=False)
-        log.info(
-            f"[{self._side}] connecting to Omniscan450 at "
-            f"{self._ip}:{self._tcp_port} (TCP)"
-        )
-        try:
-            self._device.connect_tcp(self._ip, self._tcp_port)
-        except Exception as exc:  # noqa: BLE001
-            log.error(f"[{self._side}] TCP connect failed: {exc}")
-            return False
-
-        if self._device.initialize() is False:
-            log.error(f"[{self._side}] Omniscan450.initialize() returned False")
-            return False
-
-        try:
-            self._device.control_os_ping_params(enable=0)
-        except Exception:  # noqa: BLE001
-            pass
-
-        self._running.set()
+    def start(self) -> None:
+        """Kick the worker thread. Connection happens asynchronously."""
+        self._stop_event.clear()
         self._thread = threading.Thread(
-            target=self._spin, name=f"omniscan-{self._side}", daemon=True
+            target=self._main_loop, name=f"omniscan-{self._side}", daemon=True
         )
         self._thread.start()
-        log.info(f"[{self._side}] connected, idle (ping OFF)")
-        return True
+        self._node.get_logger().info(
+            f"[{self._side}] worker started (will connect to {self._ip}:{self._tcp_port})"
+        )
 
     def stop(self) -> None:
-        try:
-            self.set_pinging(False)
-        except Exception:  # noqa: BLE001
-            pass
-        self._running.clear()
-        if self._thread is not None:
-            self._thread.join(timeout=WORKER_JOIN_TIMEOUT_S)
-        if self._device is not None:
+        """Signal stop, force-close socket to unblock wait_message, join."""
+        self._stop_event.set()
+
+        # Best-effort: tell the device to stop pinging before we leave.
+        # If it fails (already disconnected), no big deal -- next start
+        # of the node will reset it via initialize() / enable=0.
+        dev = self._device
+        if dev is not None:
             try:
-                if self._device.iodev:
-                    self._device.iodev.close()
+                dev.control_os_ping_params(enable=0)
+            except Exception:  # noqa: BLE001
+                pass
+            # Closing iodev breaks any blocking wait_message immediately.
+            # Without this, stop() would wait up to the library's internal
+            # wait_message timeout (~4s) for the receive thread to exit.
+            try:
+                if dev.iodev:
+                    dev.iodev.close()
             except Exception:  # noqa: BLE001
                 pass
 
-    # ----- control ---------------------------------------------------------
-    def set_pinging(self, enable: bool, params: Optional[PingParams] = None) -> bool:
-        log = self._node.get_logger()
-        with self._control_lock:
-            if self._device is None:
-                return False
-            if enable == self._pinging:
-                return True
-            try:
-                if enable:
-                    if params is None:
-                        log.error(f"[{self._side}] cannot start ping without params")
-                        return False
-                    self._device.control_os_ping_params(
-                        start_mm=params.start_mm,
-                        length_mm=params.length_mm,
-                        msec_per_ping=params.msec_per_ping,
-                        pulse_len_percent=params.pulse_len_percent,
-                        filter_duration_percent=FILTER_DURATION_PERCENT,
-                        gain_index=params.gain_index,
-                        num_results=params.num_results,
-                        enable=1,
-                    )
-                    log.info(
-                        f"[{self._side}] pinging started "
-                        f"(range {params.start_mm}-{params.start_mm + params.length_mm} mm, "
-                        f"gain {params.gain_index}, n={params.num_results})"
-                    )
-                else:
-                    self._device.control_os_ping_params(enable=0)
-                    log.info(f"[{self._side}] pinging stopped")
-            except Exception as exc:  # noqa: BLE001
-                log.error(f"[{self._side}] set_pinging({enable}) failed: {exc}")
-                return False
-            self._pinging = enable
-            return True
+        if self._thread is not None:
+            self._thread.join(timeout=WORKER_JOIN_TIMEOUT_S)
+            if self._thread.is_alive():
+                self._node.get_logger().warn(
+                    f"[{self._side}] worker did not join in {WORKER_JOIN_TIMEOUT_S}s"
+                )
+        self._device = None
 
-    # ----- internals -------------------------------------------------------
-    def _spin(self) -> None:
+    # ----- control ---------------------------------------------------------
+    def set_pinging(self, enable: bool, params: Optional[PingParams] = None) -> None:
+        """Update the desired pinging state.
+
+        Pushed to the device immediately if connected; re-applied
+        automatically by the worker thread on every reconnect. Calling
+        this before the worker has connected for the first time is
+        safe -- the state is queued and applied on first connection.
+        """
+        with self._control_lock:
+            self._desired_ping_enable = enable
+            if enable and params is not None:
+                self._desired_ping_params = params
+            self._apply_desired_state_locked()
+
+    def _apply_desired_state_locked(self) -> None:
+        """Push the desired state to the device. Call under _control_lock."""
+        log = self._node.get_logger()
+        dev = self._device
+        if dev is None:
+            return  # Not connected yet; will be applied on connect.
+
+        enable = self._desired_ping_enable
+        params = self._desired_ping_params
+        if enable == self._currently_pinging:
+            return  # idempotent
+
+        try:
+            if enable:
+                if params is None:
+                    log.error(f"[{self._side}] cannot start ping without params")
+                    return
+                dev.control_os_ping_params(
+                    start_mm=params.start_mm,
+                    length_mm=params.length_mm,
+                    msec_per_ping=params.msec_per_ping,
+                    pulse_len_percent=params.pulse_len_percent,
+                    filter_duration_percent=FILTER_DURATION_PERCENT,
+                    gain_index=params.gain_index,
+                    num_results=params.num_results,
+                    enable=1,
+                )
+                log.info(
+                    f"[{self._side}] pinging started "
+                    f"(range {params.start_mm}-{params.start_mm + params.length_mm} mm, "
+                    f"gain {params.gain_index}, n={params.num_results})"
+                )
+            else:
+                dev.control_os_ping_params(enable=0)
+                log.info(f"[{self._side}] pinging stopped")
+            self._currently_pinging = enable
+        except Exception as exc:  # noqa: BLE001
+            # Connection probably died mid-command. Don't update
+            # _currently_pinging; the next reconnect will resync.
+            log.warn(f"[{self._side}] apply ping state failed: {exc}")
+
+    # ----- main loop -------------------------------------------------------
+    def _main_loop(self) -> None:
         log = self._node.get_logger()
         target = [definitions.OMNISCAN450_OS_MONO_PROFILE]
-        while self._running.is_set() and rclpy.ok():
-            try:
-                data = self._device.wait_message(target)
-            except Exception as exc:  # noqa: BLE001
-                log.warn(f"[{self._side}] wait_message error: {exc}")
-                continue
-            if data is None:
-                continue
-            self._publish_profile(data)
-            # brping populates msg_data inside wait_message with the
-            # already-framed Ping-Protocol bytes -- republish verbatim.
-            if data.msg_data:
-                self._publish_raw(bytes(data.msg_data))
 
+        while not self._stop_event.is_set() and rclpy.ok():
+            # ---- Phase 1: connect (with retries) ----
+            if not self._connect():
+                # Cancellable sleep -- returns True if stop was signalled.
+                if self._stop_event.wait(RECONNECT_DELAY_S):
+                    return
+                continue
+
+            # ---- Phase 2: (re-)apply desired ping state ----
+            # After connect(), the device is in enable=0 (we just sent it).
+            with self._control_lock:
+                self._currently_pinging = False
+                self._apply_desired_state_locked()
+
+            # ---- Phase 3: receive loop ----
+            while not self._stop_event.is_set() and rclpy.ok():
+                try:
+                    data = self._device.wait_message(target)
+                except Exception as exc:  # noqa: BLE001
+                    log.warn(f"[{self._side}] connection lost: {exc}")
+                    break  # drop out, reconnect
+                if data is None:
+                    continue
+                self._publish_profile(data)
+                # brping populates msg_data inside wait_message with the
+                # already-framed Ping-Protocol bytes -- republish verbatim.
+                if data.msg_data:
+                    self._publish_raw(bytes(data.msg_data))
+
+            # ---- Phase 4: tear down for reconnect ----
+            self._teardown_device()
+
+    def _connect(self) -> bool:
+        """One connection attempt. Returns True iff the device is usable."""
+        log = self._node.get_logger()
+        try:
+            dev = Omniscan450(logging=False)
+            dev.connect_tcp(self._ip, self._tcp_port)
+            if dev.initialize() is False:
+                log.warn(
+                    f"[{self._side}] initialize() returned False at "
+                    f"{self._ip}:{self._tcp_port}, will retry"
+                )
+                self._safe_close_iodev(dev)
+                return False
+            # Start from a known clean state on the device.
+            try:
+                dev.control_os_ping_params(enable=0)
+            except Exception:  # noqa: BLE001
+                pass
+            self._device = dev
+            log.info(f"[{self._side}] connected at {self._ip}:{self._tcp_port}")
+            return True
+        except Exception as exc:  # noqa: BLE001
+            log.warn(
+                f"[{self._side}] connect failed at {self._ip}:{self._tcp_port}: "
+                f"{exc} (retry in {RECONNECT_DELAY_S}s)"
+            )
+            return False
+
+    def _teardown_device(self) -> None:
+        if self._device is not None:
+            self._safe_close_iodev(self._device)
+            self._device = None
+
+    @staticmethod
+    def _safe_close_iodev(dev) -> None:
+        try:
+            if dev.iodev:
+                dev.iodev.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ----- publishing ------------------------------------------------------
     def _publish_profile(self, data) -> None:
         msg = OmniscanProfile()
         msg.header.stamp = self._node.get_clock().now().to_msg()
@@ -244,10 +339,6 @@ class SideScanSonarNode(Node):
         super().__init__("side_scan_sonar")
 
         # ---- Run-dependent parameters --------------------------------------
-        self.declare_parameter("port_ip", "192.168.2.92")
-        self.declare_parameter("port_tcp_port", 51200)
-        self.declare_parameter("starboard_ip", "192.168.2.93")
-        self.declare_parameter("starboard_tcp_port", 51200)
 
         self.declare_parameter("range_start_mm", 0)
         self.declare_parameter("range_length_mm", 30000)
@@ -255,9 +346,6 @@ class SideScanSonarNode(Node):
         self.declare_parameter("gain_index", -1)
         self.declare_parameter("num_results", 600)
         self.declare_parameter("pulse_len_percent", 0.002)
-
-        self.declare_parameter("port_frame_id", "sss_port_link")
-        self.declare_parameter("starboard_frame_id", "sss_starboard_link")
 
         # ---- Publishers (best-effort: sonar is a high-rate lossy stream) ---
         sonar_qos = QoSProfile(
@@ -282,26 +370,26 @@ class SideScanSonarNode(Node):
         self._port_worker = OmniscanWorker(
             self,
             side="port",
-            ip=self._str_param("port_ip"),
-            tcp_port=self._int_param("port_tcp_port"),
+            ip="192.168.2.92",
+            tcp_port=51200,
             profile_publisher=self._port_profile_pub,
             raw_publisher=self._port_raw_pub,
-            frame_id=self._str_param("port_frame_id"),
+            frame_id="sss_port_link",
         )
         self._starboard_worker = OmniscanWorker(
             self,
             side="starboard",
-            ip=self._str_param("starboard_ip"),
-            tcp_port=self._int_param("starboard_tcp_port"),
+            ip="192.168.2.93",
+            tcp_port=51200,
             profile_publisher=self._stbd_profile_pub,
             raw_publisher=self._stbd_raw_pub,
-            frame_id=self._str_param("starboard_frame_id"),
+            frame_id="sss_starboard_link",
         )
 
-        if not self._port_worker.start():
-            self.get_logger().error("port-side Omniscan failed to start")
-        if not self._starboard_worker.start():
-            self.get_logger().error("starboard-side Omniscan failed to start")
+        # start() kicks the worker threads; connection happens asynchronously
+        # with retries, so there's nothing to check for failure here.
+        self._port_worker.start()
+        self._starboard_worker.start()
 
         # ---- Control subscriber --------------------------------------------
         self.create_subscription(Bool, "~/ping/enable", self._on_ping_enable, 10)
@@ -337,9 +425,6 @@ class SideScanSonarNode(Node):
             num_results=self._int_param("num_results"),
             pulse_len_percent=self._float_param("pulse_len_percent"),
         )
-
-    def _str_param(self, name: str) -> str:
-        return self.get_parameter(name).get_parameter_value().string_value
 
     def _int_param(self, name: str) -> int:
         return self.get_parameter(name).get_parameter_value().integer_value

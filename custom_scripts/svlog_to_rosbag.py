@@ -43,7 +43,6 @@ Usage
 
 from __future__ import annotations
 
-import argparse
 import json
 import math
 import os
@@ -74,13 +73,18 @@ from blueboat_interfaces.msg import OmniscanProfile
 
 # Sibling import (same install dir as the node scripts).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from svlog import (
+from svlog_helper import (
     DEVICE_ID_PORT,
     DEVICE_ID_STBD,
     MAVLINK_WRAPPER_ID,
     OS_MONO_PROFILE_ID,
     retag_packet_src_device_id,
 )
+
+# ----------------------------------------------------------------------------- 
+INPUT_FILE = "src/BlueBoat-SideScanSonar/55_svlog.svlog"
+OUTPUT_BAG = "src/BlueBoat-SideScanSonar/output_bag" # If exists, gonna be renamed by adding _2, _3, etc.
+# -----------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -562,10 +566,6 @@ class Converter:
 
 def main() -> None:
 
-    INPUT_FILE = "src/BlueBoat-SideScanSonar/55_svlog.svlog"
-    OUTPUT_BAG = "src/BlueBoat-SideScanSonar/output_bag" # Must not exist
-    STORAGE_FORMAT = "mcap"
-
     input_path = Path(INPUT_FILE)
     output_path = Path(OUTPUT_BAG)
 
@@ -573,7 +573,11 @@ def main() -> None:
         sys.exit("input file not found")
 
     if output_path.exists():
-        sys.exit("output already exists")
+        print(f"output path {output_path} already exists; renaming with _2, _3, etc.")
+        i = 2
+        while output_path.with_suffix(f"_{i}").exists():
+            i += 1
+        output_path = output_path.with_suffix(f"_{i}")
 
     rclpy.init()
 
@@ -583,7 +587,7 @@ def main() -> None:
         writer.open(
             StorageOptions(
                 uri=str(output_path),
-                storage_id=STORAGE_FORMAT,
+                storage_id="mcap",
             ),
             ConverterOptions(
                 input_serialization_format="cdr",

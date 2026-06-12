@@ -13,20 +13,44 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: override"
 
 -- SSS
 
-0. Rosbag conversion from svlog (from ros2_ws)
-python3 src/BlueBoat-SideScanSonar/blueboat_control/src/_custom_libraries/svlog_to_rosbag.py 
 
-1. Start logging 
-ros2 topic pub --once /sss_processor/log/enable std_msgs/msg/Bool "{data: true}"
+----- Live 
 
-1.5 Start visualizing 
-ros2 run blueboat_control processed_sss_listener.py
+1. Launch file
+ros2 launch blueboat_sss SSS_launch.py
+ros2 launch blueboat_sss SSS_launch.py range_length_mm:=20000 
 
-2. Start processor node 
-ros2 run blueboat_control sss_processor_node.py
+2. Topic commands
+Start pinging:
+ros2 topic pub --once /side_scan_sonar/ping/enable std_msgs/msg/Bool 'data: true'
 
-3. Start rosbag playing (in the rosbag's folder folder)
+Stop pinging:
+ros2 topic pub --once /side_scan_sonar/ping/enable std_msgs/msg/Bool 'data: false'
+
+Start logging to .svlog (default path data/SSS_data/):
+ros2 topic pub --once /sss_processor/log/enable std_msgs/msg/Bool 'data: true'
+
+Stop logging:
+ros2 topic pub --once /sss_processor/log/enable std_msgs/msg/Bool 'data: false'
+
+
+----- Offline
+
+1. Python files
+After an experiment: build the map (from /ros2_ws)
+
+python3 src/BlueBoat-SideScanSonar/custom_scripts/processed_sss_printer.py 
+
+Svlog_to_rosbag (from /ros2_ws)
+
+python3 src/BlueBoat-SideScanSonar/custom_scripts/svlog_to_rosbag.py 
+
+2. Launch file
+
+ros2 launch blueboat_sss SSS_launch.py will_use_rosbag:=True
+
+3. Start logging again if necessary (see Live section)
+
+4. Start rosbag playing (in the rosbag's folder folder)
+
 ros2 bag play output_bag
-
-4. (offline - in /ros2_ws)
-python3 src/BlueBoat-SideScanSonar/blueboat_control/src/_custom_libraries/processed_sss_printer.py 

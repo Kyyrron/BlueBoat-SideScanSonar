@@ -13,8 +13,6 @@ contrast control and a trajectory overlay. Run after a survey:
 
     python3 processed_sss_printer.py
 
-Optional args:
-    --no-trajectory     skip the boat-track overlay
 """
 
 from __future__ import annotations
@@ -28,11 +26,14 @@ import numpy as np
 
 
 def main() -> None:
+
+    default_mosaic = "sonar_mosaic.npz" # Output of processed_sss_listener.py node.
+    default_trajectory = "boat_trajectory.csv" # Same
+
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mosaic",     default="sonar_mosaic.npz", type=Path)
-    ap.add_argument("--trajectory", default="boat_trajectory.csv", type=Path)
+    ap.add_argument("--mosaic",     default=default_mosaic, type=Path)
+    ap.add_argument("--trajectory", default=default_trajectory, type=Path)
     ap.add_argument("--cmap", default="copper")
-    ap.add_argument("--no-trajectory", action="store_true")
     args = ap.parse_args()
 
     data = np.load(args.mosaic)
@@ -57,7 +58,7 @@ def main() -> None:
               cmap=args.cmap, vmin=vmin, vmax=vmax,
               interpolation="nearest")
 
-    if not args.no_trajectory and args.trajectory.exists():
+    if args.trajectory.exists():
         xs, ys = [], []
         with open(args.trajectory) as f:
             r = csv.DictReader(f)
@@ -76,6 +77,7 @@ def main() -> None:
     ax.set_title("Side-scan sonar mosaic")
     ax.set_aspect("equal")
     ax.grid(True, alpha=0.3)
+    plt.savefig(args.mosaic.with_suffix(".png"), dpi=300) # Saves the plot
     plt.tight_layout()
     plt.show()
 

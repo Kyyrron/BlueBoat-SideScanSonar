@@ -70,7 +70,7 @@ from std_msgs.msg import Bool, Float64, UInt8MultiArray
 
 from blueboat_interfaces.msg import OmniscanProfile, ProcessedSSSPing
 
-from svlog import (
+from svlog_helper import (
     DEFAULT_MAVLINK_FILTER,
     DEVICE_ID_PORT,
     DEVICE_ID_STBD,
@@ -79,11 +79,16 @@ from svlog import (
     build_session_metadata,
     retag_packet_src_device_id,
 )
-from sss_processing import (
+from sss_helper import (
     FBRTracker,
     detect_fbr_slant_m,
     project_side,
     scale_to_db,
+)
+
+from math_helper import (
+    stamp_to_ns,
+    quat_to_euler_rpy,
 )
 
 
@@ -112,30 +117,6 @@ ALTITUDE_RELOCK_AFTER:    int   = 15    # consecutive rejects force a side to re
 TIME_MATCH_TOLERANCE_NS:  int   = 50_000_000  # port-vs-starboard pairing window
 ODOM_BUFFER_SECONDS:      float = 5.0
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-def _stamp_to_ns(stamp: TimeMsg) -> int:
-    return stamp.sec * 1_000_000_000 + stamp.nanosec
-
-
-def _quat_to_euler_rpy(x: float, y: float, z: float, w: float) -> Tuple[float, float, float]:
-    """Quaternion -> (roll, pitch, yaw) in radians (ZYX intrinsic, ROS convention)."""
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
-    sinp = 2.0 * (w * y - z * x)
-    if abs(sinp) >= 1.0:
-        pitch = math.copysign(math.pi / 2.0, sinp)
-    else:
-        pitch = math.asin(sinp)
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
-    return roll, pitch, yaw
-
-
 # ---------------------------------------------------------------------------
 # Odom buffer
 # ---------------------------------------------------------------------------
@@ -150,7 +131,7 @@ class _OdomBuffer:
         self._lock = threading.Lock()
 
     def push(self, msg: Odometry) -> None:
-        ts = _stamp_to_ns(msg.header.stamp)
+        ts = stamp_to_ns(msg.header.stamp)
         with self._lock:
             self._samples.append((ts, msg))
             cutoff = ts - self._max_age_ns
@@ -183,49 +164,6 @@ class SSSProcessorNode(Node):
     def __init__(self) -> None:
         super().__init__("sss_processor")
 
-        # ---- Parameters ----------------------------------------------------
-        # Sonar topics
-        self.declare_parameter("port_topic",          "/side_scan_sonar/port/profile")
-        self.declare_parameter("starboard_topic",     "/side_scan_sonar/starboard/profile")
-        self.declare_parameter("port_raw_topic",      "/side_scan_sonar/port/raw")
-        self.declare_parameter("starboard_raw_topic", "/side_scan_sonar/starboard/raw")
-        self.declare_parameter("odom_topic",          "/blueboat/odom")
-        self.declare_parameter("processed_topic",     "~/processed")
-
-        # Device addresses (used to fill svlog session_devices URLs)
-        self.declare_parameter("port_ip",            "192.168.2.92")
-        self.declare_parameter("port_tcp_port",      51200)
-        self.declare_parameter("starboard_ip",       "192.168.2.93")
-        self.declare_parameter("starboard_tcp_port", 51200)
-
-        # Logging
-        self.declare_parameter("log_directory", "data/SSS_data")
-
-        # Mavros telemetry (set mavros_enabled=False to write svlog without
-        # platform telemetry; the file still plays but without georeferencing).
-        self.declare_parameter("mavros_enabled",            True)
-        self.declare_parameter("mavros_imu_topic",          "/mavros/imu/data")
-        self.declare_parameter("mavros_navsat_topic",       "/mavros/global_position/global")
-        self.declare_parameter("mavros_rel_alt_topic",      "/mavros/global_position/rel_alt")
-        self.declare_parameter("mavros_compass_hdg_topic",  "/mavros/global_position/compass_hdg")
-        self.declare_parameter("mavros_local_pose_topic",   "/mavros/local_position/pose")
-        self.declare_parameter("mavros_local_vel_topic",    "/mavros/local_position/velocity_local")
-        self.declare_parameter("mavros_home_pos_topic",     "/mavros/home_position/home")
-        self.declare_parameter("mavros_gp_origin_topic",    "/mavros/global_position/gp_origin")
-        self.declare_parameter("mavros_vfr_hud_topic",      "/mavros/vfr_hud")
-        self.declare_parameter("mavlink_system_id", 1)
-        # Used purely as a descriptive string in session_platform.url so
-        # SonarView shows a sensible source name on replay.
-        self.declare_parameter("mavlink_url_for_session", "ws://blueos.local:6040/v1/ws/mavlink")
-        self.declare_parameter("mavlink_filter_for_session", DEFAULT_MAVLINK_FILTER)
-
-        port_topic      = self._str_param("port_topic")
-        stbd_topic      = self._str_param("starboard_topic")
-        port_raw_topic  = self._str_param("port_raw_topic")
-        stbd_raw_topic  = self._str_param("starboard_raw_topic")
-        odom_topic      = self._str_param("odom_topic")
-        processed_topic = self._str_param("processed_topic")
-
         # ---- Processing state ---------------------------------------------
         self._port_buf: Deque[OmniscanProfile] = deque()
         self._stbd_buf: Deque[OmniscanProfile] = deque()
@@ -245,7 +183,7 @@ class SSSProcessorNode(Node):
         self._already_bootstrapped_logged = False
 
         # ---- Logging + mavlink envelope state ------------------------------
-        log_root = Path(os.path.expanduser(self._str_param("log_directory")))
+        log_root = Path(os.path.expanduser("data/SSS_data"))
         self.get_logger().info(f"log directory: {log_root}")
         self._svlog = SvlogWriter(
             log_dir=log_root,
@@ -281,65 +219,37 @@ class SSSProcessorNode(Node):
 
         # ---- IO ------------------------------------------------------------
         # Parsed profiles -> processing pipeline.
-        self.create_subscription(OmniscanProfile, port_topic, self._on_port, sonar_qos)
-        self.create_subscription(OmniscanProfile, stbd_topic, self._on_starboard, sonar_qos)
+        self.create_subscription(OmniscanProfile, "/side_scan_sonar/port/profile",      self._on_port,          sonar_qos)
+        self.create_subscription(OmniscanProfile, "/side_scan_sonar/starboard/profile", self._on_starboard,     sonar_qos)
         # Raw bytes -> svlog (independent of processing).
-        self.create_subscription(UInt8MultiArray, port_raw_topic, self._on_port_raw, sonar_qos)
-        self.create_subscription(UInt8MultiArray, stbd_raw_topic, self._on_starboard_raw, sonar_qos)
+        self.create_subscription(UInt8MultiArray, "/side_scan_sonar/port/raw",          self._on_port_raw,      sonar_qos)
+        self.create_subscription(UInt8MultiArray, "/side_scan_sonar/starboard/raw",     self._on_starboard_raw, sonar_qos)
         # Pose for processing.
-        self.create_subscription(Odometry, odom_topic, self._on_odom, odom_qos)
+        self.create_subscription(Odometry,        "/blueboat/odom",                     self._on_odom,          odom_qos)
         # Mavros telemetry -> svlog mavlink wrappers.
-        if self._bool_param("mavros_enabled"):
-            self.create_subscription(
-                Imu, self._str_param("mavros_imu_topic"),
-                self._on_mavros_imu, sonar_qos,
-            )
-            self.create_subscription(
-                NavSatFix, self._str_param("mavros_navsat_topic"),
-                self._on_mavros_navsat, sonar_qos,
-            )
-            self.create_subscription(
-                Float64, self._str_param("mavros_rel_alt_topic"),
-                self._on_mavros_rel_alt, 10,
-            )
-            self.create_subscription(
-                Float64, self._str_param("mavros_compass_hdg_topic"),
-                self._on_mavros_compass_hdg, 10,
-            )
-            self.create_subscription(
-                TwistStamped, self._str_param("mavros_local_vel_topic"),
-                self._on_mavros_local_vel, sonar_qos,
-            )
-            self.create_subscription(
-                PoseStamped, self._str_param("mavros_local_pose_topic"),
-                self._on_mavros_local_pose, sonar_qos,
-            )
-            self.create_subscription(
-                HomePosition, self._str_param("mavros_home_pos_topic"),
-                self._on_mavros_home_position, 10,
-            )
-            self.create_subscription(
-                GeoPointStamped, self._str_param("mavros_gp_origin_topic"),
-                self._on_mavros_gp_origin, 10,
-            )
-            self.create_subscription(
-                VfrHud, self._str_param("mavros_vfr_hud_topic"),
-                self._on_mavros_vfr_hud, sonar_qos,
-            )
-            self.get_logger().info("mavros telemetry subscriptions active")
+        self.create_subscription(Imu,             "/mavros/imu/data",                       self._on_mavros_imu,           sonar_qos)
+        self.create_subscription(NavSatFix,       "/mavros/global_position/global",         self._on_mavros_navsat,        sonar_qos)
+        self.create_subscription(Float64,         "/mavros/global_position/rel_alt",        self._on_mavros_rel_alt,       10)
+        self.create_subscription(Float64,         "/mavros/global_position/compass_hdg",    self._on_mavros_compass_hdg,   10)
+        self.create_subscription(TwistStamped,    "/mavros/local_position/velocity_local",  self._on_mavros_local_vel,     sonar_qos)
+        self.create_subscription(PoseStamped,     "/mavros/local_position/pose",            self._on_mavros_local_pose,    sonar_qos)
+        self.create_subscription(HomePosition,    "/mavros/home_position/home",             self._on_mavros_home_position, 10)
+        self.create_subscription(GeoPointStamped, "/mavros/global_position/gp_origin",      self._on_mavros_gp_origin,     10)
+        self.create_subscription(VfrHud,          "/mavros/vfr_hud",                        self._on_mavros_vfr_hud,       sonar_qos)
+        self.get_logger().info("mavros telemetry subscriptions active")
         # Logging toggle.
         self.create_subscription(Bool, "~/log/enable", self._on_log_enable, 10)
 
-        self._pub = self.create_publisher(ProcessedSSSPing, processed_topic, sonar_qos)
+        self._pub = self.create_publisher(ProcessedSSSPing, "~/processed", sonar_qos)
 
         self.get_logger().info(
             "sss_processor ready (log OFF):\n"
-            f"  port  ← {port_topic}\n"
-            f"  stbd  ← {stbd_topic}\n"
-            f"  port raw  ← {port_raw_topic}\n"
-            f"  stbd raw  ← {stbd_raw_topic}\n"
-            f"  odom  ← {odom_topic}\n"
-            f"  out   → {processed_topic}\n"
+            "  port  ← /side_scan_sonar/port/profile\n"
+            "  stbd  ← /side_scan_sonar/starboard/profile\n"
+            "  port raw  ← /side_scan_sonar/port/raw\n"
+            "  stbd raw  ← /side_scan_sonar/starboard/raw\n"
+            "  odom  ← /blueboat/odom\n"
+            "  out   → ~/processed\n"
             f"  bootstrap: {BOOTSTRAP_PINGS} self-consistent pings per side within "
             f"{ALTITUDE_AGREEMENT_TOL_M*100:.0f} cm (either side suffices)\n"
             "  Toggle logging with:\n"
@@ -488,7 +398,7 @@ class SSSProcessorNode(Node):
 
     def _mavlink_header(self) -> dict:
         return {
-            "system_id":    int(self._int_param("mavlink_system_id")),
+            "system_id":    1,
             "component_id": 1,
             "sequence":     self._next_seq(),
         }
@@ -503,7 +413,7 @@ class SSSProcessorNode(Node):
         # ATTITUDE expects NED/FRD, so we invert the same rotation the
         # converter applies (NED -> ENU): roll unchanged, pitch and yaw
         # signed by the ENU<->NED frame swap.
-        roll_enu, pitch_enu, yaw_enu = _quat_to_euler_rpy(q.x, q.y, q.z, q.w)
+        roll_enu, pitch_enu, yaw_enu = quat_to_euler_rpy(q.x, q.y, q.z, q.w)
         roll_ned  =  roll_enu
         pitch_ned = -pitch_enu
         yaw_ned   = math.pi / 2.0 - yaw_enu
@@ -623,22 +533,12 @@ class SSSProcessorNode(Node):
             self.get_logger().warn(f"dropping malformed raw packet: {exc}")
 
     def _build_metadata(self) -> bytes:
-        """Called by SvlogWriter on each new file (params read at roll time)."""
-        port_url = (
-            f"tcp://{self._str_param('port_ip')}:{self._int_param('port_tcp_port')}"
-        )
-        stbd_url = (
-            f"tcp://{self._str_param('starboard_ip')}:"
-            f"{self._int_param('starboard_tcp_port')}"
-        )
-        mavlink_url: Optional[str] = None
-        if self._bool_param("mavros_enabled"):
-            mavlink_url = self._str_param("mavlink_url_for_session")
+        """Called by SvlogWriter on each new file."""
         return build_session_metadata(
-            port_url=port_url,
-            starboard_url=stbd_url,
-            mavlink_url=mavlink_url,
-            mavlink_filter=self._str_param("mavlink_filter_for_session"),
+            port_url="tcp://192.168.2.92:51200",
+            starboard_url="tcp://192.168.2.93:51200",
+            mavlink_url="ws://blueos.local:6040/v1/ws/mavlink",
+            mavlink_filter=DEFAULT_MAVLINK_FILTER,
         )
 
     # ----- two-pointer time matcher -----------------------------------------
@@ -652,8 +552,8 @@ class SSSProcessorNode(Node):
         while self._port_buf and self._stbd_buf:
             p = self._port_buf[0]
             s = self._stbd_buf[0]
-            p_ns = _stamp_to_ns(p.header.stamp)
-            s_ns = _stamp_to_ns(s.header.stamp)
+            p_ns = stamp_to_ns(p.header.stamp)
+            s_ns = stamp_to_ns(s.header.stamp)
             dt = p_ns - s_ns
             if abs(dt) <= self._tol_ns:
                 self._port_buf.popleft()
@@ -729,7 +629,7 @@ class SSSProcessorNode(Node):
         )
 
         # 7. Snap robot pose using port stamp (pair is within tolerance).
-        merged_ns = _stamp_to_ns(port.header.stamp)
+        merged_ns = stamp_to_ns(port.header.stamp)
         odom = self._odom_buf.nearest(merged_ns)
         if odom is None:
             self._dropped_no_odom += 1
@@ -751,16 +651,6 @@ class SSSProcessorNode(Node):
         out.starboard_intensity_db = stbd_int
         out.starboard_y = stbd_y
         self._pub.publish(out)
-
-    # ----- param helpers ----------------------------------------------------
-    def _str_param(self, name: str) -> str:
-        return self.get_parameter(name).get_parameter_value().string_value
-
-    def _int_param(self, name: str) -> int:
-        return self.get_parameter(name).get_parameter_value().integer_value
-
-    def _bool_param(self, name: str) -> bool:
-        return self.get_parameter(name).get_parameter_value().bool_value
 
 
 # ---------------------------------------------------------------------------

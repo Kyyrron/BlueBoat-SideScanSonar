@@ -6,7 +6,6 @@ Live listener for /sss_processor/processed.
 from __future__ import annotations
 
 import csv
-import math
 from pathlib import Path
 from typing import Optional
 
@@ -15,20 +14,20 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
-from geometry_msgs.msg import Quaternion
 from blueboat_interfaces.msg import ProcessedSSSPing
-from custom_functions import quaternion_to_yaw
+from math_helper import quaternion_to_yaw
+from sss_helper import project_to_world, MosaicGrid
 
 import matplotlib.pyplot as plt
 
 
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Tuning constants
 # ---------------------------------------------------------------------------
 # Mosaic resolution. 25 cm/pixel is a good default for a small-boat survey
 # at ~0.5-1 m/s where consecutive pings are ~5-30 cm apart along-track.
 # Finer cells (10 cm) leave along-track gaps when the boat is slow; coarser
-# (50 cm) loses across-track detail. Tune based on your typical survey speed.
+# (50 cm) loses across-track detail.
 CELL_SIZE_M: float = 0.25
 
 # Initial mosaic extent (m). Grows automatically as the survey expands.
@@ -40,141 +39,6 @@ REDRAW_EVERY_N_PINGS: int = 20
 
 # Depth smoothing: simple moving-average over the last N pings.
 DEPTH_SMOOTH_N: int = 15
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def project_to_world(
-    robot_x: float, robot_y: float, yaw: float,
-    y_local: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Rotate a ping's lateral samples into world coordinates.
-
-    The ping is purely lateral in the boat frame: each sample sits at
-    (x_body=0, y_body=y_local[i]). REP-103 conventions:
-      * +y_body = port  -> processor publishes positive `port_y[i]`
-      * -y_body = stbd  -> processor publishes negative `starboard_y[i]`
-
-    The 2D rotation by yaw of (0, y_body) into world frame is:
-        x_w = -sin(yaw) * y_body
-        y_w =  cos(yaw) * y_body
-    """
-    x_world = robot_x - math.sin(yaw) * y_local
-    y_world = robot_y + math.cos(yaw) * y_local
-    return x_world, y_world
-
-
-# ---------------------------------------------------------------------------
-# Mosaic grid
-# ---------------------------------------------------------------------------
-class MosaicGrid:
-    """Auto-growing 2D running-mean raster of sonar intensity.
-
-    World extent is anchored at (0, 0) and grows in `chunk` increments as
-    samples land outside the current bounds. Each cell stores (sum, count)
-    so the displayed image is the mean intensity per cell.
-    """
-
-    def __init__(self, cell_size_m: float = CELL_SIZE_M,
-                 initial_half_extent_m: float = INITIAL_HALF_EXTENT_M) -> None:
-        self._cell = cell_size_m
-        n = int(math.ceil(2 * initial_half_extent_m / cell_size_m))
-        self._sum:   np.ndarray = np.zeros((n, n), dtype=np.float64)
-        self._count: np.ndarray = np.zeros((n, n), dtype=np.uint32)
-        # World coordinates of the lower-left corner of cell [0, 0].
-        self._x0: float = -initial_half_extent_m
-        self._y0: float = -initial_half_extent_m
-        self._chunk = int(math.ceil(50.0 / cell_size_m))  # grow by 50 m
-
-    @property
-    def shape(self) -> tuple[int, int]:
-        return self._sum.shape
-
-    @property
-    def extent(self) -> tuple[float, float, float, float]:
-        h, w = self._sum.shape
-        return (self._x0, self._x0 + w * self._cell,
-                self._y0, self._y0 + h * self._cell)
-
-    def _world_to_cell(self, x: np.ndarray, y: np.ndarray
-                       ) -> tuple[np.ndarray, np.ndarray]:
-        cx = ((x - self._x0) / self._cell).astype(np.int32)
-        cy = ((y - self._y0) / self._cell).astype(np.int32)
-        return cx, cy
-
-    def _ensure_contains(self, xmin: float, xmax: float,
-                         ymin: float, ymax: float) -> None:
-        h, w = self._sum.shape
-        pad_left = pad_right = pad_bot = pad_top = 0
-        if xmin < self._x0:
-            pad_left = int(math.ceil((self._x0 - xmin) / self._cell))
-            pad_left = max(pad_left, self._chunk)
-        if xmax >= self._x0 + w * self._cell:
-            pad_right = int(math.ceil(
-                (xmax - (self._x0 + w * self._cell)) / self._cell)) + 1
-            pad_right = max(pad_right, self._chunk)
-        if ymin < self._y0:
-            pad_bot = int(math.ceil((self._y0 - ymin) / self._cell))
-            pad_bot = max(pad_bot, self._chunk)
-        if ymax >= self._y0 + h * self._cell:
-            pad_top = int(math.ceil(
-                (ymax - (self._y0 + h * self._cell)) / self._cell)) + 1
-            pad_top = max(pad_top, self._chunk)
-        if pad_left or pad_right or pad_bot or pad_top:
-            self._sum = np.pad(
-                self._sum, ((pad_bot, pad_top), (pad_left, pad_right))
-            )
-            self._count = np.pad(
-                self._count, ((pad_bot, pad_top), (pad_left, pad_right))
-            )
-            self._x0 -= pad_left * self._cell
-            self._y0 -= pad_bot * self._cell
-
-    def add_samples(self, x: np.ndarray, y: np.ndarray,
-                    intensity: np.ndarray) -> None:
-        if x.size == 0:
-            return
-        self._ensure_contains(float(x.min()), float(x.max()),
-                              float(y.min()), float(y.max()))
-        cx, cy = self._world_to_cell(x, y)
-        h, w = self._sum.shape
-        ok = (cx >= 0) & (cx < w) & (cy >= 0) & (cy < h)
-        # `np.add.at` does unbuffered scatter-add so duplicate (cx,cy)
-        # indices accumulate properly.
-        np.add.at(self._sum,   (cy[ok], cx[ok]), intensity[ok])
-        np.add.at(self._count, (cy[ok], cx[ok]), 1)
-
-    def render(self) -> np.ndarray:
-        """Return the mean-intensity raster (NaN where no samples)."""
-        with np.errstate(invalid="ignore", divide="ignore"):
-            img = np.where(self._count > 0, self._sum / self._count, np.nan)
-        return img
-
-    def save(self, prefix: str | Path) -> tuple[Path, Path]:
-        """Save raster as compact .npz and quick-look .png."""
-        prefix = Path(prefix)
-        img = self.render()
-        npz_path = prefix.with_suffix(".npz")
-        png_path = prefix.with_suffix(".png")
-        np.savez_compressed(
-            npz_path,
-            mean_intensity=img.astype(np.float32),
-            count=self._count,
-            cell_size_m=self._cell,
-            x0=self._x0,
-            y0=self._y0,
-        )
-        # Quick-look PNG with sensible percentile contrast.
-        valid = img[np.isfinite(img)]
-        if valid.size > 0:
-            vmin, vmax = np.percentile(valid, [2, 98])
-        else:
-            vmin, vmax = 0.0, 1.0
-        plt.imsave(png_path, img,
-                   origin="lower", cmap="copper", vmin=vmin, vmax=vmax)
-        return npz_path, png_path
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +56,7 @@ class ProcessedSSSListener(Node):
             self._on_processed_ping, qos,
         )
 
-        self._mosaic = MosaicGrid()
+        self._mosaic = MosaicGrid(cell_size_m=CELL_SIZE_M, initial_half_extent_m=INITIAL_HALF_EXTENT_M)
 
         # Time series for depth + boat trajectory.
         self._t_first: Optional[float] = None
@@ -234,7 +98,7 @@ class ProcessedSSSListener(Node):
         self._ax_depth.invert_yaxis()
 
         self.get_logger().info(
-            f"listener ready: cell={CELL_SIZE_M*100:.0f} cm, "
+            f"listener ready: cell={self._mosaic._cell*100:.0f} cm, "
             f"redraw every {REDRAW_EVERY_N_PINGS} pings"
         )
 
@@ -330,9 +194,6 @@ class ProcessedSSSListener(Node):
         self.get_logger().info(f"saved trajectory: {traj_path}")
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = ProcessedSSSListener()

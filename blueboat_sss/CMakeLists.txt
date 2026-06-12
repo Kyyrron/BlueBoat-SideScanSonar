@@ -10,11 +10,11 @@ find_package(rosidl_default_generators REQUIRED)
 
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 
-install(PROGRAMS src/_custom_libraries/sss_processing.py
+install(PROGRAMS src/_custom_libraries/sss_helper.py
         DESTINATION lib/${PROJECT_NAME})
-install(PROGRAMS src/_custom_libraries/svlog.py
+install(PROGRAMS src/_custom_libraries/svlog_helper.py
         DESTINATION lib/${PROJECT_NAME})
-install(PROGRAMS src/_custom_libraries/custom_functions.py
+install(PROGRAMS src/_custom_libraries/math_helper.py
         DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS src/processed_sss_listener.py
