@@ -18,7 +18,7 @@ from simple_launch import SimpleLauncher
 def generate_launch_description():
     sl = SimpleLauncher()
 
-    sl_will_use_rosbag = sl.declare_arg('will_use_rosbag', default_value=False, type=bool)
+    sl_will_use_rosbag = sl.declare_arg('will_use_rosbag', default_value=False)
 
     # ---- sss_node : Acquisition (re-read on every ping enable) ----------------------
     sl_range_start_mm    = sl.declare_arg('range_start_mm',    default_value=0)
@@ -28,8 +28,7 @@ def generate_launch_description():
     sl_num_results       = sl.declare_arg('num_results',       default_value=600)
     sl_pulse_len_percent = sl.declare_arg('pulse_len_percent', default_value=0.002)
 
-
-    if not sl_will_use_rosbag:
+    if not sl.arg('will_use_rosbag'):
         sl.node('blueboat_sss', 'sss_node.py',
                 name='side_scan_sonar',
                 output='screen',
@@ -41,11 +40,9 @@ def generate_launch_description():
                     'num_results':        sl_num_results,
                     'pulse_len_percent':  sl_pulse_len_percent,
                 })
-    else:
-        print("\n\n--- Will use rosbag, not live acquisition. Start rosbag playing when ready. \n\n")
 
     sl.node('blueboat_sss', 'sss_processor_node.py',
-            name='sss_processor_node',
+            name='sss_processor',
             output='screen',
             )
     

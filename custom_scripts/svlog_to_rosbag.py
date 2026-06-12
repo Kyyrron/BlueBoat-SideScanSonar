@@ -71,8 +71,11 @@ from mavros_msgs.msg import HomePosition, VfrHud
 
 from blueboat_interfaces.msg import OmniscanProfile
 
-# Sibling import (same install dir as the node scripts).
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+script_dir = os.path.dirname(os.path.abspath(__file__))
+custom_libs = os.path.join(script_dir, '..', 'blueboat_sss', 'src', '_custom_libraries')
+print(custom_libs)
+sys.path.insert(0, os.path.abspath(custom_libs))
+
 from svlog_helper import (
     DEVICE_ID_PORT,
     DEVICE_ID_STBD,
@@ -81,6 +84,7 @@ from svlog_helper import (
     retag_packet_src_device_id,
 )
 
+# Start this file in /ros2_ws, or from anywhere, but care about these paths
 # ----------------------------------------------------------------------------- 
 INPUT_FILE = "src/BlueBoat-SideScanSonar/55_svlog.svlog"
 OUTPUT_BAG = "src/BlueBoat-SideScanSonar/output_bag" # If exists, gonna be renamed by adding _2, _3, etc.
@@ -575,10 +579,12 @@ def main() -> None:
     if output_path.exists():
         print(f"output path {output_path} already exists; renaming with _2, _3, etc.")
         i = 2
-        while output_path.with_suffix(f"_{i}").exists():
+        new_path = output_path.with_name(f"{output_path.stem}_{i}{output_path.suffix}")
+        while new_path.exists():
             i += 1
-        output_path = output_path.with_suffix(f"_{i}")
+            new_path = output_path.with_name(f"{output_path.stem}_{i}{output_path.suffix}")
 
+        output_path = new_path
     rclpy.init()
 
     try:

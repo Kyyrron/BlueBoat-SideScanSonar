@@ -3,6 +3,7 @@
 from builtin_interfaces.msg import Time as TimeMsg
 from geometry_msgs.msg import Quaternion
 from scipy.spatial.transform import Rotation as R
+from typing import Tuple
 import math
 import numpy as np
 

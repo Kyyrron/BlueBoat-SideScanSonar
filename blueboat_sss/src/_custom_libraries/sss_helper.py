@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 import math
 from pathlib import Path
 import numpy as np
@@ -241,7 +242,7 @@ class MosaicGrid:
     """
 
     def __init__(self, cell_size_m: float = 0.25,
-                 initial_half_extent_m: float = 50.0) -> None:
+                 initial_half_extent_m: float = 50.0, log_root: Path = Path(os.path.expanduser("data/SSS_data"))) -> None:
         self._cell = cell_size_m
         n = int(math.ceil(2 * initial_half_extent_m / cell_size_m))
         self._sum:   np.ndarray = np.zeros((n, n), dtype=np.float64)
@@ -250,6 +251,8 @@ class MosaicGrid:
         self._x0: float = -initial_half_extent_m
         self._y0: float = -initial_half_extent_m
         self._chunk = int(math.ceil(50.0 / cell_size_m))  # grow by 50 m
+
+        self.log_root = log_root
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -319,8 +322,8 @@ class MosaicGrid:
         """Save raster as compact .npz and quick-look .png."""
         prefix = Path(prefix)
         img = self.render()
-        npz_path = prefix.with_suffix(".npz")
-        png_path = prefix.with_suffix(".png")
+        npz_path = self.log_root / prefix.with_suffix(".npz")
+        png_path = self.log_root / prefix.with_suffix(".png")
         np.savez_compressed(
             npz_path,
             mean_intensity=img.astype(np.float32),

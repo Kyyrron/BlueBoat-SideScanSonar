@@ -42,6 +42,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+from datetime import datetime
 import threading
 import time
 from collections import deque
@@ -183,7 +184,9 @@ class SSSProcessorNode(Node):
         self._already_bootstrapped_logged = False
 
         # ---- Logging + mavlink envelope state ------------------------------
-        log_root = Path(os.path.expanduser("data/SSS_data"))
+
+        self.date = datetime.today().strftime('%Y_%m_%d-%H_%M')
+        log_root = Path(os.path.expanduser("data/SSS_data")) / self.date
         self.get_logger().info(f"log directory: {log_root}")
         self._svlog = SvlogWriter(
             log_dir=log_root,
