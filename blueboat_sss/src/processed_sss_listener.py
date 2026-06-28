@@ -5,7 +5,9 @@ Live listener for /sss_processor/processed.
 
 from __future__ import annotations
 
+import os
 import csv
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -56,7 +58,11 @@ class ProcessedSSSListener(Node):
             self._on_processed_ping, qos,
         )
 
-        self._mosaic = MosaicGrid(cell_size_m=CELL_SIZE_M, initial_half_extent_m=INITIAL_HALF_EXTENT_M)
+        self.date = datetime.today().strftime('%Y_%m_%d-%H_%M')
+        self.log_root = Path(os.path.expanduser("data/SSS_data")) / self.date
+        self.log_root.mkdir(parents=True, exist_ok=True)
+
+        self._mosaic = MosaicGrid(cell_size_m=CELL_SIZE_M, initial_half_extent_m=INITIAL_HALF_EXTENT_M, log_root = self.log_root)
 
         # Time series for depth + boat trajectory.
         self._t_first: Optional[float] = None
@@ -98,8 +104,7 @@ class ProcessedSSSListener(Node):
         self._ax_depth.invert_yaxis()
 
         self.get_logger().info(
-            f"listener ready: cell={self._mosaic._cell*100:.0f} cm, "
-            f"redraw every {REDRAW_EVERY_N_PINGS} pings"
+            f"\nLive listener Ready: \nCell={self._mosaic._cell*100:.0f} cm, \nRedraw every {REDRAW_EVERY_N_PINGS} pings"
         )
 
     # ----- callback -----------------------------------------------------
@@ -180,18 +185,16 @@ class ProcessedSSSListener(Node):
     # ----- save ---------------------------------------------------------
     def save(self) -> None:
         npz_path, png_path = self._mosaic.save("sonar_mosaic")
-        self.get_logger().info(
-            f"saved mosaic: {png_path} (preview)  {npz_path} (data)"
-        )
         # Boat trajectory + depth CSV (small file: O(num_pings), not O(samples)).
-        traj_path = Path("boat_trajectory.csv")
+        traj_path = self.log_root / Path("boat_trajectory.csv")
+
         with open(traj_path, "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(["t_since_first_s", "x_m", "y_m", "depth_m"])
             for t, x, y, z in zip(self._depth_t, self._traj_x,
                                   self._traj_y, self._depth_z):
                 w.writerow([f"{t:.3f}", f"{x:.3f}", f"{y:.3f}", f"{z:.3f}"])
-        self.get_logger().info(f"saved trajectory: {traj_path}")
+        self.get_logger().info(f"\n\nsaved mosaic: \n{png_path} (preview)  \n{npz_path} (data)\nSaved trajectory: \n{traj_path}\n")
 
 
 def main(args=None) -> None:
@@ -200,7 +203,6 @@ def main(args=None) -> None:
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info("CTRL+C detected")
         node.save()
     finally:
         node.destroy_node()

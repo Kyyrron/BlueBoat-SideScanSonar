@@ -27,8 +27,10 @@ import numpy as np
 
 def main() -> None:
 
-    default_mosaic = "sonar_mosaic.npz" # Output of processed_sss_listener.py node.
-    default_trajectory = "boat_trajectory.csv" # Same
+    path_from_ws = "data/SSS_data/"
+    prefix = path_from_ws + "2026_06_12-17_12/" # Name of the experiment's folder
+    default_mosaic = prefix + "sonar_mosaic.npz" # Output of processed_sss_listener.py node.
+    default_trajectory = prefix + "boat_trajectory.csv" # Same
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--mosaic",     default=default_mosaic, type=Path)
