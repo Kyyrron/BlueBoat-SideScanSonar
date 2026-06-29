@@ -45,34 +45,96 @@ def scale_to_db(
     span = max_pwr_db - min_pwr_db
     return [min_pwr_db + (s / 65535.0) * span for s in pwr_u16]
 
+def find_noise_window_start(
+    pwr_db,
+    search_max: int = 60,
+    drop_db: float = 10.0,
+    persistence: int = 5,
+    fallback: int = 30,
+) -> int:
+    """Locate the first sample past the transmit-pulse ringing.
 
-def detect_fbr_slant_m(
-    pwr_db: Sequence[float],
-    start_mm: int,
-    length_mm: int,
-    num_results: int,
-    noise_floor_window: int,
-    threshold_delta_db: float,
-    persistence: int,
-) -> Optional[float]:
-    """First-Bottom-Return detection on a single ping (dB samples).
+    The transmit pulse and its ringing tail occupy the first samples of
+    every ping with intensity well above the post-ringing water-column
+    noise. This function returns the index at which ringing has decayed
+    enough to safely estimate the noise floor.
 
-    Returns the slant range in meters of the first sample whose power rises
-    `threshold_delta_db` above the early-ping noise floor and stays there
-    for `persistence` consecutive samples. Returns None if no such sample
-    exists.
+    Algorithm
+    ---------
+    1. peak = max(pwr_db[:search_max])     # ringing peak (near sample 0-1)
+    2. target = peak - drop_db
+    3. Return the first index i in [0, search_max - persistence] such that
+       pwr_db[i : i + persistence] are all strictly below target.
+    4. If no such index is found, return `fallback` (defensive default;
+       see note below).
+
+    Why this adapts to the environment
+    ----------------------------------
+    The algorithm only uses values relative to the ping's own ringing peak.
+    A pool with long ringing tails, an open-water run with short ringing,
+    or a configuration with different hardware gain all produce a different
+    `target` and a different settle index — derived from the data, not
+    from any tuned constant.
+
+    Parameters
+    ----------
+    pwr_db : sequence of float
+        Per-sample intensity in dB (already scaled from u16 via scale_to_db).
+    search_max : int
+        How many samples from the start to consider. Must be smaller than
+        the expected sample index of the shallowest plausible FBR — for
+        example, 60 samples × 25 mm/sample = 1.5 m of slant range. For
+        deployments where altitude could be < 1.5 m the value can be lowered.
+    drop_db : float
+        How far below the ringing peak we consider "settled". 10 dB is the
+        empirical value from the pool run and matches the literature
+        (pulse-to-noise contrast is typically 15-25 dB).
+    persistence : int
+        How many consecutive samples must be below target to count as
+        settled. Guards against single-sample dips inside the ringing tail.
+    fallback : int
+        Returned when no settle is found in [0, search_max). 30 ≈ 0.75 m
+        for the Omniscan's typical 25 mm sample spacing — past any sensible
+        ringing tail, before any sensible bottom return.
+
+    Returns
+    -------
+    int : index where the noise window should start.
     """
     n = len(pwr_db)
-    if n < noise_floor_window + persistence:
+    if n < search_max + persistence:
+        return fallback
+    peak = max(pwr_db[:search_max])
+    target = peak - drop_db
+    for i in range(search_max - persistence + 1):
+        if all(pwr_db[i + k] < target for k in range(persistence)):
+            return i
+    return fallback
+
+def detect_fbr_slant_m(
+    pwr_db, start_mm, length_mm, num_results,
+    *, noise_floor_window, threshold_delta_db, persistence,
+    ringing_search_max: int = 60,
+    ringing_drop_db: float = 10.0,
+    ringing_persistence: int = 5,
+):
+    nw_start = find_noise_window_start(
+        pwr_db,
+        search_max=ringing_search_max,
+        drop_db=ringing_drop_db,
+        persistence=ringing_persistence,
+    )
+    nw_end = nw_start + noise_floor_window
+    if len(pwr_db) < nw_end + persistence:
         return None
-    noise = sum(pwr_db[:noise_floor_window]) / noise_floor_window
+    noise = sum(pwr_db[nw_start:nw_end]) / noise_floor_window
     threshold = noise + threshold_delta_db
-    denom = max(num_results - 1, 1)
-    for i in range(noise_floor_window, n - persistence + 1):
+    for i in range(nw_end, len(pwr_db) - persistence + 1):
         if pwr_db[i] <= threshold:
             continue
         if all(pwr_db[i + k] > threshold for k in range(persistence)):
-            slant_mm = start_mm + (i / denom) * length_mm
+            # existing slant-range conversion — keep whatever you have here:
+            slant_mm = start_mm + (i / max(num_results - 1, 1)) * length_mm
             return slant_mm / 1000.0
     return None
 

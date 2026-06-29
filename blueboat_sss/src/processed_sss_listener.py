@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt
 CELL_SIZE_M: float = 0.25
 
 # Initial mosaic extent (m). Grows automatically as the survey expands.
-INITIAL_HALF_EXTENT_M: float = 50.0
+INITIAL_HALF_EXTENT_M: float = 30.0
 
 # Display update cadence. Updating the figures on every ping at ~28 Hz is
 # pointless and slows everything down -- redraw a few times per second.

@@ -110,6 +110,11 @@ TRANSDUCER_SUBMERSION_M:    float = 0.0  # TODO: depth below the waterline
 NOISE_FLOOR_WINDOW:       int   = 20    # samples used to estimate noise floor
 FBR_THRESHOLD_DELTA_DB:   float = 8.0   # dB above noise floor
 WITHIN_PING_PERSISTENCE:  int   = 3     # consecutive samples above threshold
+
+RINGING_SEARCH_MAX:       int   = 60    # search horizon in samples (1.5 m at 25 mm/sample)
+RINGING_DROP_DB:          float = 10.0  # how far below the ringing peak counts as 'settled'
+RINGING_PERSISTENCE:      int   = 5     # consecutive samples below target
+
 BOOTSTRAP_PINGS:          int   = 10    # per-side self-consistency window
 ALTITUDE_AGREEMENT_TOL_M: float = 0.30  # max spread within a side's bootstrap window
 ALTITUDE_OUTLIER_TOL_M:   float = 1.0   # post-lock per-ping jump rejected as outlier
@@ -591,12 +596,18 @@ class SSSProcessorNode(Node):
             noise_floor_window=NOISE_FLOOR_WINDOW,
             threshold_delta_db=FBR_THRESHOLD_DELTA_DB,
             persistence=WITHIN_PING_PERSISTENCE,
+            ringing_search_max=RINGING_SEARCH_MAX,        
+            ringing_drop_db=RINGING_DROP_DB,             
+            ringing_persistence=RINGING_PERSISTENCE, 
         )
         stbd_alt = detect_fbr_slant_m(
             stbd_db, stbd.start_mm, stbd.length_mm, stbd.num_results,
             noise_floor_window=NOISE_FLOOR_WINDOW,
             threshold_delta_db=FBR_THRESHOLD_DELTA_DB,
             persistence=WITHIN_PING_PERSISTENCE,
+            ringing_search_max=RINGING_SEARCH_MAX,        
+            ringing_drop_db=RINGING_DROP_DB,             
+            ringing_persistence=RINGING_PERSISTENCE, 
         )
 
         # 4. Update the cross-ping altitude tracker.

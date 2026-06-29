@@ -12,3 +12,4 @@ requests==2.33.1
 scipy==1.17.1
 sympy==1.14.0
 transformations==2026.1.18
+lxml
