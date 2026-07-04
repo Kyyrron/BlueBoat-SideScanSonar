@@ -4,7 +4,7 @@
   <name>blueboat_sss</name>
   <version>0.1.0</version>
   <description>The blueboat-sss package</description>
-  <maintainer email="killian.bertrand2002@gmail.com">raji</maintainer>
+  <maintainer email="killian.bertrand2002@gmail.com">Killian BERTRAND</maintainer>
   <license>MIT</license>
 
   <exec_depend>rclpy</exec_depend>

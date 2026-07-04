@@ -1,0 +1,37 @@
+# Simulated Cerulean Omniscan 450 SS pair.
+# `acquisition` mirrors the six run-dependent ROS parameters of the real
+# sss_node.py (identical names & semantics). `model` holds simulation-only
+# physics/noise knobs -- a real operator has no equivalent controls.
+acquisition:
+  range_start_mm: 0
+  range_length_mm: 15000    # 15 m, as in the captured field data
+  msec_per_ping: 0          # 0 = free run (=> ~22 ms at 15 m, as observed)
+  gain_index: 4
+  num_results: 600          # => 2.5 cm slant-range bins
+  pulse_len_percent: 0.002
+
+model:
+  # Mounting (vehicle frame)
+  sensor_depth_m: 0.15
+  mount_x_m: 0.0
+  mount_y_abs_m: 0.20
+  beam_tilt_deg: 20.0
+  vertical_aperture_deg: 55.0
+  horizontal_aperture_deg: 0.5
+  # Acoustics
+  lambert_exponent: 1.7
+  absorption_db_per_m: 0.10   # ~450 kHz seawater
+  spreading_exponent: 2.0
+  tvg_compensation: 0.90
+  calibration_db_offset: 16.0
+  base_scale: 18000.0
+  gain_index_step_db: 3.0
+  # Noise
+  speckle: true
+  noise_floor: 0.004
+  gain_drift_amp: 0.06
+  gain_drift_period_s: 45.0
+  dropped_ping_prob: 0.003
+  watercolumn_noise: 0.02
+  # Sampling
+  sample_step_m: 0.05
