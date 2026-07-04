@@ -13,6 +13,15 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: override"
 
 -- SSS
 
+----- App
+
+cd src/BlueBoat-SideScanSonar/blueboat_sss
+python3 -m blueboat_gcs.main
+
+Puis lancer rosbag ou launch file simple
+
+ros2 launch blueboat_sss SSS_simple_launch.py
+
 
 ----- Live 
 

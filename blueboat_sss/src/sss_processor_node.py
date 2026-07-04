@@ -191,10 +191,14 @@ class SSSProcessorNode(Node):
         # ---- Logging + mavlink envelope state ------------------------------
 
         self.date = datetime.today().strftime('%Y_%m_%d-%H_%M')
-        log_root = Path(os.path.expanduser("data/SSS_data")) / self.date
-        self.get_logger().info(f"log directory: {log_root}")
+        self.declare_parameter("log_folder", self.date)
+        self.folder_name = self.get_parameter("log_folder").value
+        self.log_root = Path(os.path.expanduser("../../../data/SSS_data")) / self.folder_name
+        self.log_root.mkdir(parents=True, exist_ok=True)
+
+        self.get_logger().info(f"log directory: {self.log_root}")
         self._svlog = SvlogWriter(
-            log_dir=log_root,
+            log_dir=self.log_root,
             metadata_provider=self._build_metadata,
         )
 

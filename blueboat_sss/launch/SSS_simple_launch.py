@@ -13,14 +13,12 @@ Nodes started by this launch file:
 
 """
 
-from datetime import datetime
-
 from simple_launch import SimpleLauncher
 
 def generate_launch_description():
     sl = SimpleLauncher()
 
-    sl_will_use_rosbag = sl.declare_arg('will_use_rosbag', default_value=False)
+    #sl_will_use_rosbag = sl.declare_arg('will_use_rosbag', default_value=False)
 
     # ---- sss_node : Acquisition (re-read on every ping enable) ----------------------
     sl_range_start_mm    = sl.declare_arg('range_start_mm',    default_value=0)
@@ -30,33 +28,27 @@ def generate_launch_description():
     sl_num_results       = sl.declare_arg('num_results',       default_value=600)
     sl_pulse_len_percent = sl.declare_arg('pulse_len_percent', default_value=0.002)
 
-    if not sl.arg('will_use_rosbag'):
-        sl.node('blueboat_sss', 'sss_node.py',
-                name='side_scan_sonar',
-                output='screen',
-                parameters={
-                    'range_start_mm':     sl_range_start_mm,
-                    'range_length_mm':    sl_range_length_mm,
-                    'msec_per_ping':      sl_msec_per_ping,
-                    'gain_index':         sl_gain_index,
-                    'num_results':        sl_num_results,
-                    'pulse_len_percent':  sl_pulse_len_percent,
-                })
-
-    date = datetime.today().strftime('%Y_%m_%d-%H_%M_%S')
-
-    sl.node('blueboat_sss', 'sss_processor_node.py',
-            name='sss_processor',
+    #if not sl.arg('will_use_rosbag'):
+    sl.node('blueboat_sss', 'sss_node.py',
+            name='side_scan_sonar',
             output='screen',
             parameters={
-                    'log_folder':  date,
-                })
+                'range_start_mm':     sl_range_start_mm,
+                'range_length_mm':    sl_range_length_mm,
+                'msec_per_ping':      sl_msec_per_ping,
+                'gain_index':         sl_gain_index,
+                'num_results':        sl_num_results,
+                'pulse_len_percent':  sl_pulse_len_percent,
+            })
+
+    '''sl.node('blueboat_sss', 'sss_processor_node.py',
+            name='sss_processor',
+            output='screen',
+            )
     
     sl.node('blueboat_sss', 'processed_sss_listener.py',
             name='processed_sss_listener',
             output='screen',
-            parameters={
-                    'log_folder':  date,
-                })
+            )'''
 
     return sl.launch_description()
