@@ -2,7 +2,7 @@
 
 Values are *relative* acoustic parameters tuned for a 450 kHz side-scan
 regime; they parameterise the backscatter model in
-:mod:`blueboat_sss.sonar.acoustics`, not a physical scattering theory.
+:mod:`blueboat_sss_sim.sonar.acoustics`, not a physical scattering theory.
 All defaults can be overridden from ``config/materials.yaml``.
 """
 

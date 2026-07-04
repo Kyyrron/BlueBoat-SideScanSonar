@@ -36,7 +36,7 @@ def launch_setup():
     dataset_dir = sl.arg("dataset_dir") or f"{mission_dir}/dataset"
 
     # Simulated sonar (drop-in replacement for the real sss_node.py).
-    sl.node("blueboat_sss", "sss_sim_node", output="screen",
+    sl.node("blueboat_sss_sim", "sss_sim_node", output="screen",
             parameters={
                 "scene_dir": mission_dir,
                 "sonar_config": f"{mission_dir}/sonar.yaml",
@@ -45,14 +45,14 @@ def launch_setup():
             })
 
     if sl.arg("with_recorder"):
-        sl.node("blueboat_sss", "dataset_recorder_node", output="screen",
+        sl.node("blueboat_sss_sim", "dataset_recorder_node", output="screen",
                 parameters={"output_dir": dataset_dir})
 
     if sl.arg("with_mavros_shim"):
-        sl.node("blueboat_sss", "mavros_shim_node")
+        sl.node("blueboat_sss_sim", "mavros_shim_node")
 
     if sl.arg("with_mission_path"):
-        sl.node("blueboat_sss", "sss_path_generation", output="screen",
+        sl.node("blueboat_sss_sim", "sss_path_generation", output="screen",
                 parameters={"trajectory_file": f"{mission_dir}/trajectory.yaml"})
 
     if sl.arg("auto_ping"):

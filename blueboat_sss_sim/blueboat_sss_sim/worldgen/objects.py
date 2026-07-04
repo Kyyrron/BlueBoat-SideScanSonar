@@ -4,7 +4,7 @@ Each object type is described by an :class:`ObjectSpec` (size ranges, shape
 primitive, material, burial behaviour). Placement draws instances from a
 configurable composition, and every instance is:
 
-  1. recorded as a :class:`~blueboat_sss.core.types.PlacedObject`
+  1. recorded as a :class:`~blueboat_sss_sim.core.types.PlacedObject`
      (ground truth for labeling),
   2. rasterised into the shared acoustic rasters (height bump +
      reflectivity patch) -- so highlights, shadows and burial emerge from

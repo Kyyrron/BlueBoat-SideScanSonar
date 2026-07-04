@@ -19,20 +19,20 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="BlueBoat SSS Team",
-    maintainer_email="user@todo.todo",
+    maintainer="Killian BERTRAND",
+    maintainer_email="killian.bertrand2002@gmail.com",
     description="Synthetic Side Scan Sonar platform for the BlueBoat simulator",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
             # ROS nodes
-            "sss_sim_node = blueboat_sss.ros.sss_sim_node:main",
-            "dataset_recorder_node = blueboat_sss.ros.dataset_recorder_node:main",
-            "sss_path_generation = blueboat_sss.ros.sss_path_generation:main",
-            "mavros_shim_node = blueboat_sss.ros.mavros_shim_node:main",
+            "sss_sim_node = blueboat_sss_sim.ros.sss_sim_node:main",
+            "dataset_recorder_node = blueboat_sss_sim.ros.dataset_recorder_node:main",
+            "sss_path_generation = blueboat_sss_sim.ros.sss_path_generation:main",
+            "mavros_shim_node = blueboat_sss_sim.ros.mavros_shim_node:main",
             # Offline tools
-            "generate_world = blueboat_sss.worldgen.generate:main",
-            "generate_mission = blueboat_sss.mission.generate:main",
+            "generate_world = blueboat_sss_sim.worldgen.generate:main",
+            "generate_mission = blueboat_sss_sim.mission.generate:main",
         ],
     },
 )

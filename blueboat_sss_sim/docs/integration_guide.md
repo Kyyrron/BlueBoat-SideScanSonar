@@ -1,6 +1,6 @@
 # Integration guide
 
-How to run `blueboat_sss` alongside the existing BlueBoat simulator, and
+How to run `blueboat_sss_sim` alongside the existing BlueBoat simulator, and
 how sim ↔ real swapping works. Nothing in the existing packages is
 modified.
 
@@ -8,10 +8,10 @@ modified.
 
 ```bash
 cd ~/ros2_ws/src
-# (copy/clone blueboat_sss here, next to blueboat_description etc.)
+# (copy/clone blueboat_sss_sim here, next to blueboat_description etc.)
 cd ~/ros2_ws
 rosdep install --from-paths src -yi          # numpy/scipy/yaml/PIL/simple_launch
-colcon build --packages-select blueboat_sss
+colcon build --packages-select blueboat_sss_sim
 source install/setup.bash
 ```
 
@@ -22,15 +22,15 @@ Requires the existing `blueboat_interfaces` package (for
 
 ```bash
 # 1. Generate a self-contained mission bundle (world + trajectory + sonar cfg)
-ros2 run blueboat_sss generate_mission \
-    --config $(ros2 pkg prefix blueboat_sss)/share/blueboat_sss/config/default_mission.yaml \
+ros2 run blueboat_sss_sim generate_mission \
+    --config $(ros2 pkg prefix blueboat_sss_sim)/share/blueboat_sss_sim/config/default_mission.yaml \
     --out ~/runs/r1 --seed 7
 
 # 2. Inspect the world (optional)
-ros2 launch blueboat_sss sim_world_launch.py mission_dir:=$HOME/runs/r1
+ros2 launch blueboat_sss_sim sim_world_launch.py mission_dir:=$HOME/runs/r1
 
 # 3. Full autonomous mission: Gazebo + robot + control stack + sonar + dataset
-ros2 launch blueboat_sss full_mission_launch.py mission_dir:=$HOME/runs/r1
+ros2 launch blueboat_sss_sim full_mission_launch.py mission_dir:=$HOME/runs/r1
 ```
 
 The YOLO dataset accumulates in `~/runs/r1/dataset/` and is finalized
@@ -71,7 +71,7 @@ The sonar interface is identical, so the swap is one node choice:
 
 | | Real boat | Simulation |
 |---|---|---|
-| sonar node | `sss_node.py` (hardware) | `blueboat_sss sss_sim_node` |
+| sonar node | `sss_node.py` (hardware) | `blueboat_sss_sim sss_sim_node` |
 | pose source | vehicle nav | `/blueboat/odom` from Gazebo |
 | everything downstream | unchanged | unchanged |
 
@@ -86,7 +86,7 @@ Drive the boat any way you like (teleop, existing missions) and run just
 the sonar + recorder:
 
 ```bash
-ros2 launch blueboat_sss sss_sim_launch.py mission_dir:=$HOME/runs/r1
+ros2 launch blueboat_sss_sim sss_sim_launch.py mission_dir:=$HOME/runs/r1
 ```
 
 `auto_ping:=false` if you want to enable pinging manually, exactly as an
@@ -99,7 +99,7 @@ pattern parameters per bundle:
 
 ```bash
 for i in $(seq 1 20); do
-  ros2 run blueboat_sss generate_mission --config my_mission.yaml \
+  ros2 run blueboat_sss_sim generate_mission --config my_mission.yaml \
       --out ~/runs/batch/$i --seed $i
 done
 ```

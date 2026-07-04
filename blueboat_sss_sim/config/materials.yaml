@@ -1,5 +1,5 @@
 # Optional overrides of the built-in acoustic material table
-# (blueboat_sss/worldgen/materials.py). Reference this file from the
+# (blueboat_sss_sim/worldgen/materials.py). Reference this file from the
 # `materials:` section of a world config, or copy entries inline.
 # sand:
 #   reflectivity: 0.55        # mean backscatter, 0..1

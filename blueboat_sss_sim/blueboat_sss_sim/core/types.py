@@ -1,4 +1,4 @@
-"""Shared value types used across the blueboat_sss platform.
+"""Shared value types used across the blueboat_sss_sim platform.
 
 Pure Python / NumPy only -- this module must never import ROS so that the
 world generator, sonar renderer and dataset tooling remain testable and

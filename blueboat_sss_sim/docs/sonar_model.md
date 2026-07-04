@@ -2,7 +2,7 @@
 
 How the synthetic Omniscan 450 imagery is produced, what is modeled, what
 is deliberately not, and which parameter controls what. Implementation:
-`blueboat_sss/sonar/`.
+`blueboat_sss_sim/sonar/`.
 
 ## 1. Geometry
 

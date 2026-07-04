@@ -1,8 +1,8 @@
 """Side-scan sonar renderers.
 
 :class:`SonarRenderer` is the replaceable-backend interface: it turns a
-sensor pose + a :class:`~blueboat_sss.worldgen.scene.SceneModel` into one
-:class:`~blueboat_sss.core.types.RenderedPing` per side. Everything above
+sensor pose + a :class:`~blueboat_sss_sim.worldgen.scene.SceneModel` into one
+:class:`~blueboat_sss_sim.core.types.RenderedPing` per side. Everything above
 it (ROS node, encoder, dataset tooling) depends only on this interface, so
 a GPU / tube-tracing / learning-based backend can be dropped in later.
 

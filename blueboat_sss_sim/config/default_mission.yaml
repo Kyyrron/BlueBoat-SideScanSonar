@@ -4,7 +4,7 @@ mission:
   randomize: false            # true => draw seed / density / pattern randomly
   world_config: config/default_world.yaml
   sonar_profile: config/default_sonar.yaml
-  gazebo_plugin_prefix: ignition   # ignition (Fortress) | gz (Garden/Harmonic)
+  gazebo_plugin_prefix: gz   # ignition (Fortress) | gz (Garden/Harmonic)
 
   pattern: lawnmower          # lawnmower | spiral | random | waypoints
   lawnmower:

@@ -4,8 +4,8 @@ One :class:`SceneModel` instance is produced per generated world and then
 consumed by *three* independent clients:
 
   * :mod:`.sdf_writer`               -> Gazebo world (visual + physics),
-  * :mod:`blueboat_sss.sonar`        -> acoustic rendering,
-  * :mod:`blueboat_sss.dataset`      -> ground-truth labeling.
+  * :mod:`blueboat_sss_sim.sonar`        -> acoustic rendering,
+  * :mod:`blueboat_sss_sim.dataset`      -> ground-truth labeling.
 
 Because all three read the same object, the Gazebo world, the sonar image
 and the training labels can never disagree.

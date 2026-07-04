@@ -2,7 +2,7 @@
 
 The renderer emits, per ping, the exact slant-range position, extent and
 shadow length of every insonified object
-(:class:`~blueboat_sss.core.types.GroundTruthContact`). The labeler
+(:class:`~blueboat_sss_sim.core.types.GroundTruthContact`). The labeler
 aggregates these per-object across the pings of a waterfall tile into one
 bounding box.
 

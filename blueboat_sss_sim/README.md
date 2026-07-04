@@ -1,4 +1,4 @@
-# blueboat_sss — Synthetic Side Scan Sonar platform for the BlueBoat simulator
+# blueboat_sss_sim — Synthetic Side Scan Sonar platform for the BlueBoat simulator
 
 Extends the existing BlueBoat Gazebo simulator into a synthetic SSS
 experimentation platform: procedural shallow-water worlds with seabed
@@ -11,11 +11,11 @@ modified.
 ## Quick start
 
 ```bash
-colcon build --packages-select blueboat_sss && source install/setup.bash
-ros2 run blueboat_sss generate_mission \
-    --config $(ros2 pkg prefix blueboat_sss)/share/blueboat_sss/config/default_mission.yaml \
+colcon build --packages-select blueboat_sss_sim && source install/setup.bash
+ros2 run blueboat_sss_sim generate_mission \
+    --config $(ros2 pkg prefix blueboat_sss_sim)/share/blueboat_sss_sim/config/default_mission.yaml \
     --out ~/runs/r1 --seed 7
-ros2 launch blueboat_sss full_mission_launch.py mission_dir:=$HOME/runs/r1
+ros2 launch blueboat_sss_sim full_mission_launch.py mission_dir:=$HOME/runs/r1
 ```
 
 Dataset appears in `~/runs/r1/dataset/` (Ultralytics layout, finalized on

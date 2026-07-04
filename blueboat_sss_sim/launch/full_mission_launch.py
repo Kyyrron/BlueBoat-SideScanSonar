@@ -45,7 +45,7 @@ def launch_setup():
     else:
         from launch.actions import ExecuteProcess
         sl.add_action(ExecuteProcess(
-            cmd=["ign", "gazebo", "-r", world_file], output="screen"))
+            cmd=["gz", "sim", "-r", world_file], output="screen"))
 
     # 3. Existing control stack, untouched.
     sl.node("blueboat_control", "simulation_interface.py")
@@ -55,11 +55,11 @@ def launch_setup():
                         "simulation": True})
 
     # 4. Mission trajectory served on the same RequestPath interface.
-    sl.node("blueboat_sss", "sss_path_generation", output="screen",
+    sl.node("blueboat_sss_sim", "sss_path_generation", output="screen",
             parameters={"trajectory_file": f"{mission_dir}/trajectory.yaml"})
 
     # 5. Sonar + dataset.
-    sl.include("blueboat_sss", "sss_sim_launch.py",
+    sl.include("blueboat_sss_sim", "sss_sim_launch.py",
                launch_arguments={"mission_dir": mission_dir,
                                  "with_recorder": True,
                                  "with_mission_path": False})

@@ -1,5 +1,5 @@
 # Reference copy of blueboat_interfaces/msg/OmniscanProfile.msg.
-# The blueboat_sss package REUSES the existing definition from
+# The blueboat_sss_sim package REUSES the existing definition from
 # blueboat_interfaces and does NOT define any new message. This copy is
 # provided only so the simulator repo is self-describing; field set and
 # order were confirmed against sss_node.py and a captured raw frame.

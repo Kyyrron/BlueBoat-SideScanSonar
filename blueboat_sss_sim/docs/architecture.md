@@ -1,6 +1,6 @@
 # Architecture
 
-`blueboat_sss` turns the existing BlueBoat Gazebo simulator into a synthetic
+`blueboat_sss_sim` turns the existing BlueBoat Gazebo simulator into a synthetic
 Side Scan Sonar experimentation platform. It is a single additive ROS 2
 Python package: nothing in the existing simulator (`blueboat_description`,
 `blueboat_control`, `blueboat_interfaces`) is modified.
@@ -32,8 +32,8 @@ Python package: nothing in the existing simulator (`blueboat_description`,
 ## 2. Package layout
 
 ```
-blueboat_sss/
-├── blueboat_sss/
+blueboat_sss_sim/
+├── blueboat_sss_sim/
 │   ├── core/        types.py (Pose3D, Ping, Side, GridSpec, PlacedObject…)
 │   │                geometry.py (quaternions, heading conventions, bilinear)
 │   ├── worldgen/    noise.py → terrain.py → objects.py → scene.py

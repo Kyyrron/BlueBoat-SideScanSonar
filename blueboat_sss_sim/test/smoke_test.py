@@ -21,18 +21,18 @@ import numpy as np
 PKG_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PKG_ROOT))
 
-from blueboat_sss.core.types import Pose3D, Side  # noqa: E402
-from blueboat_sss.dataset.exporter import ExportConfig, YoloDatasetWriter  # noqa: E402
-from blueboat_sss.dataset.labeler import LabelConfig, TileLabeler  # noqa: E402
-from blueboat_sss.dataset.waterfall import (WaterfallBuilder,  # noqa: E402
+from blueboat_sss_sim.core.types import Pose3D, Side  # noqa: E402
+from blueboat_sss_sim.dataset.exporter import ExportConfig, YoloDatasetWriter  # noqa: E402
+from blueboat_sss_sim.dataset.labeler import LabelConfig, TileLabeler  # noqa: E402
+from blueboat_sss_sim.dataset.waterfall import (WaterfallBuilder,  # noqa: E402
                                             WaterfallTileConfig)
-from blueboat_sss.mission.generate import generate_mission  # noqa: E402
-from blueboat_sss.mission.patterns import WaypointTrajectory  # noqa: E402
-from blueboat_sss.sonar.config import SonarConfig  # noqa: E402
-from blueboat_sss.sonar.encoder import PingEncoder, parse_frame  # noqa: E402
-from blueboat_sss.sonar.noise import GainDrift, apply_ping_noise  # noqa: E402
-from blueboat_sss.sonar.renderer import GeometricRenderer  # noqa: E402
-from blueboat_sss.worldgen.scene import SceneModel  # noqa: E402
+from blueboat_sss_sim.mission.generate import generate_mission  # noqa: E402
+from blueboat_sss_sim.mission.patterns import WaypointTrajectory  # noqa: E402
+from blueboat_sss_sim.sonar.config import SonarConfig  # noqa: E402
+from blueboat_sss_sim.sonar.encoder import PingEncoder, parse_frame  # noqa: E402
+from blueboat_sss_sim.sonar.noise import GainDrift, apply_ping_noise  # noqa: E402
+from blueboat_sss_sim.sonar.renderer import GeometricRenderer  # noqa: E402
+from blueboat_sss_sim.worldgen.scene import SceneModel  # noqa: E402
 
 OUT = Path("/tmp/blueboat_sss_smoke")
 
@@ -162,7 +162,7 @@ def main() -> None:
           f"classes: {classes}")
 
     # normalized box sanity
-    from blueboat_sss.dataset.labeler import YoloBox  # noqa: F401
+    from blueboat_sss_sim.dataset.labeler import YoloBox  # noqa: F401
     bad = 0
     for lbl in (OUT / "dataset" / "labels").rglob("*.txt"):
         for line in lbl.read_text().splitlines():

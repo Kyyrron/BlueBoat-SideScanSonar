@@ -14,7 +14,7 @@ from simple_launch import SimpleLauncher
 sl = SimpleLauncher()
 
 sl.declare_arg("mission_dir", default_value="")
-sl.declare_arg("gz_cmd", default_value="ign gazebo")
+sl.declare_arg("gz_cmd", default_value="gz sim") 
 sl.declare_arg("paused", default_value=False)
 
 
