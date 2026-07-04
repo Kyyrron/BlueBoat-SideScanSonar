@@ -86,8 +86,8 @@ from svlog_helper import (
 
 # Start this file in /ros2_ws, or from anywhere, but care about these paths
 # ----------------------------------------------------------------------------- 
-INPUT_FILE = "src/BlueBoat-SideScanSonar/55_svlog.svlog"
-OUTPUT_BAG = "src/BlueBoat-SideScanSonar/output_bag" # If exists, gonna be renamed by adding _2, _3, etc.
+INPUT_FILE = "55_svlog.svlog"
+OUTPUT_BAG = "src/BlueBoat-SideScanSonar/wakamatsu_beach" # If exists, gonna be renamed by adding _2, _3, etc.
 # -----------------------------------------------------------------------------
 
 

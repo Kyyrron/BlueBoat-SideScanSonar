@@ -58,8 +58,11 @@ class ProcessedSSSListener(Node):
             self._on_processed_ping, qos,
         )
 
+
         self.date = datetime.today().strftime('%Y_%m_%d-%H_%M')
-        self.log_root = Path(os.path.expanduser("data/SSS_data")) / self.date
+        self.declare_parameter("log_folder", self.date)
+        self.folder_name = self.get_parameter("log_folder").value
+        self.log_root = Path(os.path.expanduser("../../../data/SSS_data")) / self.folder_name
         self.log_root.mkdir(parents=True, exist_ok=True)
 
         self._mosaic = MosaicGrid(cell_size_m=CELL_SIZE_M, initial_half_extent_m=INITIAL_HALF_EXTENT_M, log_root = self.log_root)
