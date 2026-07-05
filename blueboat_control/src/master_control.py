@@ -42,7 +42,9 @@ class Controller(Node):
 
         self.odom_subscriber = self.create_subscription(Odometry, '/blueboat/odom', self.odom_callback, 10)
         self.pinger_subscriber = self.create_subscription(Float32MultiArray, '/blueboat/pinger_coordinates', self.pinger_callback, 10)
-        self.ready_subscriber = self.create_subscription(Bool, '/blueboat/controller_ready', self.ready_callback, 10)
+        latched = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+        self.ready_subscriber = self.create_subscription(
+            Bool, '/blueboat/controller_ready', self.ready_callback, latched)
 
         self.data_publisher = self.create_publisher(Float32MultiArray, "/monitoring_data", 10)
         self.target_publisher = self.create_publisher(Float32MultiArray,'/controller_target', 10)

@@ -12,7 +12,7 @@ import pandas as pd
 # ROS2 import
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, QoSDurabilityPolicy
 
 # msg import
 from std_msgs.msg import String, Bool, Float32MultiArray
@@ -54,7 +54,8 @@ class BlueBoatController(Node):
         ## Subscribers
         # Node interaction
         self.str_input_subscriber = self.create_subscription(String, '/blueboat/input_str', self.str_input_callback, 10)
-        self.ready_sub = self.create_subscription(Bool,'/blueboat/param_ready',self.param_callback,10)
+        latched = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+        self.ready_publisher = self.create_publisher(Bool, '/blueboat/controller_ready', latched)
         self.mode_sub = self.create_subscription(String, '/blueboat/param_mode',self.mode_callback,10)
 
         # Robot sensor

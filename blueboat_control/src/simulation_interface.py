@@ -5,12 +5,13 @@ from rclpy.node import Node
 import rclpy
 
 # Common python libraries
-import time
-import numpy as np
+# import time
+# import numpy as np
 
 # ROS2 msg libraries
 from std_msgs.msg import Bool, Float32MultiArray
 from nav_msgs.msg import Odometry
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 
 # Custom libraries
 from blueboat_control import ROV
@@ -29,7 +30,8 @@ class Controller(Node):
         self.odom_sim_subscriber = self.create_subscription(Odometry, '/blueboat/odom', self.odom_callback, 10)
         self.thruster_input_sub = self.create_subscription(Float32MultiArray, "/thruster_input", self.thr_input_callback,10)
 
-        self.ready_publisher = self.create_publisher(Bool, '/blueboat/controller_ready', 10)
+        latched = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
+        self.ready_publisher = self.create_publisher(Bool, '/blueboat/controller_ready', latched)
         self.data_publisher = self.create_publisher(Float32MultiArray, "/monitoring_data", 10)
 
         self.timer = self.create_timer(0.1, self.move)
