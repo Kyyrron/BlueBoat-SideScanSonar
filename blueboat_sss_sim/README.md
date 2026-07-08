@@ -17,6 +17,8 @@ ros2 run blueboat_sss_sim generate_mission \
     --out ~/runs/r1 --seed 7 --speed 0.5
 
 ros2 launch blueboat_sss_sim full_mission_launch.py mission_dir:=$HOME/runs/r1
+
+ros2 run blueboat_sss_sim export_scene_maps --bundle ~/runs/r1
 ```
 
 Dataset appears in `~/runs/r1/dataset/` (Ultralytics layout, finalized on
