@@ -14,7 +14,8 @@ modified.
 colcon build --packages-select blueboat_sss_sim && source install/setup.bash
 ros2 run blueboat_sss_sim generate_mission \
     --config $(ros2 pkg prefix blueboat_sss_sim)/share/blueboat_sss_sim/config/default_mission.yaml \
-    --out ~/runs/r1 --seed 7
+    --out ~/runs/r1 --seed 7 --speed 0.5
+
 ros2 launch blueboat_sss_sim full_mission_launch.py mission_dir:=$HOME/runs/r1
 ```
 

@@ -13,7 +13,7 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: override"
 
 -- SSS
 
------ App
+----- App Visu
 
 cd src/BlueBoat-SideScanSonar/blueboat_sss
 python3 -m blueboat_gcs.main
@@ -22,6 +22,14 @@ Puis lancer rosbag ou launch file simple
 
 ros2 launch blueboat_sss SSS_simple_launch.py
 
+----- App Simu SSS
+
+cd src/BlueBoat-SideScanSonar/blueboat_sss_sim
+ros2 run blueboat_sss_sim generate_mission \
+    --config $(ros2 pkg prefix blueboat_sss_sim)/share/blueboat_sss_sim/config/default_mission.yaml \
+    --out ~/runs/r2 --seed 7
+
+ros2 launch blueboat_sss_sim full_mission_launch.py mission_dir:=$HOME/runs/r2
 
 ----- Live 
 

@@ -15,6 +15,7 @@ Namespace: node name `side_scan_sonar` → private topics resolve under
 | `/side_scan_sonar/ping/enable` | `std_msgs/Bool` | sub | `true` start / `false` stop; params re-read on every enable |
 | `/side_scan_sonar/ground_truth/contacts` | `std_msgs/String` (JSON) | pub | **simulation-only extra**, additive |
 | `/blueboat/odom` | `nav_msgs/Odometry` | sub | pose source (parameter `odom_topic`) |
+| `/mission/full_path` | `nav_msgs/Path` | pub (latched) | complete mission for RViz, from `sss_path_generation` (set the display's Durability to Transient Local) |
 
 QoS on all sonar pubs: BEST_EFFORT, KEEP_LAST, depth 10 — identical to the
 real node (subscribers must match reliability).
@@ -81,7 +82,7 @@ Little-endian throughout. For `num_results = 600`: total 1262 bytes,
 | 60 | 2n | `u16[n]` | pwr_results |
 | 60+2n | 2 | `u16` | checksum = Σ(all previous bytes) mod 2¹⁶ |
 
-`blueboat_sss_sim.sonar.encoder.parse_frame()` decodes and validates frames
+`blueboat_sss.sonar.encoder.parse_frame()` decodes and validates frames
 (raises on bad magic/id/checksum) — use it in tests and log tooling.
 
 ## 5. Ground-truth contacts (simulation extra)

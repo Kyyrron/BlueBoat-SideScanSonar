@@ -48,7 +48,8 @@ def _randomize(doc: dict[str, Any], rng: np.random.Generator) -> dict[str, Any]:
 
 
 def generate_mission(mission_yaml: str | Path, out_dir: str | Path,
-                     seed: int | None = None) -> Path:
+                     seed: int | None = None,
+                     speed: float | None = None) -> Path:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     doc = _load(mission_yaml)
@@ -80,7 +81,11 @@ def generate_mission(mission_yaml: str | Path, out_dir: str | Path,
                                                    "ignition")))
 
     # ---- trajectory --------------------------------------------------------
+    if speed is not None:
+        m["speed_override"] = float(speed)
     traj = build_pattern(m, seed=mission_seed)
+    if speed is not None and speed > 0.0:
+        traj.speed = float(speed)     # duration derives from speed
     traj.save_yaml(out / "trajectory.yaml")
 
     # ---- sonar profile ------------------------------------------------------
@@ -93,8 +98,15 @@ def generate_mission(mission_yaml: str | Path, out_dir: str | Path,
 
     print(f"Mission bundle written to {out.resolve()}")
     print(f"  seed={mission_seed}  objects={len(scene.objects)}  "
-          f"pattern={traj.name}  path={traj.total_length:.0f} m "
-          f"(~{traj.duration/60:.1f} min at {traj.speed} m/s)")
+          f"pattern={traj.name}")
+    print(f"  first waypoint ({traj.waypoints[0][0]:.1f}, "
+          f"{traj.waypoints[0][1]:.1f}) -> entry "
+          f"({traj.waypoints[1][0]:.1f}, {traj.waypoints[1][1]:.1f})")
+    print(f"  MISSION DURATION: {traj.duration:.0f} s "
+          f"({traj.duration/60:.1f} min) -- {traj.total_length:.0f} m "
+          f"at {traj.speed} m/s")
+    print(f"  (full_mission_launch sizes path_publisher total_time to this "
+          f"automatically; for manual runs use total_time:={traj.duration*1.1 + 30:.0f})")
     return out
 
 
@@ -103,8 +115,11 @@ def main() -> None:
     ap.add_argument("--config", required=True, help="mission YAML")
     ap.add_argument("--out", required=True, help="output bundle directory")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--speed", type=float, default=None,
+                    help="survey speed [m/s]; overrides the pattern's "
+                         "speed from the mission YAML")
     args = ap.parse_args()
-    generate_mission(args.config, args.out, args.seed)
+    generate_mission(args.config, args.out, args.seed, args.speed)
 
 
 if __name__ == "__main__":

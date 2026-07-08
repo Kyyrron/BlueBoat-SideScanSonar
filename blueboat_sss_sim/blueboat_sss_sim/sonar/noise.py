@@ -41,11 +41,37 @@ class GainDrift:
 
 def apply_ping_noise(power: np.ndarray, watercolumn_mask: np.ndarray,
                      gain: float, cfg: SonarModelConfig,
-                     rng: np.random.Generator) -> np.ndarray:
-    """Return the noisy linear power vector (does not modify input)."""
+                     rng: np.random.Generator,
+                     specular: np.ndarray | None = None) -> np.ndarray:
+    """Return the noisy linear power vector (does not modify inputs).
+
+    Speckle statistics, per component:
+
+    * **Diffuse** (``power``): ``speckle_looks == 1`` gives fully-developed
+      speckle -- intensity multiplicatively Exp(1)-distributed, i.e.
+      Rayleigh amplitude, the textbook single-look SSS model.
+      ``speckle_looks = L > 1`` gives multi-look Gamma(L, 1/L) speckle
+      (mean 1, CV 1/sqrt(L)).
+    * **Coherent specular** (``specular``, near-nadir first-return lobe):
+      the coherent echo does not fully decorrelate, so it fluctuates far
+      less than the diffuse field (Rician with high K-factor). Modelled as
+      Gamma(``specular_looks``, 1/looks), CV = 1/sqrt(looks) (~0.2 at the
+      default 25). This is what makes the real device's first bottom
+      return a *stable* feature that bottom-tracking can lock onto
+      ping after ping."""
     out = power.astype(np.float64, copy=True)
     if cfg.speckle:
-        out *= rng.exponential(1.0, size=out.shape)
+        looks = max(int(cfg.speckle_looks), 1)
+        if looks == 1:
+            out *= rng.exponential(1.0, size=out.shape)
+        else:
+            out *= rng.gamma(looks, 1.0 / looks, size=out.shape)
+    if specular is not None:
+        spec = specular.astype(np.float64, copy=True)
+        if cfg.speckle:
+            slooks = max(int(cfg.specular_looks), 1)
+            spec *= rng.gamma(slooks, 1.0 / slooks, size=spec.shape)
+        out += spec
     floor = cfg.noise_floor * rng.exponential(1.0, size=out.shape)
     out += floor
     if watercolumn_mask.any():

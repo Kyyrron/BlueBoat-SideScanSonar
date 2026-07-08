@@ -60,6 +60,10 @@ def main() -> None:
     scene = SceneModel.load(bundle)
     check("scene has objects", len(scene.objects) > 0,
           f"{len(scene.objects)} objects")
+    traj_check = WaypointTrajectory.load_yaml(bundle / "trajectory.yaml")
+    x0, y0, _ = traj_check.pose_at(0.0)
+    check("path starts at robot spawn (0,0)", abs(x0) < 0.01 and abs(y0) < 0.01,
+          f"first pose ({x0:.2f}, {y0:.2f})")
     sdf = (bundle / "world.sdf").read_text()
     check("world.sdf has physics plugin", "physics" in sdf)
     check("world.sdf has buoyancy plugin", "buoyancy" in sdf)
@@ -82,11 +86,13 @@ def main() -> None:
     encoders = {s: PingEncoder(s, acq, model) for s in Side}
     drifts = {s: GainDrift(model, rng) for s in Side}
 
-    period = acq.ping_period_s()
+    period = acq.ping_period_s(model.max_ping_rate_hz)
     n_pings = min(int(traj.duration / period), 2600)
     contact_pings = 0
     roundtrip_checked = False
     altitudes = []
+    fbr_probe: list[np.ndarray] = []   # encoded port pings for FBR analysis
+    fbr_alts: list[float] = []
 
     for k in range(n_pings):
         t = k * period
@@ -103,7 +109,8 @@ def main() -> None:
                        + (np.arange(acq.num_results) + 0.5) * acq.bin_size_m
                        ) < r.ping.altitude_m
             r.ping.power = apply_ping_noise(r.ping.power, wc_mask,
-                                            drifts[side].value(t), model, rng)
+                                            drifts[side].value(t), model, rng,
+                                            specular=r.ping.specular)
             enc = encoders[side].encode(r.ping)
 
             if not roundtrip_checked:
@@ -127,6 +134,10 @@ def main() -> None:
                       f"{len(enc.raw_frame)} bytes")
                 roundtrip_checked = True
 
+            if side is Side.PORT and len(fbr_probe) < 200:
+                fbr_probe.append(np.asarray(enc.pwr_results, dtype=np.float64))
+                fbr_alts.append(r.ping.altitude_m)
+
             if r.contacts:
                 contact_pings += 1
             builders[side].add_ping(enc.pwr_results, r.contacts)
@@ -137,6 +148,127 @@ def main() -> None:
           f"min {alt.min():.2f} m, max {alt.max():.2f} m")
     check("contacts observed on the pass", contact_pings > 0,
           f"{contact_pings} pings with ground-truth contacts")
+
+    # ---- 2b. FBR structure (what downstream bottom-tracking locks onto) ----
+    print("[2b] first-bottom-return structure")
+    mean_p = np.mean(fbr_probe, axis=0)
+    mean_alt = float(np.mean(fbr_alts))
+    fbr_bin = int(mean_alt / acq.bin_size_m)
+    wc = mean_p[:max(fbr_bin - 8, 1)]
+    peak = float(mean_p[:fbr_bin + 40].max())
+    contrast_db = 10 * np.log10(peak / max(float(wc.mean()), 1e-9))
+    check("water column is quiet vs FBR peak", contrast_db > 8.0,
+          f"{contrast_db:.1f} dB gap->peak contrast")
+    lock = int(np.argmax(mean_p > 3.0 * np.median(wc)))
+    check("naive FBR bootstrap locks at altitude",
+          abs(lock * acq.bin_size_m - mean_alt) < 0.25,
+          f"lock bin {lock} = {lock*acq.bin_size_m:.2f} m, "
+          f"altitude {mean_alt:.2f} m")
+
+    # ---- 2c. Omniscan device fidelity ------------------------------------
+    print("[2c] device fidelity (rate cap, power scale, speckle PDF)")
+    check("ping period respects max_ping_rate_hz",
+          period >= 0.999 / max(model.max_ping_rate_hz, 1e-9)
+          if model.max_ping_rate_hz > 0 else True,
+          f"{period*1000:.0f} ms (cap {model.max_ping_rate_hz} Hz)")
+    check("uncapped free-run matches captured 22 ms @ 15 m",
+          abs(acq.ping_period_s(0.0) - 0.022) < 0.002,
+          f"{acq.ping_period_s(0.0)*1000:.0f} ms")
+    peak_dbs = [10*np.log10(max(p.max(), 1)) + model.calibration_db_offset
+                for p in fbr_probe]
+    check("max_pwr_db in real-capture range (~60-64.2 dB)",
+          58.0 < float(np.mean(peak_dbs)) <= 64.2,
+          f"mean {np.mean(peak_dbs):.1f} dB (real capture: 63.9)")
+    flat = mean_p[fbr_bin + 30:fbr_bin + 120]
+    one = fbr_probe[0][fbr_bin + 30:fbr_bin + 120]
+    cv = float(one.std() / max(one.mean(), 1e-9))
+    check("speckle PDF on flat seabed (CV ~ 1 for Exp(1))",
+          0.6 < cv < 1.4, f"CV {cv:.2f}")
+    check("no empty far-range bins (sampling tracks bin size)",
+          float((mean_p[400:590] < 1.0).mean()) < 0.02,
+          f"{(mean_p[400:590] < 1.0).mean():.1%} empty")
+
+    # Downstream bottom-tracking lockability: emulate the fleet's FBR
+    # detector (noise floor from first 20 samples, +8 dB threshold,
+    # persistence 3) on consecutive moving pings; the tracker bootstrap
+    # needs 10 consecutive estimates within a 0.30 m band.
+    def _fbr_est(counts: np.ndarray) -> float | None:
+        db = 10 * np.log10(np.maximum(counts, 1.0))
+        floor = float(db[:20].mean())
+        above = db > floor + 8.0
+        run = 0
+        for i, a in enumerate(above):
+            run = run + 1 if a else 0
+            if run >= 3:
+                return (i - 2) * (acq.range_length_mm / 1000.0) / acq.num_results
+        return None
+
+    ests = [_fbr_est(p) for p in fbr_probe]
+    lockable = 0
+    windows = max(len(ests) - 10, 1)
+    for i in range(len(ests) - 10):
+        w = ests[i:i + 10]
+        if all(x is not None for x in w) and (max(w) - min(w)) <= 0.30:
+            lockable += 1
+    check("downstream FBR tracker can lock while moving",
+          lockable / windows > 0.8,
+          f"{lockable/windows:.0%} of 10-ping windows lockable "
+          f"(spread <= 0.30 m, no misses)")
+
+    # ---- 2d. azimuth beam + high-res bins ----------------------------------
+    print("[2d] along-track 0.5 deg beam + 1/1200 bins")
+    import dataclasses
+
+    class _Bump:
+        class G:
+            nx = ny = 100
+            resolution = 0.10
+        grid = G()
+        objects = []
+
+        def sample_height(self, x, y):
+            return (np.full_like(np.asarray(x, float), -2.0)
+                    + 0.25 * (np.hypot(np.asarray(x),
+                                       np.asarray(y) - 13.0) < 0.15))
+
+        def sample_reflectivity(self, x, y):
+            return (np.full_like(np.asarray(x, float), 0.55)
+                    + 0.35 * (np.hypot(np.asarray(x),
+                                       np.asarray(y) - 13.0) < 0.15))
+
+    def _extent(n_lines: int) -> float:
+        c = dataclasses.replace(model, alongtrack_beam_lines=n_lines)
+        rr = GeometricRenderer(_Bump(), acq, c)
+        b = int(np.hypot(12.8, 1.60) / acq.bin_size_m)
+        xs = np.arange(-0.5, 0.5, 0.02)
+
+        def _tot(x: float) -> float:
+            pg = rr.render(Side.PORT, Pose3D(x, 0, 0, 0, 0, 0), 0.0).ping
+            comb = pg.power + (pg.specular if pg.specular is not None else 0.0)
+            return float(comb[b - 5:b + 5].max())
+
+        resp = np.array([_tot(float(x)) for x in xs])
+        # Background from the scan edges only -- the widened K=5 response
+        # can cover more than half the scan, which would contaminate a
+        # global median.
+        bg = float(np.median(np.concatenate([resp[:6], resp[-6:]])))
+        return float((resp > 3.0 * bg).sum() * 0.02)
+
+    e1, e5 = _extent(1), _extent(5)
+    check("along-track response widens with the azimuth beam",
+          e5 > e1 + 0.05,
+          f"extent {e1*100:.0f} cm (K=1) -> {e5*100:.0f} cm (K=5) at 13 m")
+
+    acq12 = dataclasses.replace(acq, num_results=1200)
+    r12 = GeometricRenderer(scene, acq12, model)
+    enc12 = PingEncoder(Side.PORT, acq12, model)
+    rp12 = r12.render(Side.PORT, Pose3D(0.0, 0.0, 0.0, 0.0, 0.0, 0.0), 0.0)
+    e12 = enc12.encode(rp12.ping)
+    check("1/1200-range bins render + frame correctly",
+          len(e12.raw_frame) == 8 + 52 + 2 * 1200 + 2
+          and float((rp12.ping.power[900:1180] == 0).mean()) < 0.05,
+          f"frame {len(e12.raw_frame)} B, "
+          f"far empty {(rp12.ping.power[900:1180]==0).mean():.1%}")
 
     # ---- 3. Waterfall + labels + export ----------------------------------------
     print("[3] waterfall tiles, labels, YOLO export")
@@ -162,7 +294,7 @@ def main() -> None:
           f"classes: {classes}")
 
     # normalized box sanity
-    from blueboat_sss_sim.dataset.labeler import YoloBox  # noqa: F401
+    from blueboat_sss.dataset.labeler import YoloBox  # noqa: F401
     bad = 0
     for lbl in (OUT / "dataset" / "labels").rglob("*.txt"):
         for line in lbl.read_text().splitlines():

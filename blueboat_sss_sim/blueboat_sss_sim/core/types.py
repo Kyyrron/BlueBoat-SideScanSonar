@@ -61,12 +61,18 @@ class Ping:
 
     side: Side
     power: np.ndarray            # float64[num_results], linear power
+                                 # (diffuse/Lambert component)
     pose: Pose3D                 # sensor pose at ping time
     altitude_m: float            # sensor height above seabed at nadir
     t_sim: float                 # simulation time [s] of the ping
     start_mm: int
     length_mm: int
     dropped: bool = False        # True -> the "device" lost this ping
+    specular: np.ndarray | None = None
+    # Coherent quasi-specular component (near-nadir first-return lobe),
+    # kept separate from `power` because its fluctuation statistics differ:
+    # the coherent echo is low-CV (Rician, high K-factor) while the diffuse
+    # field is fully-developed speckle. The noise stage combines them.
 
 
 @dataclass

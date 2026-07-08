@@ -35,10 +35,35 @@ def beam_weight(depression_rad: np.ndarray, cfg: SonarModelConfig,
 
     ``depression_rad``: angle of the ray below horizontal (0 = horizontal,
     pi/2 = straight down). ``roll_toward_side``: vehicle roll projected onto
-    this side's look direction (positive = fan pushed downward)."""
+    this side's look direction (positive = fan pushed downward).
+
+    A real transducer has sidelobes, so the pattern is floored at
+    ``beam_sidelobe_floor``: without it, near-nadir rays (~70 deg off the
+    beam axis at shallow-water altitudes) are attenuated so hard that the
+    first bottom return disappears below the water-column noise and
+    downstream FBR/bottom-tracking cannot lock."""
     center = np.radians(cfg.beam_tilt_deg) + roll_toward_side
     sigma = np.radians(cfg.vertical_aperture_deg) / 2.355  # FWHM -> sigma
-    return np.exp(-0.5 * ((depression_rad - center) / max(sigma, 1e-6)) ** 2)
+    main = np.exp(-0.5 * ((depression_rad - center) / max(sigma, 1e-6)) ** 2)
+    return np.maximum(main, cfg.beam_sidelobe_floor)
+
+
+def specular(reflectivity: np.ndarray, cos_incidence: np.ndarray,
+             cfg: SonarModelConfig) -> np.ndarray:
+    """Near-normal-incidence specular lobe (linear amplitude units).
+
+    Lambert alone underestimates the echo at incidence angles near the
+    surface normal; the strong specular/coherent component there is what
+    makes the first bottom return the brightest feature of a real SSS ping
+    (and what bottom-tracking algorithms lock onto). Modelled as a Gaussian
+    in the angle from the normal, ``specular_width_deg`` wide, with
+    amplitude ``specular_strength`` weakly modulated by material."""
+    if cfg.specular_strength <= 0.0:
+        return np.zeros_like(cos_incidence)
+    theta_n = np.arccos(np.clip(cos_incidence, 0.0, 1.0))
+    sigma = np.radians(max(cfg.specular_width_deg, 1e-3))
+    lobe = np.exp(-0.5 * (theta_n / sigma) ** 2)
+    return cfg.specular_strength * (0.5 + 0.5 * reflectivity) * lobe
 
 
 def two_way_loss(slant_range: np.ndarray, cfg: SonarModelConfig) -> np.ndarray:

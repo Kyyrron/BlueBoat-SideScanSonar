@@ -6,6 +6,9 @@ mission:
   sonar_profile: config/default_sonar.yaml
   gazebo_plugin_prefix: gz   # ignition (Fortress) | gz (Garden/Harmonic)
 
+  start: [0.0, 0.0]           # robot spawn; prepended as transit waypoint
+                              # so the path begins where the boat is
+                              # (null to disable)
   pattern: lawnmower          # lawnmower | spiral | random | waypoints
   lawnmower:
     bbox: [-30.0, -20.0, 30.0, 20.0]

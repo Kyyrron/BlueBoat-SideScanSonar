@@ -108,7 +108,7 @@ class PingEncoder:
             num_results=acq.num_results,
             sos_dmps=int(round(SPEED_OF_SOUND_MPS * 10.0)),
             channel_number=self._channel,
-            pulse_duration_sec=acq.pulse_duration_s(),
+            pulse_duration_sec=acq.pulse_duration_s(cfg.max_ping_rate_hz),
             analog_gain=ANALOG_GAIN_TABLE.get(acq.gain_index, 74.55),
             max_pwr_db=float(max_db),
             min_pwr_db=float(min_db),

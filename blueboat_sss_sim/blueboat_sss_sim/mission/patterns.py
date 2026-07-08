@@ -53,6 +53,11 @@ class WaypointTrajectory:
 
     def save_yaml(self, path: str | Path) -> None:
         doc = {"name": self.name, "speed": self.speed,
+               # Derived metadata (informational; recomputed on load):
+               # consumed e.g. by full_mission_launch to size the
+               # path_publisher `total_time` window to the whole mission.
+               "length_m": round(self.total_length, 2),
+               "duration_s": round(self.duration, 1),
                "waypoints": self.waypoints.tolist()}
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(doc, f, sort_keys=False)
@@ -116,29 +121,86 @@ def random_survey(bbox: tuple[float, float, float, float], n_legs: int,
     return WaypointTrajectory(pts, speed, "random_survey")
 
 
+def _best_entry_variant(pts: np.ndarray, start: tuple[float, float] | None,
+                        start_heading_deg: float) -> np.ndarray:
+    """Pick the boustrophedon traversal whose entry point lies most *in
+    front of* the robot's spawn heading.
+
+    A lawnmower over a box admits four equivalent covers (enter at either
+    end of the first line x start from either the first or last line).
+    Scoring each candidate's first waypoint by cos(angle from the spawn
+    heading), with a mild distance tie-break, avoids missions that begin
+    with a 180 deg turn and a long transit behind the robot."""
+    if start is None:
+        return pts
+    p0 = np.asarray(start, dtype=np.float64)
+    h = np.radians(start_heading_deg)
+    hv = np.array([np.cos(h), np.sin(h)])
+    n = len(pts)
+    # line-flip variant: swap the two endpoints of every line segment pair
+    flip = pts.reshape(n // 2, 2, 2)[:, ::-1, :].reshape(n, 2)
+    best, best_score = pts, -np.inf
+    for cand in (pts, pts[::-1], flip, flip[::-1]):
+        d = cand[0] - p0
+        dist = float(np.hypot(*d))
+        score = float(d @ hv) / max(dist, 1e-6) - 0.002 * dist
+        if score > best_score:
+            best, best_score = cand, score
+    return np.ascontiguousarray(best)
+
+
+def _with_start(traj: WaypointTrajectory,
+                start: tuple[float, float] | None,
+                min_dist: float = 0.5) -> WaypointTrajectory:
+    """Prepend the vehicle spawn/start point as the first waypoint (transit
+    leg into the survey), so the path begins where the robot actually is.
+
+    Skipped when the pattern already starts within ``min_dist`` of it.
+    ``pose_at(0)`` then returns the start point heading toward the first
+    survey waypoint, which the tracking stack follows smoothly."""
+    if start is None:
+        return traj
+    p0 = np.asarray(start, dtype=np.float64)
+    if float(np.hypot(*(traj.waypoints[0] - p0))) < min_dist:
+        return traj
+    return WaypointTrajectory(np.vstack([p0[None, :], traj.waypoints]),
+                              traj.speed, traj.name)
+
+
 def build_pattern(cfg: Mapping[str, Any], seed: int = 0) -> WaypointTrajectory:
-    """Mission-YAML dispatch."""
+    """Mission-YAML dispatch.
+
+    ``cfg['start']`` (default ``[0, 0]``, the robot spawn) is prepended to
+    every pattern as a transit waypoint; set ``start: null`` to disable."""
+    start_raw = cfg.get("start", (0.0, 0.0))
+    start = tuple(start_raw) if start_raw is not None else None
+    start_heading = float(cfg.get("start_heading_deg", 0.0))
     kind = str(cfg.get("pattern", "lawnmower"))
     if kind == "lawnmower":
         p = cfg.get("lawnmower", {})
-        return lawnmower(tuple(p.get("bbox", (-30, -20, 30, 20))),
+        traj = lawnmower(tuple(p.get("bbox", (-30, -20, 30, 20))),
                          float(p.get("spacing", 8.0)),
                          float(p.get("speed", 1.0)),
                          float(p.get("heading_deg", 0.0)))
-    if kind == "spiral":
+        traj = WaypointTrajectory(
+            _best_entry_variant(traj.waypoints, start, start_heading),
+            traj.speed, traj.name)
+    elif kind == "spiral":
         p = cfg.get("spiral", {})
-        return spiral(tuple(p.get("center", (0.0, 0.0))),
+        traj = spiral(tuple(p.get("center", (0.0, 0.0))),
                       float(p.get("r_max", 25.0)),
                       float(p.get("spacing", 8.0)),
                       float(p.get("speed", 1.0)))
-    if kind == "random":
+    elif kind == "random":
         p = cfg.get("random", {})
-        return random_survey(tuple(p.get("bbox", (-30, -20, 30, 20))),
+        traj = random_survey(tuple(p.get("bbox", (-30, -20, 30, 20))),
                              int(p.get("n_legs", 12)),
                              float(p.get("speed", 1.0)),
                              seed=seed)
-    if kind == "waypoints":
+    elif kind == "waypoints":
         p = cfg.get("waypoints", {})
-        return WaypointTrajectory(np.array(p["points"]),
+        traj = WaypointTrajectory(np.array(p["points"]),
                                   float(p.get("speed", 1.0)), "waypoints")
-    raise ValueError(f"Unknown mission pattern '{kind}'")
+    else:
+        raise ValueError(f"Unknown mission pattern '{kind}'")
+    return _with_start(traj, start)

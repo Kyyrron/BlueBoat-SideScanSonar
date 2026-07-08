@@ -163,7 +163,7 @@ class SideScanSonarSimNode(Node):
         if self._t0 is None:
             self._t0 = self._now()
 
-        period = acq.ping_period_s()
+        period = acq.ping_period_s(self._model_cfg.max_ping_rate_hz)
         if self._timer is not None:
             self._timer.cancel()
         self._timer = self.create_timer(period, self._tick)
@@ -195,7 +195,8 @@ class SideScanSonarSimNode(Node):
             noisy = apply_ping_noise(
                 rendered.ping.power, wc,
                 ch.drift.value(t_sim) if ch.drift else 1.0,
-                self._model_cfg, ch.rng)
+                self._model_cfg, ch.rng,
+                specular=rendered.ping.specular)
             rendered.ping.power = noisy
             enc = ch.encoder.encode(rendered.ping)  # type: ignore[union-attr]
             self._publish(ch, enc)
