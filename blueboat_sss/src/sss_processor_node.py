@@ -190,11 +190,11 @@ class SSSProcessorNode(Node):
 
         # ---- Logging + mavlink envelope state ------------------------------
 
-        self.date = datetime.today().strftime('%Y_%m_%d-%H_%M')
-        self.declare_parameter("log_folder", self.date)
-        self.folder_name = self.get_parameter("log_folder").value
-        self.log_root = Path(os.path.expanduser("../../../data/SSS_data")) / self.folder_name
-        self.log_root.mkdir(parents=True, exist_ok=True)
+        #self.date = datetime.today().strftime('%Y_%m_%d-%H_%M')
+        #self.declare_parameter("log_folder", self.date)
+        #self.folder_name = self.get_parameter("log_folder").value
+        self.log_root = Path(os.path.expanduser("../../../data/SSS_data")) #/ self.folder_name
+        #self.log_root.mkdir(parents=True, exist_ok=True)
 
         self.get_logger().info(f"log directory: {self.log_root}")
         self._svlog = SvlogWriter(
@@ -295,14 +295,12 @@ class SSSProcessorNode(Node):
 
     def _on_log_enable(self, msg: Bool) -> None:
         if msg.data:
-            path = self._svlog.start()
-            if path is not None:
-                self.get_logger().info(f"logging -> {path}")
+            self._svlog.start()
+            self.get_logger().info(f"logging -> {self.log_root}")
         else:
-            path = self._svlog.current_path
+            self._svlog.current_path
             self._svlog.stop()
-            if path is not None:
-                self.get_logger().info(f"stopped logging ({path})")
+            self.get_logger().info(f"stopped logging ({self.log_root})")
 
     # ----- mavros subscribers -----------------------------------------------
     def _on_mavros_rel_alt(self, msg: Float64) -> None:

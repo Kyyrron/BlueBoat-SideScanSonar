@@ -103,8 +103,8 @@ class PipelineLauncher(QObject):
         try:
             self._proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                #stdout=subprocess.DEVNULL,
+                #stderr=subprocess.DEVNULL,
                 start_new_session=True,  # own group: signal the whole tree
             )
         except (OSError, FileNotFoundError) as exc:

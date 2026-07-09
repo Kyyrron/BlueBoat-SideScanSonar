@@ -238,12 +238,12 @@ class MosaicGrid:
         return np.where(self._count > 0, plane, np.float32(np.nan))
 
     # ---- persistence ---------------------------------------------------------
-    def save(self, log_root: Path, prefix: str = "sonar_mosaic"
+    def save(self, log_root: Path, metadata_root: Path, prefix: str = "sonar_mosaic"
              ) -> Tuple[Path, Path]:
         """Save as compact .npz (same keys as the legacy listener) + PNG."""
         log_root.mkdir(parents=True, exist_ok=True)
         img = self.render()
-        npz_path = log_root / f"{prefix}.npz"
+        npz_path = metadata_root / f"{prefix}.npz"
         png_path = log_root / f"{prefix}.png"
         np.savez_compressed(
             npz_path,

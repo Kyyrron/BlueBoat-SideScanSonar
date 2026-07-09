@@ -38,4 +38,4 @@ map:
   frame_yaw_offset_deg: 0.0
   use_satellite: true
 
-data_root: data/SSS_data
+data_root: ../../../data/SSS_data

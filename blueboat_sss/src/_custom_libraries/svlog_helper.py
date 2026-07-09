@@ -281,7 +281,7 @@ class SvlogWriter:
         with self._lock:
             if self._active:
                 return self._path
-            self._log_dir.mkdir(parents=True, exist_ok=True)
+            #self._log_dir.mkdir(parents=True, exist_ok=True)
             self._roll_unlocked()
             self._active = True
             return self._path
