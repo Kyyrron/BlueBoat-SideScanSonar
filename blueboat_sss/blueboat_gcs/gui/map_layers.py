@@ -31,6 +31,8 @@ from . import theme
 
 Z_TILES = -20.0
 Z_MOSAIC = 0.0
+Z_PLANNED_PATH = 5.0     # below the executed trajectory
+Z_SWATH = 8.0            # sonar range line, just below the trajectory
 Z_TRAJECTORY = 10.0
 Z_ROBOT = 15.0
 Z_DETECTIONS = 20.0
@@ -55,7 +57,6 @@ class MosaicLayer:
     def __init__(self, scene: QGraphicsScene) -> None:
         self._item = QGraphicsPixmapItem()
         self._item.setZValue(Z_MOSAIC)
-        self._opacity = 0.85 # satelite view: on by default
         self._item.setTransformationMode(Qt.SmoothTransformation)
         scene.addItem(self._item)
 
@@ -63,7 +64,6 @@ class MosaicLayer:
                extent: Tuple[float, float, float, float],
                cell_size_m: float) -> None:
         """Place the rendered raster at its world footprint."""
-        self._item.setOpacity(self._opacity)
         xmin, _xmax, _ymin, ymax = extent
         self._item.setPixmap(QPixmap.fromImage(image))
         # Image row 0 is the top = world ymax -> scene y = -ymax.
@@ -73,10 +73,14 @@ class MosaicLayer:
     def set_visible(self, visible: bool) -> None:
         self._item.setVisible(visible)
 
-    def set_opacity(self, alpha: float) -> None:
-        self._opacity = alpha
-        if self._item is not None:
-            self._item.setOpacity(alpha)
+    def set_opacity(self, opacity: float) -> None:
+        """SSS transparency over the map background. Pure compositing
+        (QGraphicsItem opacity): real-time, smooth, data untouched."""
+        self._item.setOpacity(max(0.0, min(1.0, opacity)))
+
+    def clear(self) -> None:
+        self._item.setPixmap(QPixmap())
+
 
 # ---------------------------------------------------------------------------
 class TrajectoryLayer:
@@ -105,14 +109,32 @@ class TrajectoryLayer:
 
         self._points: List[Tuple[float, float]] = []
         self._visible = True
+        self._break_next = False
+
+    def begin_new_segment(self) -> None:
+        """Break the polyline before the next pose.
+
+        Armed on START *and* by the telemetry staleness watchdog: if the
+        boat moved while no data was flowing, no phantom straight
+        segment is drawn between the old and the new position — the
+        displayed history is preserved and the marker re-syncs on the
+        next message, exactly as if the application had just launched.
+        """
+        self._break_next = True
+
+    def set_stale(self, stale: bool) -> None:
+        """Dim the robot marker while telemetry is not flowing, so the
+        operator can see the displayed pose is no longer live."""
+        self._marker.setOpacity(0.35 if stale else 1.0)
 
     def add_pose(self, x: float, y: float, yaw: float) -> None:
         self._points.append((x, y))
         # Rebuilding a QPainterPath for tens of thousands of points every
         # ping would be wasteful; append incrementally instead.
         path = self._path_item.path()
-        if path.elementCount() == 0:
-            path.moveTo(w2s(x, y))
+        if path.elementCount() == 0 or self._break_next:
+            path.moveTo(w2s(x, y))     # start a new subpath (no joining line)
+            self._break_next = False
         else:
             path.lineTo(w2s(x, y))
         self._path_item.setPath(path)
@@ -227,6 +249,11 @@ class PingerLayer:
         self._has_fix = True
         self._group.setVisible(self._enabled)
 
+    def clear(self) -> None:
+        """Hide the marker until the next fix arrives."""
+        self._has_fix = False
+        self._group.setVisible(False)
+
     def set_visible(self, visible: bool) -> None:
         self._enabled = visible
         self._group.setVisible(visible and self._has_fix)
@@ -284,6 +311,83 @@ class MeasureLayer:
     def clear(self) -> None:
         for item in (self._line, self._label, *self._marks):
             item.setVisible(False)
+
+
+# ---------------------------------------------------------------------------
+class SwathLayer:
+    """Current sonar acquisition range: a thin white line through the robot,
+    perpendicular to its heading, spanning ±range.
+
+    The extent is derived from the actual samples of every ping
+    (max |y_local|), so it always reflects the *current* sonar
+    configuration and updates automatically the moment the range changes
+    — no configuration duplication in the GUI.
+    """
+
+    def __init__(self, scene: QGraphicsScene) -> None:
+        pen = QPen(QColor(255, 255, 255, 210), 0)
+        pen.setCosmetic(True)          # thin (1 px) at any zoom level
+        pen.setWidthF(1.0)
+        self._line = QGraphicsLineItem()
+        self._line.setPen(pen)
+        self._line.setZValue(Z_SWATH)
+        self._line.setVisible(False)   # nothing to show until a ping arrives
+        scene.addItem(self._line)
+        self._enabled = True
+        self._has_data = False
+
+    def update(self, robot_x: float, robot_y: float, yaw: float,
+               range_m: float) -> None:
+        if range_m <= 0.0:
+            return
+        # The ping is purely lateral: same geometry as project_to_world
+        # evaluated at y_local = ±range.
+        dx, dy = -math.sin(yaw) * range_m, math.cos(yaw) * range_m
+        p1 = w2s(robot_x + dx, robot_y + dy)   # port tip
+        p2 = w2s(robot_x - dx, robot_y - dy)   # starboard tip
+        self._line.setLine(p1.x(), p1.y(), p2.x(), p2.y())
+        self._has_data = True
+        self._line.setVisible(self._enabled)
+
+    def clear(self) -> None:
+        self._has_data = False
+        self._line.setVisible(False)
+
+    def set_visible(self, visible: bool) -> None:
+        self._enabled = visible
+        self._line.setVisible(visible and self._has_data)
+
+
+# ---------------------------------------------------------------------------
+class PlannedPathLayer:
+    """Planned mission path (nav_msgs/Path from path_publisher.py).
+
+    Thin dark-blue line, deliberately distinct from the cyan executed
+    trajectory and drawn *below* it. A new message fully replaces the
+    previous path.
+    """
+
+    def __init__(self, scene: QGraphicsScene) -> None:
+        pen = QPen(theme.COLOR_PLANNED_PATH, 0)
+        pen.setCosmetic(True)
+        pen.setWidthF(1.2)
+        self._item = QGraphicsPathItem()
+        self._item.setPen(pen)
+        self._item.setZValue(Z_PLANNED_PATH)
+        scene.addItem(self._item)
+
+    def set_path(self, points) -> None:
+        """Replace the displayed path with ((x, y), ...) in world metres."""
+        path = QPainterPath()
+        for i, (x, y) in enumerate(points):
+            (path.moveTo if i == 0 else path.lineTo)(w2s(x, y))
+        self._item.setPath(path)
+
+    def clear(self) -> None:
+        self._item.setPath(QPainterPath())
+
+    def set_visible(self, visible: bool) -> None:
+        self._item.setVisible(visible)
 
 
 # ---------------------------------------------------------------------------

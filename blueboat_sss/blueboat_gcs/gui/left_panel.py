@@ -17,6 +17,8 @@ from .widgets import CoordinateCard
 # Stable layer identifiers shared with MainWindow.
 LAYER_SATELLITE = "satellite"
 LAYER_TRAJECTORY = "trajectory"
+LAYER_PLANNED_PATH = "planned_path"
+LAYER_SWATH = "swath"
 LAYER_PINGER = "pinger"
 LAYER_DETECTIONS = "detections"
 LAYER_INTERPOLATION = "interpolation"
@@ -40,6 +42,8 @@ class LeftPanel(QWidget):
         for key, label, default in (
             (LAYER_SATELLITE, "Satellite layer", True),
             (LAYER_TRAJECTORY, "Robot trajectory", True),
+            (LAYER_PLANNED_PATH, "Planned mission path", True),
+            (LAYER_SWATH, "Sonar range line", True),
             (LAYER_PINGER, "USBL pinger", True),
             (LAYER_DETECTIONS, "AI detections", True),
             (LAYER_INTERPOLATION, "Interpolation", False),

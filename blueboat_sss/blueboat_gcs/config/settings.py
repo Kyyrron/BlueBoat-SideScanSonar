@@ -30,6 +30,8 @@ class RosTopics:
     # ---- placeholders (repositories not present yet) ----------------------
     detections: str = "/sss_ai/detections"     # see ros/detections_listener.py
     pinger: str = "/usbl/pinger/position"      # see ros/pinger_listener.py
+    # Planned mission path (nav_msgs/Path), published by path_publisher.py.
+    planned_path: str = "/set_path"
 
 
 @dataclass
@@ -44,12 +46,24 @@ class PipelineConfig:
     # If true, START also publishes `true` on topics.ping_enable so the
     # already-running sss_node begins firing, and STOP publishes `false`.
     publish_ping_enable: bool = True
-    # If true, START enables .svlog logging in the processor node.
-    enable_svlog_on_start: bool = True
+    # If true, START also enables .svlog logging. Default false: recording
+    # is started manually with the toolbar's "Start SVLOG recording" button
+    # (STOP always publishes false so an open .svlog is closed cleanly).
+    enable_svlog_on_start: bool = False
     # Delay between launching the pipeline and enabling pinging, to let
     # the processor node come up and subscribe.
     start_delay_s: float = 2.0
+    # Shutdown escalation ladder: SIGINT -> (grace) -> SIGTERM -> (grace)
+    # -> SIGKILL. SIGKILL is a last resort because `ros2 launch` cannot
+    # forward a shutdown it never sees — which is how nodes get orphaned.
     stop_grace_s: float = 5.0
+    stop_term_grace_s: float = 3.0
+    # After the launch process exits, any process still matching one of
+    # these patterns (pgrep -f) is killed: guarantees no orphaned node
+    # (e.g. sss_processor_node) survives a STOP, no matter what.
+    leftover_process_patterns: List[str] = field(default_factory=lambda: [
+        "sss_processor_node",
+    ])
 
 
 @dataclass
@@ -58,6 +72,15 @@ class MosaicConfig:
     initial_half_extent_m: float = 30.0
     render_hz: float = 4.0             # GUI raster refresh rate
     contrast_percentiles: List[float] = field(default_factory=lambda: [2.0, 98.0])
+    # Waterfall view ring buffer: number of most recent pings kept and the
+    # across-track resampling width (columns spanning the full swath).
+    waterfall_rows: int = 1500
+    waterfall_columns: int = 800
+    # Professional-quality rasterization (see mapping/rasterizer.py):
+    # across/along-track ping densification + bilinear splatting. Set
+    # both to false to recover the legacy point-scatter mosaic (A/B).
+    densify: bool = True
+    bilinear_splat: bool = True
 
 
 @dataclass
@@ -101,7 +124,7 @@ class AppConfig:
     interpolation: InterpolationConfig = field(default_factory=InterpolationConfig)
     map: MapConfig = field(default_factory=MapConfig)
     sim: SimConfig = field(default_factory=SimConfig)
-    data_root: str = "data/SSS_data"   # same root as the existing pipeline
+    data_root: str = "../../../data/SSS_data"   # same root as the existing pipeline
 
 
 def _apply(obj: Any, data: dict, path: str = "") -> None:

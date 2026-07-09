@@ -16,6 +16,7 @@ COLOR_GRID_TEXT = QColor(255, 255, 255, 110)
 COLOR_DETECTION = QColor("#ffca28")
 COLOR_PINGER = QColor("#69f0ae")
 COLOR_MEASURE = QColor("#ff8a65")
+COLOR_PLANNED_PATH = QColor("#1a4fbf")   # dark blue, distinct from the cyan track
 
 STYLESHEET = """
 QMainWindow, QWidget { background-color: #14181d; color: #d7dde4;

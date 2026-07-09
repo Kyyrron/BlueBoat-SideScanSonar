@@ -28,6 +28,7 @@ from PySide6.QtGui import QImage
 from ..config.settings import AppConfig
 from ..mapping.interpolation import fill_small_gaps
 from ..mapping.mosaic import MosaicGrid, project_to_world
+from ..mapping.rasterizer import PingRasterizer
 from ..mapping.renderer import MosaicRenderer
 from ..models.sonar import SonarPing
 
@@ -37,16 +38,18 @@ class MosaicService(QObject):
 
     #: QImage, extent (xmin, xmax, ymin, ymax), cell size [m]
     raster_updated = Signal(QImage, tuple, float)
+    #: All accumulated SSS data was discarded ("Clear SSS data").
+    cleared = Signal()
 
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
         self._config = config
-        self._grid = MosaicGrid(
-            cell_size_m=config.mosaic.cell_size_m,
-            initial_half_extent_m=config.mosaic.initial_half_extent_m)
+        self._grid = self._new_grid()
+        self._rasterizer = PingRasterizer(config.mosaic.cell_size_m)
         self._renderer = MosaicRenderer(
             percentiles=tuple(config.mosaic.contrast_percentiles))
         self._interpolate = False
+        self._priority = "average"          # see MosaicGrid.PRIORITY_MODES
         self._depth_t: list[float] = []
         self._depth_z: list[float] = []
         self._traj: list[Tuple[float, float]] = []
@@ -57,16 +60,42 @@ class MosaicService(QObject):
         self._timer.timeout.connect(self._render_if_dirty)
         self._timer.start()
 
+    def _new_grid(self) -> MosaicGrid:
+        return MosaicGrid(
+            cell_size_m=self._config.mosaic.cell_size_m,
+            initial_half_extent_m=self._config.mosaic.initial_half_extent_m)
+
     # ---- ingestion ------------------------------------------------------------
     def on_sonar_ping(self, ping: SonarPing) -> None:
-        xw, yw = project_to_world(ping.robot_x, ping.robot_y, ping.yaw,
-                                  ping.y_local)
-        self._grid.add_samples(xw, yw, ping.intensity_db)
+        if self._config.mosaic.densify:
+            xw, yw, v, rng = self._rasterizer.rasterize(ping)
+        else:                                   # legacy point-scatter path
+            xw, yw = project_to_world(ping.robot_x, ping.robot_y, ping.yaw,
+                                      ping.y_local)
+            v, rng = ping.intensity_db, np.abs(ping.y_local)
+        self._grid.add_samples(xw, yw, v, slant_range=rng,
+                               bilinear=self._config.mosaic.bilinear_splat)
         if self._t_first is None:
             self._t_first = ping.t
         self._depth_t.append(ping.t - self._t_first)
         self._depth_z.append(ping.water_depth)
         self._traj.append((ping.robot_x, ping.robot_y))
+
+    def reset_tracking(self) -> None:
+        """START / data resumption: never interpolate across the break."""
+        self._rasterizer.reset()
+
+    def clear(self) -> None:
+        """'Clear SSS data': discard the accumulated grid, keep everything
+        else (trajectory, detections, view transform...). New pings keep
+        accumulating immediately into the fresh grid."""
+        self._grid = self._new_grid()
+        self._rasterizer.reset()
+        self._depth_t.clear()
+        self._depth_z.clear()
+        self._traj.clear()
+        self._t_first = None
+        self.cleared.emit()
 
     # ---- display -----------------------------------------------------------------
     def set_interpolation(self, enabled: bool) -> None:
@@ -74,12 +103,23 @@ class MosaicService(QObject):
             self._interpolate = enabled
             self._force_render()
 
+    def set_priority_mode(self, mode: str) -> None:
+        """Cell-value policy: 'average' | 'closest' | 'oldest' | 'newest'."""
+        if mode != self._priority:
+            self._priority = mode
+            self._force_render()
+
+    def set_display(self, settings) -> None:
+        """Apply operator display settings (visualization only)."""
+        self._renderer.settings = settings
+        self._force_render()
+
     def _render_if_dirty(self) -> None:
         if self._grid.consume_dirty():
             self._force_render()
 
     def _force_render(self) -> None:
-        mean = self._grid.render()
+        mean = self._grid.render(self._priority)
         if not np.isfinite(mean).any():
             return
         if self._interpolate:
@@ -92,17 +132,27 @@ class MosaicService(QObject):
                                  self._grid.cell_size_m)
 
     # ---- persistence (same artifacts as the legacy listener) ---------------------
-    def save(self) -> Optional[Path]:
-        """Save mosaic .npz/.png + trajectory/depth CSV; returns the dir."""
+    @property
+    def has_data(self) -> bool:
+        return self._t_first is not None
+
+    def save_into(self, target: Path) -> Optional[Path]:
+        """Write mosaic .npz/.png + trajectory/depth CSV into ``target``."""
         if self._t_first is None:
             return None
-        stamp = datetime.today().strftime("%Y_%m_%d-%H_%M")
-        log_root = Path(self._config.data_root).expanduser() / stamp
-        self._grid.save(log_root)  # raw data only, never interpolated
+        target.mkdir(parents=True, exist_ok=True)
+        self._grid.save(target)  # raw data only, never interpolated
         import csv
-        with open(log_root / "boat_trajectory.csv", "w", newline="") as f:
+        with open(target / "boat_trajectory.csv", "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(["t_since_first_s", "x_m", "y_m", "depth_m"])
             for t, (x, y), z in zip(self._depth_t, self._traj, self._depth_z):
                 w.writerow([f"{t:.3f}", f"{x:.3f}", f"{y:.3f}", f"{z:.3f}"])
-        return log_root
+        return target
+
+    def save(self) -> Optional[Path]:
+        """Legacy quick-save into data_root/<date> (used when no recording
+        session is active — sessions call save_into on their own folder)."""
+        stamp = datetime.today().strftime("%Y_%m_%d-%H_%M")
+        return self.save_into(
+            Path(self._config.data_root).expanduser() / stamp)

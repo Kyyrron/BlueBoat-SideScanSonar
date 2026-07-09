@@ -25,6 +25,7 @@ from PySide6.QtCore import QObject, QTimer
 from ..config.settings import AppConfig
 from ..core.signals import AppSignals
 from ..models.detection import Detection, PingerFix
+from ..models.path import PlannedPath
 from ..models.robot_state import RobotState
 from ..models.sonar import SonarPing
 from ..utils.geodesy import enu_to_gps, yaw_to_compass_deg
@@ -59,6 +60,23 @@ class Simulator(QObject):
         self._timer.start()
         self._signals.pipeline_state.emit("running")
         self._signals.status_message.emit("Simulator running.")
+        self._emit_planned_path()
+
+    def start_svlog_recording(self) -> None:
+        """Interface parity with PipelineLauncher (no-op in simulation)."""
+        self._signals.status_message.emit(
+            "SVLOG recording started (simulated).")
+
+    def _emit_planned_path(self) -> None:
+        """Publish the lawnmower plan, like path_publisher.py would."""
+        points = []
+        for pair in range(3):
+            y0 = pair * 2 * _LINE_SPACING_M
+            points += [(0.0, y0), (_LINE_LENGTH_M, y0),
+                       (_LINE_LENGTH_M, y0 + _LINE_SPACING_M),
+                       (0.0, y0 + _LINE_SPACING_M)]
+        self._signals.planned_path.emit(
+            PlannedPath(t=self._t, points=tuple(points)))
 
     def stop(self) -> None:
         self._timer.stop()

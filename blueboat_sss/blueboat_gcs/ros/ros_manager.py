@@ -50,12 +50,6 @@ class RosManager:
     def node(self) -> Optional["Node"]:
         return self._node
 
-    def svlog_enable_ready(self) -> bool:
-        return self._svlog_pub is not None and self._svlog_pub.get_subscription_count() > 0
-
-    def ping_enable_ready(self) -> bool:
-        return self._ping_pub is not None and self._ping_pub.get_subscription_count() > 0
-    
     def start(self) -> bool:
         """Initialise rclpy and start spinning. Returns False without ROS."""
         if not ROS_AVAILABLE:

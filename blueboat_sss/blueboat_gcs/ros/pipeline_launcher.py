@@ -1,40 +1,61 @@
 """Acquisition pipeline lifecycle (bottom-toolbar START/STOP).
 
-What START does (in order):
-  1. spawn ``pipeline.launch_command`` — by default
-     ``ros2 launch blueboat_sss SSS_processing_launch.py`` which starts
-     *only* the processing pipeline (sss_processor_node). The application
-     never launches sss_node.py: that node runs on the robot and this GUI
-     only subscribes to the pipeline's outputs;
-  2. after ``start_delay_s`` (processor node bring-up), publish ``true``
-     on the ping-enable and svlog-enable topics if configured.
+Explicit state machine
+----------------------
+::
 
-What STOP does:
-  1. publish ``false`` on ping/svlog enable (stop firing immediately);
-  2. SIGINT the launch process group (the signal ``ros2 launch`` expects
-     for a clean child shutdown), escalate to SIGKILL after a grace
-     period.
+            start()                    process up + enables sent
+    IDLE ────────────► STARTING ─────────────────────────► RUNNING
+     ▲                    │ launch failed                     │ stop()
+     │                    ▼                                   ▼
+     │◄── (sweep) ──── ERROR                              STOPPING
+     │                                                        │
+     └────────────◄── sweep leftover processes ◄──────────────┘
+                       SIGINT → SIGTERM → SIGKILL ladder
 
-The subprocess is started in its own session so the whole launch tree is
-signalled as a group. State is polled with a QTimer and broadcast on
-``pipeline_state`` ("stopped" | "starting" | "running" | "error").
+Why the previous implementation could leave ``sss_processor_node`` alive:
+the old code escalated straight from SIGINT to SIGKILL **of the process
+group**. If ``ros2 launch`` was SIGKILLed before it had forwarded the
+shutdown, its child nodes were orphaned (re-parented to init) and never
+signalled again. Two fixes:
+
+1. a real escalation ladder — SIGINT (what ``ros2 launch`` expects),
+   then SIGTERM after ``stop_grace_s``, then SIGKILL after
+   ``stop_term_grace_s`` — each applied to the whole session group;
+2. an unconditional **leftover sweep** after the launch process exits
+   (and on application start): any process still matching
+   ``pipeline.leftover_process_patterns`` (default:
+   ``sss_processor_node``) receives SIGTERM, then SIGKILL. This is the
+   invariant that makes N Start/Stop cycles safe regardless of how the
+   launch tree misbehaved.
+
+START is refused while STOPPING (the state machine forbids overlapping
+lifecycles); the GUI simply sees ``pipeline_state`` strings as before,
+so no consumer changes: "stopped" | "starting" | "running" | "error".
 """
 
 from __future__ import annotations
 
 import os
-import shutil
 import signal
 import subprocess
-import sys
 import time
-from typing import Optional
+from enum import Enum
+from typing import List, Optional
 
 from PySide6.QtCore import QObject, QTimer
 
 from ..config.settings import PipelineConfig
 from ..core.signals import AppSignals
 from .ros_manager import RosManager
+
+
+class PipelineState(Enum):
+    IDLE = "stopped"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    ERROR = "error"
 
 
 class PipelineLauncher(QObject):
@@ -47,89 +68,95 @@ class PipelineLauncher(QObject):
         self._ros = ros
         self._signals = signals
         self._proc: Optional[subprocess.Popen] = None
-        self._stop_deadline: Optional[float] = None
+        self._state = PipelineState.IDLE
+        self._sigterm_at: Optional[float] = None
+        self._sigkill_at: Optional[float] = None
 
         self._poll = QTimer(self)
-        self._poll.setInterval(500)
+        self._poll.setInterval(300)
         self._poll.timeout.connect(self._on_poll)
+
+        # Hygiene at construction: a previous crash of the *application*
+        # may itself have orphaned nodes.
+        self._sweep_leftovers(announce=False)
 
     # ---- API -----------------------------------------------------------------
     @property
+    def state(self) -> PipelineState:
+        return self._state
+
+    @property
     def running(self) -> bool:
-        return self._proc is not None and self._proc.poll() is None
+        return self._state is PipelineState.RUNNING
 
     def start(self) -> None:
-        if self.running:
+        if self._state in (PipelineState.STARTING, PipelineState.RUNNING):
             return
+        if self._state is PipelineState.STOPPING:
+            self._signals.status_message.emit(
+                "Pipeline is still stopping — wait for 'stopped'.")
+            return
+        # Never start on top of leftovers from an earlier unclean stop.
+        self._sweep_leftovers(announce=False)
+        self._set_state(PipelineState.STARTING)
         cmd = list(self._config.launch_command)
-        exe = cmd[0] if cmd else ""
-        if shutil.which(exe) is None:
-            msg = (f"[pipeline] '{exe}' not on PATH — is your ROS 2 environment "
-                f"sourced in the shell that launched this app?")
-            print(msg, file=sys.stderr, flush=True)
-            self._signals.pipeline_state.emit("error")
-            self._signals.status_message.emit(msg)
-            return
-
-        print(f"[pipeline] launching: {' '.join(cmd)}", file=sys.stderr, flush=True)
-        self._signals.pipeline_state.emit("starting")
         try:
             self._proc = subprocess.Popen(
                 cmd,
-                stdout=None,
-                stderr=None,
-                start_new_session=True,  # own process group for group SIGINT
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,  # own group: signal the whole tree
             )
         except (OSError, FileNotFoundError) as exc:
-            print(f"[pipeline] spawn failed: {exc!r}", file=sys.stderr, flush=True)
-            self._signals.pipeline_state.emit("error")
+            self._proc = None
+            self._set_state(PipelineState.ERROR)
             self._signals.status_message.emit(
                 f"Failed to launch pipeline ({' '.join(cmd)}): {exc}")
-            self._proc = None
+            self._set_state(PipelineState.IDLE)
             return
         self._poll.start()
-        # Give the processor node time to come up before enabling pinging.
-        self._enable_deadline = time.monotonic() + max(self._config.start_delay_s, 10.0)
-        self._enable_timer = QTimer(self)
-        self._enable_timer.setInterval(200)
-        self._enable_timer.timeout.connect(self._try_enable)
-        self._enable_timer.start()
-
-    def _try_enable(self) -> None:
-        if not self.running:
-            self._enable_timer.stop()
-            return
-        ready = self._ros.svlog_enable_ready()   # sss_node has subscribed
-        if ready or time.monotonic() > self._enable_deadline:
-            self._enable_timer.stop()
-            if not ready:
-                print("[pipeline] svlog subscriber not seen before timeout — "
-                    "enabling anyway", file=sys.stderr, flush=True)
-            self._enable_acquisition()
+        QTimer.singleShot(int(self._config.start_delay_s * 1000),
+                          self._enable_acquisition)
 
     def _enable_acquisition(self) -> None:
-        if not self.running:
+        if self._state is not PipelineState.STARTING or not self._alive():
             return
         if self._config.publish_ping_enable:
-            self._ros.publish_ping_enable(True)
+            self._ros.publish_ping_enable(True)  # sss pinging visible in app
         if self._config.enable_svlog_on_start:
             self._ros.publish_svlog_enable(True)
-        self._signals.pipeline_state.emit("running")
+        self._set_state(PipelineState.RUNNING)
         self._signals.status_message.emit("Acquisition running.")
 
+    def start_svlog_recording(self) -> None:
+        """Publish `true` once on the processor's log/enable topic.
+
+        Equivalent to:
+            ros2 topic pub --once /sss_processor/log/enable \
+                std_msgs/msg/Bool 'data: true'
+        """
+        if not self.running:
+            self._signals.status_message.emit(
+                "Recording: pipeline is not running.")
+            return
+        self._ros.publish_svlog_enable(True)
+
     def stop(self) -> None:
+        # Stop firing + close any .svlog immediately, in every state.
         if self._config.publish_ping_enable:
             self._ros.publish_ping_enable(False)
-        if self._config.enable_svlog_on_start:
-            self._ros.publish_svlog_enable(False)
-        if not self.running:
-            self._signals.pipeline_state.emit("stopped")
+        self._ros.publish_svlog_enable(False)
+        if not self._alive():
+            self._proc = None
+            self._sweep_leftovers()
+            self._set_state(PipelineState.IDLE)
             return
-        try:
-            os.killpg(os.getpgid(self._proc.pid), signal.SIGINT)
-        except (ProcessLookupError, PermissionError):
-            pass
-        self._stop_deadline = time.monotonic() + self._config.stop_grace_s
+        self._set_state(PipelineState.STOPPING)
+        self._signal_group(signal.SIGINT)  # what ros2 launch expects
+        now = time.monotonic()
+        self._sigterm_at = now + self._config.stop_grace_s
+        self._sigkill_at = (now + self._config.stop_grace_s
+                            + self._config.stop_term_grace_s)
 
     # ---- polling ---------------------------------------------------------------
     def _on_poll(self) -> None:
@@ -138,20 +165,78 @@ class PipelineLauncher(QObject):
             return
         code = self._proc.poll()
         if code is not None:
-            was_stopping = self._stop_deadline is not None
+            was_stopping = self._state is PipelineState.STOPPING
             self._proc = None
-            self._stop_deadline = None
+            self._sigterm_at = self._sigkill_at = None
             self._poll.stop()
-            self._signals.pipeline_state.emit(
-                "stopped" if (was_stopping or code == 0) else "error")
-            if not was_stopping and code != 0:
+            # THE invariant: after the launch tree is gone, nothing
+            # matching the pipeline patterns may survive.
+            self._sweep_leftovers()
+            if was_stopping or code == 0:
+                self._set_state(PipelineState.IDLE)
+            else:
+                self._set_state(PipelineState.ERROR)
                 self._signals.status_message.emit(
                     f"Pipeline exited unexpectedly (code {code}).")
+                self._set_state(PipelineState.IDLE)
             return
-        if (self._stop_deadline is not None
-                and time.monotonic() > self._stop_deadline):
-            try:  # graceful shutdown timed out — escalate
-                os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-            self._stop_deadline = None
+        if self._state is PipelineState.STOPPING:
+            now = time.monotonic()
+            if self._sigterm_at is not None and now > self._sigterm_at:
+                self._signal_group(signal.SIGTERM)
+                self._sigterm_at = None
+            elif self._sigkill_at is not None and now > self._sigkill_at:
+                self._signal_group(signal.SIGKILL)
+                self._sigkill_at = None
+
+    # ---- helpers ---------------------------------------------------------------
+    def _alive(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def _set_state(self, state: PipelineState) -> None:
+        self._state = state
+        # GUI consumers keep seeing the same strings as before; STOPPING
+        # is reported as "starting"-like busy? No: report it verbatim —
+        # the toolbar treats anything but "running" conservatively.
+        self._signals.pipeline_state.emit(state.value)
+
+    def _signal_group(self, sig: signal.Signals) -> None:
+        if self._proc is None:
+            return
+        try:
+            os.killpg(os.getpgid(self._proc.pid), sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def _sweep_leftovers(self, announce: bool = True) -> None:
+        """SIGTERM (then SIGKILL) every process matching the patterns."""
+        killed: List[str] = []
+        for pattern in self._config.leftover_process_patterns:
+            pids = self._pgrep(pattern)
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    killed.append(f"{pattern}[{pid}]")
+                except (ProcessLookupError, PermissionError):
+                    continue
+            if pids:
+                # Short synchronous grace, then hard-kill survivors. The
+                # sweep runs at most for ~0.5 s and only on stop/error.
+                time.sleep(0.5)
+                for pid in self._pgrep(pattern):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        continue
+        if killed and announce:
+            self._signals.status_message.emit(
+                "Cleaned up leftover processes: " + ", ".join(killed))
+
+    @staticmethod
+    def _pgrep(pattern: str) -> List[int]:
+        try:
+            out = subprocess.run(["pgrep", "-f", pattern],
+                                 capture_output=True, text=True, timeout=2.0)
+            return [int(p) for p in out.stdout.split()]
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return []

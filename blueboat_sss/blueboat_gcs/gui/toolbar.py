@@ -18,6 +18,7 @@ class AcquisitionToolbar(QToolBar):
 
     start_clicked = Signal()
     stop_clicked = Signal()
+    svlog_clicked = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__("Acquisition", parent)
@@ -35,6 +36,18 @@ class AcquisitionToolbar(QToolBar):
         self._stop_btn.clicked.connect(self.stop_clicked)
         self.addWidget(self._stop_btn)
 
+        # Recording sessions — only available while the pipeline runs.
+        # Ends with STOP acquisition, which finalizes the session folder.
+        self._svlog_btn = QPushButton("⏺  Start recording")
+        self._svlog_btn.setEnabled(False)
+        self._svlog_btn.setToolTip(
+            "Starts a recording session: enables .svlog logging in the\n"
+            "processor and, on STOP acquisition, gathers every artifact\n"
+            "(svlog, mosaic, waterfall, trajectory, detections, metadata)\n"
+            "into one session folder — one experiment = one folder.")
+        self._svlog_btn.clicked.connect(self._on_svlog_clicked)
+        self.addWidget(self._svlog_btn)
+
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.addWidget(spacer)
@@ -43,8 +56,18 @@ class AcquisitionToolbar(QToolBar):
         self._state_label.setObjectName("valueLabel")
         self.addWidget(self._state_label)
 
+    def _on_svlog_clicked(self) -> None:
+        # One session per pipeline run: re-enabled by the next 'running'.
+        self._svlog_btn.setEnabled(False)
+        self.svlog_clicked.emit()
+
+    def on_recording_state(self, active: bool) -> None:
+        self._svlog_btn.setText("⏺  Recording… (STOP ends the session)"
+                                if active else "⏺  Start recording")
+
     def on_pipeline_state(self, state: str) -> None:
         self._state_label.setText(f"pipeline: {state}")
-        running_ish = state in ("starting", "running")
-        self._start_btn.setEnabled(not running_ish)
-        self._stop_btn.setEnabled(running_ish)
+        busy = state in ("starting", "running", "stopping")
+        self._start_btn.setEnabled(not busy)
+        self._stop_btn.setEnabled(state in ("starting", "running"))
+        self._svlog_btn.setEnabled(state == "running")

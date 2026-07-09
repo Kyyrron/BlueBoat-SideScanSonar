@@ -13,24 +13,34 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QImage
-from PySide6.QtWidgets import QDockWidget, QMainWindow, QScrollArea
+from PySide6.QtWidgets import (QDockWidget, QMainWindow, QScrollArea,
+                               QStackedWidget)
 
 from ..config.settings import AppConfig
 from ..core.mosaic_service import MosaicService
+from ..core.recording_session import RecordingManager
 from ..core.signals import AppSignals
+from ..core.waterfall_service import WaterfallService
 from ..mapping.coordinate_converter import CoordinateConverter
 from ..mapping.tiles import TileFetcher
 from ..models.detection import Detection, PingerFix
+from ..models.path import PlannedPath
 from ..models.robot_state import RobotState
+from ..models.sonar import SonarPing
 from . import left_panel as lp
+from . import right_panel as rp
 from .left_panel import LeftPanel
 from .map_layers import (DetectionLayer, MeasureLayer, MosaicLayer,
-                         PingerLayer, TileLayer, TrajectoryLayer)
+                         PingerLayer, PlannedPathLayer, SwathLayer,
+                         TileLayer, TrajectoryLayer)
 from .map_view import MapMode, MapView
 from .right_panel import RightPanel
 from .toolbar import AcquisitionToolbar
+from .waterfall_view import WaterfallView
 
 
 class MainWindow(QMainWindow):
@@ -51,10 +61,32 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("BlueBoat GCS — Side-Scan Sonar Survey")
         self.resize(1500, 950)
 
-        # ---- central map + layers -------------------------------------------
+        # ---- central: stacked Mosaic view / Waterfall view --------------------
         self.map_view = MapView()
-        self.setCentralWidget(self.map_view)
+        self.waterfall_view = WaterfallView()
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self.map_view)        # index 0 = VIEW_MOSAIC
+        self._stack.addWidget(self.waterfall_view)  # index 1 = VIEW_WATERFALL
+        self.setCentralWidget(self._stack)
         scene = self.map_view.scene()
+
+        self.waterfall_service = WaterfallService(config)
+        self.recording = RecordingManager(config, signals,
+                                          mosaic_service,
+                                          self.waterfall_service)
+
+        # Telemetry staleness watchdog (robot synchronization): if no
+        # RobotState arrives for a while — pipeline stopped, mavros down,
+        # radio dropout — the marker dims and a trajectory break is armed
+        # so that WHENEVER messages resume (START pressed or not) the
+        # pose re-syncs instantly with no phantom segment.
+        self._telemetry_stale = False
+        self._last_state_walltime: Optional[float] = None
+        self._stale_after_s = 3.0
+        self._watchdog = QTimer(self)
+        self._watchdog.setInterval(1000)
+        self._watchdog.timeout.connect(self._check_telemetry_staleness)
+        self._watchdog.start()
 
         self.converter = CoordinateConverter(config.map.frame_yaw_offset_deg)
         tile_url = (config.map.satellite_url if config.map.use_satellite
@@ -65,6 +97,8 @@ class MainWindow(QMainWindow):
         self.tile_layer = TileLayer(scene, self._tile_fetcher, self.converter)
         self.mosaic_layer = MosaicLayer(scene)
         self.trajectory_layer = TrajectoryLayer(scene)
+        self.planned_path_layer = PlannedPathLayer(scene)
+        self.swath_layer = SwathLayer(scene)
         self.detection_layer = DetectionLayer(scene)
         self.pinger_layer = PingerLayer(scene)
         self.measure_layer = MeasureLayer(scene)
@@ -106,13 +140,18 @@ class MainWindow(QMainWindow):
 
         # Data streams (queued from the ROS thread) -> services & layers.
         s.sonar_ping.connect(self._mosaic_service.on_sonar_ping)
+        s.sonar_ping.connect(self.waterfall_service.on_sonar_ping)
+        s.sonar_ping.connect(self._on_sonar_ping_gui)
         s.robot_state.connect(self._on_robot_state)
         s.detection.connect(self._on_detection)
         s.pinger_fix.connect(self._on_pinger)
+        s.planned_path.connect(self._on_planned_path)
         s.pipeline_state.connect(self.toolbar.on_pipeline_state)
         s.status_message.connect(
             lambda msg: self.statusBar().showMessage(msg, 8000))
         self._mosaic_service.raster_updated.connect(self._on_raster)
+        self.waterfall_service.image_updated.connect(
+            self.waterfall_view.on_image)
 
         # Map interactions.
         self.map_view.point_clicked.connect(self._on_point_clicked)
@@ -128,17 +167,50 @@ class MainWindow(QMainWindow):
         self.right_panel.zoom_out_clicked.connect(self.map_view.zoom_out)
         self.right_panel.center_robot_clicked.connect(self._center_robot)
         self.right_panel.measure_toggled.connect(self._on_measure_toggled)
+        self.right_panel.view_mode_changed.connect(self._on_view_mode)
+        self.right_panel.priority_changed.connect(
+            self._mosaic_service.set_priority_mode)
+        self.right_panel.priority_changed.connect(
+            self.recording.note_priority_mode)
+        self.right_panel.display_changed.connect(self._on_display_changed)
+        self.right_panel.clear_overlays_clicked.connect(
+            self._on_clear_overlays)
+        self.right_panel.clear_sss_clicked.connect(self._on_clear_sss)
+        self.right_panel.sss_opacity_changed.connect(
+            self.mosaic_layer.set_opacity)
+        self._mosaic_service.cleared.connect(self.mosaic_layer.clear)
+        self.recording.recording_state.connect(
+            self.toolbar.on_recording_state)
 
         # Bottom toolbar.
         self.toolbar.start_clicked.connect(self._on_start)
         self.toolbar.stop_clicked.connect(self._on_stop)
+        self.toolbar.svlog_clicked.connect(self._on_svlog)
 
     # ---- data slots (GUI thread) ---------------------------------------------------
     def _on_raster(self, image: QImage, extent: tuple, cell: float) -> None:
         self.mosaic_layer.update(image, extent, cell)
 
+    def _on_sonar_ping_gui(self, ping: SonarPing) -> None:
+        # Sonar range line: extent taken from the actual samples, so it
+        # tracks the current sonar configuration automatically.
+        if ping.y_local.size:
+            self.swath_layer.update(ping.robot_x, ping.robot_y, ping.yaw,
+                                    float(np.abs(ping.y_local).max()))
+
+    def _on_planned_path(self, path: PlannedPath) -> None:
+        # A new message fully replaces the previously displayed path.
+        self.planned_path_layer.set_path(path.points)
+
     def _on_robot_state(self, state: RobotState) -> None:
         self._last_robot_state = state
+        self._last_state_walltime = time.monotonic()
+        if self._telemetry_stale:
+            # Telemetry resumed: the break armed by the watchdog makes
+            # this pose start a fresh polyline segment — instant re-sync.
+            self._telemetry_stale = False
+            self.trajectory_layer.set_stale(False)
+            self.statusBar().showMessage("Telemetry resumed.", 4000)
         self.left_panel.on_robot_state(state)
         self.trajectory_layer.add_pose(state.x, state.y, state.yaw)
         # Bind the GPS origin exactly once, on the first full state.
@@ -155,6 +227,72 @@ class MainWindow(QMainWindow):
 
     def _on_pinger(self, fix: PingerFix) -> None:
         self.pinger_layer.update(fix)
+
+    # ---- view mode / display -----------------------------------------------------
+    def _on_view_mode(self, mode: str) -> None:
+        waterfall = (mode == rp.VIEW_WATERFALL)
+        self._stack.setCurrentWidget(self.waterfall_view if waterfall
+                                     else self.map_view)
+        # The waterfall renders only while shown (saves a raster pipeline
+        # when the operator lives in the mosaic view, and vice versa the
+        # mosaic layers keep updating cheaply in the background).
+        self.waterfall_service.set_enabled(waterfall)
+
+    def _check_telemetry_staleness(self) -> None:
+        if self._telemetry_stale or self._last_state_walltime is None:
+            return
+        if time.monotonic() - self._last_state_walltime > self._stale_after_s:
+            self._telemetry_stale = True
+            self.trajectory_layer.set_stale(True)
+            self.trajectory_layer.begin_new_segment()
+            self._mosaic_service.reset_tracking()  # no interp across gaps
+            self.statusBar().showMessage(
+                "No telemetry — displayed robot pose is stale.", 6000)
+
+    def _on_display_changed(self, settings) -> None:
+        # One settings object drives both views identically.
+        self._mosaic_service.set_display(settings)
+        self.waterfall_service.set_display(settings)
+        self.recording.note_display_settings(settings)
+
+    def _on_clear_sss(self) -> None:
+        """'Clear SSS data': sonar data only; every other layer, the map
+        position and the zoom level are untouched (nothing here touches
+        the view transform). New pings keep accumulating immediately."""
+        self._mosaic_service.clear()          # emits cleared -> layer wipes
+        self.waterfall_service.clear()        # emits null image -> view wipes
+        self.statusBar().showMessage(
+            "SSS data cleared — overlays, map position and zoom preserved.",
+            8000)
+
+    # ---- overlay clearing ----------------------------------------------------------
+    def _on_clear_overlays(self) -> None:
+        """'Clear currently displayed data': clears every overlay that is
+        *currently shown*, preserves the mosaic and any hidden overlay,
+        and keeps displaying newly received data immediately."""
+        cleared = []
+        if self.left_panel.is_layer_enabled(lp.LAYER_TRAJECTORY):
+            self.trajectory_layer.clear()
+            cleared.append("trajectory")
+        if self.left_panel.is_layer_enabled(lp.LAYER_DETECTIONS):
+            self.detection_layer.clear()
+            self.left_panel.reset_detections()
+            cleared.append("detections")
+        if self.left_panel.is_layer_enabled(lp.LAYER_PINGER):
+            self.pinger_layer.clear()
+            cleared.append("pinger")
+        if self.left_panel.is_layer_enabled(lp.LAYER_PLANNED_PATH):
+            self.planned_path_layer.clear()
+            cleared.append("planned path")
+        # Measurements and the range line have no visibility checkbox:
+        # they are on screen, hence "currently displayed" -> cleared.
+        self.measure_layer.clear()
+        self.right_panel.set_measure_active(False)
+        self.swath_layer.clear()
+        cleared.append("measurements")
+        self.statusBar().showMessage(
+            "Cleared: " + ", ".join(cleared)
+            + ".  Mosaic and hidden overlays preserved.", 8000)
 
     # ---- map interaction slots -------------------------------------------------------
     def _on_point_clicked(self, x: float, y: float) -> None:
@@ -200,11 +338,14 @@ class MainWindow(QMainWindow):
     def _on_layer_toggled(self, key: str, on: bool) -> None:
         if key == lp.LAYER_SATELLITE:
             self.tile_layer.set_visible(on)
-            self.mosaic_layer.set_opacity(0.85 if on else 1.0)
             if on:
                 self._refresh_tiles()
         elif key == lp.LAYER_TRAJECTORY:
             self.trajectory_layer.set_visible(on)
+        elif key == lp.LAYER_PLANNED_PATH:
+            self.planned_path_layer.set_visible(on)
+        elif key == lp.LAYER_SWATH:
+            self.swath_layer.set_visible(on)
         elif key == lp.LAYER_PINGER:
             self.pinger_layer.set_visible(on)
         elif key == lp.LAYER_DETECTIONS:
@@ -215,16 +356,33 @@ class MainWindow(QMainWindow):
     # ---- acquisition ---------------------------------------------------------------------
     def _on_start(self) -> None:
         self._mission_start = time.monotonic()
-        self.trajectory_layer.clear()  # "trajectory since START"
+        # Robot-state reset (as if the application had just been launched),
+        # while PRESERVING the displayed trajectory: forget the cached pose
+        # and break the track polyline so that, if the boat moved while
+        # acquisition was stopped, no phantom segment joins the old and new
+        # positions. The marker re-syncs on the very next ROS message.
+        self._last_robot_state = None
+        self.trajectory_layer.begin_new_segment()
+        self._mosaic_service.reset_tracking()  # no interp across the break
+        self.swath_layer.clear()          # redrawn by the first new ping
         self._acquisition.start()
+
+    def _on_svlog(self) -> None:
+        # PipelineLauncher publishes true once on the log/enable topic
+        # (Simulator: status-message stub) and a recording session opens.
+        self._acquisition.start_svlog_recording()
+        self.recording.begin()
 
     def _on_stop(self) -> None:
         self._acquisition.stop()
         self._mission_start = None
-        saved = self._mosaic_service.save()
+        if self.recording.active:
+            # One experiment = one folder: the session gathers everything.
+            saved = self.recording.end()
+        else:
+            saved = self._mosaic_service.save()   # legacy quick-save
         if saved is not None:
-            self.statusBar().showMessage(f"Mosaic + trajectory saved to {saved}",
-                                         15000)
+            self.statusBar().showMessage(f"Saved to {saved}", 15000)
 
     def _update_mission_time(self) -> None:
         self.left_panel.set_mission_time(
@@ -234,5 +392,8 @@ class MainWindow(QMainWindow):
     # ---- shutdown --------------------------------------------------------------------------
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self._acquisition.stop()
-        self._mosaic_service.save()
+        if self.recording.active:
+            self.recording.end()
+        elif self._mosaic_service.has_data:
+            self._mosaic_service.save()
         super().closeEvent(event)

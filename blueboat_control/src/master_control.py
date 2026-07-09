@@ -318,7 +318,17 @@ class Controller(Node):
             if self.controller_type == 'PID':
                 target = cf.compute_target(self.controller_path, self.dt)
                 u,_ = self.controller.compute(current_state, target[:3])
-                self.get_logger().info(f'\nState: {current_state} \n Target: {target} \nThrust: {u}')
+                #self.get_logger().info(f'\nState: {current_state} \n Target: {target} \nThrust: {u}')
+                target_str = ", ".join(f"{float(x):.2f}" for x in target)
+                thrust_str = np.array2string(
+                    u,
+                    formatter={'float_kind': lambda x: f"{x:.2f}"}
+                )
+
+                self.get_logger().info(
+                    f"\nTarget: [{target_str}]\n"
+                    f"Thrust: {thrust_str}"
+                )
 
             if self.controller_type == 'LoS':
                 target = cf.compute_target(self.controller_path, self.dt)
@@ -346,7 +356,8 @@ class Controller(Node):
         msg.data = u
         self.thruster_input_publisher.publish(msg)
 
-        self.get_logger().info(f'Pinger coordinates: {self.pinger_target}')
+        if self.pinger_target is not None:
+            self.get_logger().info(f'Pinger coordinates: {self.pinger_target}')
         # self.get_logger().info(f'Pose: {self.current_pose} \nTwist: {self.current_twist} \nComputed thrust: {u}')
 
         # Update and save monitoring metrics to be graphed later

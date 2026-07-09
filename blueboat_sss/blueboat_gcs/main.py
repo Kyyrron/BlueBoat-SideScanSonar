@@ -55,6 +55,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         if ros_manager.start() and ros_manager.node is not None:
             # Listener construction = subscription registration.
             from .ros.detections_listener import DetectionsListener
+            from .ros.path_listener import PathListener
             from .ros.pinger_listener import PingerListener
             from .ros.sonar_listener import SonarListener
             from .ros.telemetry_listener import TelemetryListener
@@ -63,6 +64,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             TelemetryListener(node, signals, config.topics)
             DetectionsListener(node, signals, config.topics.detections)
             PingerListener(node, signals, config.topics.pinger)
+            PathListener(node, signals, config.topics.planned_path)
 
     window = MainWindow(config, signals, mosaic_service, acquisition)
     window.show()

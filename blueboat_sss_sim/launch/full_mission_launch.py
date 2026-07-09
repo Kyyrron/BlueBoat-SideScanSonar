@@ -54,6 +54,10 @@ _NOISY_SNIPPETS = (
     "publisher: beginning loop",
     "publishing #",
     "signal_handler(signum",
+    "The root link blueboat/base_link has an inertia specified in the URDF",
+    "Waiting messages on topic [robot_description]",
+    "Entity creation successful",
+    "Passing message from ROS",
 )
 
 

@@ -29,6 +29,7 @@ class AppSignals(QObject):
     robot_state = Signal(object)       # models.robot_state.RobotState
     detection = Signal(object)         # models.detection.Detection
     pinger_fix = Signal(object)        # models.detection.PingerFix
+    planned_path = Signal(object)      # models.path.PlannedPath (replaces previous)
 
     # --- geo referencing ----------------------------------------------------
     origin_bound = Signal(float, float)  # (lat0, lon0) once local<->GPS is known
