@@ -39,6 +39,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import threading
 import time
 from enum import Enum
 from typing import List, Optional
@@ -103,8 +104,9 @@ class PipelineLauncher(QObject):
         try:
             self._proc = subprocess.Popen(
                 cmd,
-                #stdout=subprocess.DEVNULL,
-                #stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,        # pumped into the console
+                stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
                 start_new_session=True,  # own group: signal the whole tree
             )
         except (OSError, FileNotFoundError) as exc:
@@ -114,32 +116,51 @@ class PipelineLauncher(QObject):
                 f"Failed to launch pipeline ({' '.join(cmd)}): {exc}")
             self._set_state(PipelineState.IDLE)
             return
+        threading.Thread(target=self._pump_output, args=(self._proc,),
+                         daemon=True).start()
         self._poll.start()
         QTimer.singleShot(int(self._config.start_delay_s * 1000),
                           self._enable_acquisition)
 
+    def _pump_output(self, proc: subprocess.Popen) -> None:
+        """Forward the launch tree's stdout/stderr to the console — this
+        is how raw prints from sss_processor_node reach the operator
+        without an external terminal (ROS-logger messages additionally
+        arrive via the /rosout subscription in ros_manager)."""
+        try:
+            for line in proc.stdout:            # ends when the pipe closes
+                line = line.rstrip()
+                if line:
+                    self._signals.log_line.emit("processor", line)
+        except (ValueError, OSError):            # pragma: no cover
+            pass
+
     def _enable_acquisition(self) -> None:
+        # New lifecycle: bring-up completed = pipeline "running", but
+        # pinging is NOT enabled here — the START button does that.
         if self._state is not PipelineState.STARTING or not self._alive():
             return
-        if self._config.publish_ping_enable:
-            self._ros.publish_ping_enable(True)  # sss pinging visible in app
-        if self._config.enable_svlog_on_start:
-            self._ros.publish_svlog_enable(True)
         self._set_state(PipelineState.RUNNING)
-        self._signals.status_message.emit("Acquisition running.")
+        self._signals.status_message.emit(
+            "Processing pipeline up — press START for live acquisition.")
 
-    def start_svlog_recording(self) -> None:
-        """Publish `true` once on the processor's log/enable topic.
+    def enable_pinging(self) -> None:
+        """START button: begin firing the sonar (no node restart)."""
+        if self._config.publish_ping_enable:
+            self._ros.publish_ping_enable(True)
 
-        Equivalent to:
-            ros2 topic pub --once /sss_processor/log/enable \
-                std_msgs/msg/Bool 'data: true'
-        """
-        if not self.running:
+    def disable_pinging(self) -> None:
+        if self._config.publish_ping_enable:
+            self._ros.publish_ping_enable(False)
+
+    def set_recording(self, on: bool) -> None:
+        """Record ON/OFF: publish log_enable on the processor's topic
+        (equivalent to `ros2 topic pub --once ... std_msgs/msg/Bool`)."""
+        if not self.running and on:
             self._signals.status_message.emit(
                 "Recording: pipeline is not running.")
             return
-        self._ros.publish_svlog_enable(True)
+        self._ros.publish_svlog_enable(on)
 
     def stop(self) -> None:
         # Stop firing + close any .svlog immediately, in every state.

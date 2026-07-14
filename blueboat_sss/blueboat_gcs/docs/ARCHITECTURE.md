@@ -167,16 +167,39 @@ turn-region coverage ×2.1, gradient noise p95 −17 % with target edges preserv
 cost 0.43 ms per full-resolution ping (28 Hz required, ~2300 Hz capacity).
 `mosaic.densify` / `mosaic.bilinear_splat` restore the legacy path for A/B studies.
 
-### 2.13 Acquisition state machine & recording sessions (update)
-The launcher (`ros/pipeline_launcher.py`) is an explicit state machine
-(IDLE→STARTING→RUNNING→STOPPING→IDLE/ERROR) with a SIGINT→SIGTERM→SIGKILL escalation
-ladder and an unconditional **leftover sweep** (pgrep patterns, default
-`sss_processor_node`) after the launch tree exits and before every start — the
-invariant that makes arbitrarily many Start/Stop cycles safe even if `ros2 launch`
-failed to forward shutdown (the root cause of orphaned processor nodes). Recording is
-session-based (`core/recording_session.py`): "Start recording" opens a session,
-STOP acquisition finalizes one self-contained folder (mosaic, waterfall raw+PNG,
-trajectory, detections, adopted .svlog, metadata.json) — one experiment = one folder.
+### 2.13 Acquisition lifecycle, recording sessions & console (update)
+Lifecycle: the processing pipeline (`sss_processor_node`) is launched **at
+application startup** by the launcher state machine
+(IDLE→STARTING→RUNNING→STOPPING→IDLE/ERROR, SIGINT→SIGTERM→SIGKILL escalation,
+unconditional leftover sweep via pgrep patterns). **START** only enables pinging +
+the live-visualization gate (no node restart); **STOP** disables pinging, closes an
+active recording session and terminates the nodes (START relaunches them).
+Visualization layers all start disabled. Recording is independent: **Record ON**
+publishes log_enable and opens a session; **Record OFF** (or STOP / app close)
+finalizes one self-contained folder (mosaic, waterfall raw+PNG, trajectory,
+detections, adopted .svlog, metadata.json). Nothing is exported unless a session was
+active.
+
+The embedded console (`gui/log_console.py`, bottom dock, toolbar toggle) shows
+everything textual so no external terminal is needed: `core/logging_bus.py` tees
+stdout/stderr + the `logging` module; `ros_manager` subscribes `/rosout`
+(rcl_interfaces/Log — logger output of *all* nodes incl. the processor); the
+launcher pumps the launch subprocess's raw stdout/stderr through a reader thread.
+
+Live plots: `gui/live_plot.py` is a reusable bounded scrolling y(t) widget (deque +
+paintEvent, repaint coalescing, autoscale hysteresis); "Robot Altitude" (fed by
+`water_depth` of each ProcessedSSSPing) is its first instance — future plots are one
+more instance + one signal connection.
+
+### 2.14 Robot-state robustness (update)
+Three independent layers guarantee the displayed pose always re-syncs after
+localization dropouts: (1) telemetry throttling uses the **wall clock**, never
+message stamps (replayed/sim stamps that jump backwards previously froze the robot
+until the stamps "returned"); (2) the staleness watchdog dims the marker and arms a
+trajectory break after 3 s without RobotState, whether or not START is involved;
+(3) `TrajectoryLayer.add_pose` starts a new polyline segment on any pose jump
+> 5 m — a stateless safety net, so recovery (teleporting arrow, no phantom line)
+cannot depend on any state machine being in the right state.
 
 ## 3. Module map
 
@@ -188,12 +211,13 @@ trajectory, detections, adopted .svlog, metadata.json) — one experiment = one 
 | `core/mosaic_service.py` | ping ingestion (via rasterizer), priority mode, throttled rendering, clear, save |
 | `core/waterfall_service.py` | ring buffer of raw pings, throttled waterfall rendering, clear, export |
 | `core/recording_session.py` | recording sessions: one experiment = one folder |
+| `core/logging_bus.py` | stdout/stderr/logging capture -> embedded console |
 | `models/` | ROS-free dataclasses: `SonarPing`, `RobotState`, `Detection`, `PingerFix`, `PlannedPath` |
 | `ros/ros_manager.py` | rclpy lifecycle in a background thread; enable-topic publishers; graceful no-ROS degradation |
 | `ros/sonar_listener.py` | `/sss_processor/processed` → `SonarPing` |
 | `ros/telemetry_listener.py` | odom + NavSatFix + compass + VfrHud → `RobotState` (5 Hz) |
 | `ros/detections_listener.py` | **placeholder** — AI detections integration point |
-| `ros/pinger_listener.py` | **placeholder** — USBL integration point |
+| `ros/pinger_listener.py` | USBL pinger (Float32MultiArray [x, y] on /blueboat/pinger_coordinates) |
 | `ros/path_listener.py` | planned mission path (`nav_msgs/Path` from path_publisher.py) |
 | `ros/pipeline_launcher.py` | acquisition state machine, shutdown escalation, leftover sweep |
 | `mapping/mosaic.py` | reused `MosaicGrid` + `project_to_world` + priority planes + bilinear splat |
@@ -206,6 +230,8 @@ trajectory, detections, adopted .svlog, metadata.json) — one experiment = one 
 | `gui/map_view.py` | pan/zoom/click/measure; adaptive grid |
 | `gui/map_layers.py` | tile/mosaic/planned-path/swath/trajectory/detection/pinger/measure layers |
 | `gui/waterfall_view.py` | interactive waterfall (zoom / scroll / pin-to-newest) |
+| `gui/log_console.py` | embedded application console (bottom dock) |
+| `gui/live_plot.py` | reusable real-time scrolling plot ("Robot Altitude", …) |
 | `gui/left_panel.py`, `gui/right_panel.py`, `gui/toolbar.py`, `gui/widgets.py`, `gui/theme.py` | panels, tools, dark theme |
 | `sim/simulator.py` | ROS-free data source |
 | `launch/SSS_processing_launch.py` | processor-only launch file for START |

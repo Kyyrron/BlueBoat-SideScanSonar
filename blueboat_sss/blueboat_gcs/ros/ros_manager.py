@@ -63,6 +63,7 @@ class RosManager:
             Bool, self._config.topics.ping_enable, 10)
         self._svlog_pub = self._node.create_publisher(
             Bool, self._config.topics.svlog_enable, 10)
+        self._subscribe_rosout()
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
         self._thread = threading.Thread(
@@ -70,6 +71,30 @@ class RosManager:
         self._thread.start()
         self._signals.ros_connected.emit(True)
         return True
+
+    def _subscribe_rosout(self) -> None:
+        """ROS 2 log messages from ALL nodes -> embedded console.
+
+        /rosout (rcl_interfaces/Log) carries every node's logger output,
+        including sss_processor_node's — so the operator sees ROS logs
+        without an external terminal. Our own node is filtered out to
+        avoid duplicating lines already captured by the logging bus.
+        """
+        try:
+            from rcl_interfaces.msg import Log
+        except ImportError:                        # pragma: no cover
+            return
+        _LEVELS = {10: "DEBUG", 20: "INFO", 30: "WARN",
+                   40: "ERROR", 50: "FATAL"}
+
+        def on_log(msg: "Log") -> None:
+            if msg.name == "blueboat_gcs":
+                return
+            level = _LEVELS.get(int(msg.level), str(msg.level))
+            self._signals.log_line.emit(
+                "rosout", f"[{level}] {msg.name}: {msg.msg}")
+
+        self._node.create_subscription(Log, "/rosout", on_log, 50)
 
     def _spin(self) -> None:
         try:

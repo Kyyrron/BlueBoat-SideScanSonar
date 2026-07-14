@@ -140,12 +140,10 @@ class MosaicService(QObject):
         """Write mosaic .npz/.png + trajectory/depth CSV into ``target``."""
         if self._t_first is None:
             return None
-        metadata_target = target / "metadata"
         target.mkdir(parents=True, exist_ok=True)
-        metadata_target.mkdir(parents=True, exist_ok=True)
-        self._grid.save(log_root=target, metadata_root=metadata_target)  # raw data only, never interpolated
+        self._grid.save(target)  # raw data only, never interpolated
         import csv
-        with open(metadata_target / "boat_trajectory.csv", "w", newline="") as f:
+        with open(target / "boat_trajectory.csv", "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(["t_since_first_s", "x_m", "y_m", "depth_m"])
             for t, (x, y), z in zip(self._depth_t, self._traj, self._depth_z):
@@ -156,6 +154,5 @@ class MosaicService(QObject):
         """Legacy quick-save into data_root/<date> (used when no recording
         session is active — sessions call save_into on their own folder)."""
         stamp = datetime.today().strftime("%Y_%m_%d-%H_%M")
-        name = "quick_save_" + stamp
         return self.save_into(
-            Path(self._config.data_root).expanduser() / name)
+            Path(self._config.data_root).expanduser() / stamp)

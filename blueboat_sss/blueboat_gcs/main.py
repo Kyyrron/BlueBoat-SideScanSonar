@@ -41,6 +41,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     signal.signal(signal.SIGINT, signal.SIG_DFL)  # Ctrl-C closes the app
 
     signals = AppSignals()
+    # Route print()/logging into the embedded console before anything
+    # else runs, so startup output is captured too.
+    from .core import logging_bus
+    logging_bus.install(signals)
     mosaic_service = MosaicService(config)
 
     ros_manager = None
@@ -68,10 +72,17 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     window = MainWindow(config, signals, mosaic_service, acquisition)
     window.show()
+    # Acquisition lifecycle: the processing pipeline is launched
+    # automatically at startup (sss_processor_node in field mode; the
+    # simulator's telemetry in --sim). Visualization layers stay off and
+    # no recording session is active — START enables live acquisition.
+    acquisition.start()
     code = app.exec()
 
     if ros_manager is not None:
         ros_manager.shutdown()
+    from .core import logging_bus
+    logging_bus.uninstall()
     return code
 
 

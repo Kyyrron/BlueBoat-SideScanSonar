@@ -5,12 +5,13 @@ from __future__ import annotations
 from typing import Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox,
+from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox,
                                QHBoxLayout, QLabel, QPushButton, QSlider,
                                QVBoxLayout, QWidget)
 
 from ..mapping.mosaic import PRIORITY_MODES
 from ..mapping.renderer import DisplaySettings, lut_names
+from .live_plot import LivePlot
 from .widgets import CoordinateCard
 
 #: View-mode identifiers (QStackedWidget pages in MainWindow).
@@ -38,6 +39,17 @@ class RightPanel(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(10)
+
+        # ---- live plots (top of the panel) ----------------------------------------
+        # Modular: any future live plot is one more LivePlot instance fed
+        # from a bus signal in main_window (speed, SNR, ping rate, ...).
+        alt_box = QGroupBox("Robot Altitude")
+        al = QVBoxLayout(alt_box)
+        al.setContentsMargins(4, 4, 4, 4)
+        self.altitude_plot = LivePlot(title="water depth under boat",
+                                      unit="m", window_s=60.0)
+        al.addWidget(self.altitude_plot)
+        root.addWidget(alt_box)
 
         # ---- view mode ---------------------------------------------------------
         view_box = QGroupBox("View")
@@ -125,16 +137,13 @@ class RightPanel(QWidget):
             "Oldest (first pass), Newest (last pass).")
         form.addRow("Priority", self._priority)
 
-        self._auto = QCheckBox("Auto dynamic range (2–98 %)")
-        self._auto.setChecked(True)
-        form.addRow(self._auto)
-
-        self._vmin = self._slider(-90, 0, -60)
-        self._vmax = self._slider(-90, 0, -10)
-        self._vmin_lbl, self._vmax_lbl = QLabel(), QLabel()
-        form.addRow("Min", self._wrap(self._vmin, self._vmin_lbl, "dB"))
-        form.addRow("Max", self._wrap(self._vmax, self._vmax_lbl, "dB"))
-
+        # Dynamic range is ALWAYS derived from the data (percentiles).
+        # The former manual min/max dB sliders were removed: real
+        # Omniscan data (uint16 pwr_results, per-gain min/max_pwr_db
+        # spanning e.g. +7..+64 dB) makes any fixed dB window meaningless
+        # across gain settings; the percentile scheme adapts by design,
+        # and Contrast/Brightness below give the operator the same
+        # practical control without unit assumptions.
         self._gamma = self._slider(30, 300, 100)     # /100 -> 0.3 … 3.0
         self._gamma_lbl = QLabel()
         form.addRow("Contrast", self._wrap(self._gamma, self._gamma_lbl))
@@ -158,8 +167,7 @@ class RightPanel(QWidget):
         self._cmap.currentTextChanged.connect(self._emit_display)
         self._priority.currentIndexChanged.connect(
             lambda i: self.priority_changed.emit(self._priority.itemData(i)))
-        self._auto.toggled.connect(self._emit_display)
-        for s in (self._vmin, self._vmax, self._gamma, self._bright):
+        for s in (self._gamma, self._bright):
             s.valueChanged.connect(self._emit_display)
         reset.clicked.connect(self._reset_display)
         self._emit_display()
@@ -188,9 +196,6 @@ class RightPanel(QWidget):
     def _reset_display(self) -> None:
         d = DisplaySettings()
         self._cmap.setCurrentText(d.colormap)
-        self._auto.setChecked(d.auto_range)
-        self._vmin.setValue(int(d.vmin_db))
-        self._vmax.setValue(int(d.vmax_db))
         self._gamma.setValue(int(d.gamma * 100))
         self._bright.setValue(int(d.brightness * 100))
         self._opacity.setValue(100)
@@ -201,24 +206,14 @@ class RightPanel(QWidget):
         self.sss_opacity_changed.emit(value / 100.0)
 
     def _emit_display(self, *_args) -> None:
-        auto = self._auto.isChecked()
-        for s in (self._vmin, self._vmax):
-            s.setEnabled(not auto)
-        vmin, vmax = self._vmin.value(), self._vmax.value()
-        if vmin >= vmax:                      # keep the window well-formed
-            vmax = vmin + 1
-            self._vmax.blockSignals(True)
-            self._vmax.setValue(vmax)
-            self._vmax.blockSignals(False)
-        self._vmin_lbl.setText(f"{vmin} dB")
-        self._vmax_lbl.setText(f"{vmax} dB")
         gamma = self._gamma.value() / 100.0
         bright = self._bright.value() / 100.0
         self._gamma_lbl.setText(f"{gamma:.2f}")
         self._bright_lbl.setText(f"{bright:+.2f}")
+        # auto_range is always true: the dynamic range is derived from
+        # the data percentiles (see comment in _build_display_box).
         self.display_changed.emit(DisplaySettings(
-            auto_range=auto, vmin_db=float(vmin), vmax_db=float(vmax),
-            gamma=gamma, brightness=bright,
+            auto_range=True, gamma=gamma, brightness=bright,
             colormap=self._cmap.currentText()))
 
     # ---- slots -----------------------------------------------------------------

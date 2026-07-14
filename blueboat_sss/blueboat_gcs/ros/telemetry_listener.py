@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import math
 import threading
+import time
 from typing import Optional
 
 from nav_msgs.msg import Odometry
@@ -93,10 +94,17 @@ class TelemetryListener:
             self._speed = float(msg.groundspeed)
 
     def _on_odom(self, msg: Odometry) -> None:
-        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        if t - self._last_emit_t < 1.0 / EMIT_HZ:
+        # Throttle on the WALL clock, never on message stamps: replayed
+        # bags, sim time, or a restarted publisher can carry stamps that
+        # jump backwards, and a stamp-based throttle would then silently
+        # reject every message until the stamps caught up with the last
+        # seen value (robot frozen until it "returns" to its previous
+        # time). monotonic() is immune to all of that.
+        now = time.monotonic()
+        if now - self._last_emit_t < 1.0 / EMIT_HZ:
             return
-        self._last_emit_t = t
+        self._last_emit_t = now
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         q = msg.pose.pose.orientation
         yaw = quat_to_yaw(q.x, q.y, q.z, q.w)
         with self._lock:

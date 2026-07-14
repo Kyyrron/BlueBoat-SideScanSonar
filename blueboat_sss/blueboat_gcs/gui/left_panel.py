@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Dict, Optional
 
 from PySide6.QtCore import Qt, Signal
@@ -39,13 +40,16 @@ class LeftPanel(QWidget):
         vis_box = QGroupBox("Layers")
         vis_layout = QVBoxLayout(vis_box)
         self._checks: Dict[str, QCheckBox] = {}
+        # All visualization layers start DISABLED (acquisition-lifecycle
+        # spec): the operator enables what the experiment needs. The SSS
+        # mosaic itself is not a toggle — it appears with START.
         for key, label, default in (
-            (LAYER_SATELLITE, "Satellite layer", True),
-            (LAYER_TRAJECTORY, "Robot trajectory", True),
-            (LAYER_PLANNED_PATH, "Planned mission path", True),
-            (LAYER_SWATH, "Sonar range line", True),
-            (LAYER_PINGER, "USBL pinger", True),
-            (LAYER_DETECTIONS, "AI detections", True),
+            (LAYER_SATELLITE, "Satellite layer", False),
+            (LAYER_TRAJECTORY, "Robot trajectory", False),
+            (LAYER_PLANNED_PATH, "Planned mission path", False),
+            (LAYER_SWATH, "Sonar range line", False),
+            (LAYER_PINGER, "USBL pinger", False),
+            (LAYER_DETECTIONS, "AI detections", False),
             (LAYER_INTERPOLATION, "Interpolation", False),
         ):
             cb = QCheckBox(label)
@@ -88,6 +92,18 @@ class LeftPanel(QWidget):
         form.addRow("Mission", self._mission_time)
         root.addWidget(robot_box)
 
+        # ---- pinger ---------------------------------------------------------------
+        pinger_box = QGroupBox("Pinger")
+        pform = QFormLayout(pinger_box)
+        pform.setLabelAlignment(Qt.AlignRight)
+        self._pinger_world = self._value_label()
+        self._pinger_dist = self._value_label()
+        pform.addRow("World", self._pinger_world)
+        pform.addRow("Robot", self._pinger_dist)
+        root.addWidget(pinger_box)
+        self._pinger_xy: Optional[tuple] = None
+        self._robot_xy: Optional[tuple] = None
+
         # ---- selected point ------------------------------------------------------
         sel_box = QGroupBox("Selected point")
         sel_layout = QVBoxLayout(sel_box)
@@ -117,6 +133,24 @@ class LeftPanel(QWidget):
             self._heading.setText(f"{state.heading_deg:.1f}°")
         if state.speed_mps is not None:
             self._speed.setText(f"{state.speed_mps:.2f} m/s")
+        self._robot_xy = (state.x, state.y)
+        self._refresh_pinger_distance()
+
+    def on_pinger(self, x: float, y: float) -> None:
+        """Live pinger information (world coordinates + robot distance)."""
+        self._pinger_xy = (x, y)
+        self._pinger_world.setText(f"x {x:+.2f} m   y {y:+.2f} m")
+        self._refresh_pinger_distance()
+
+    def _refresh_pinger_distance(self) -> None:
+        # Continuously updated whenever EITHER the robot or the pinger
+        # moves — both slots funnel here.
+        if self._pinger_xy is None or self._robot_xy is None:
+            self._pinger_dist.setText("—")
+            return
+        d = math.hypot(self._pinger_xy[0] - self._robot_xy[0],
+                       self._pinger_xy[1] - self._robot_xy[1])
+        self._pinger_dist.setText(f"{d:.2f} m away")
 
     def set_mission_time(self, seconds: Optional[float]) -> None:
         if seconds is None:

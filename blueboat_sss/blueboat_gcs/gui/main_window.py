@@ -34,6 +34,7 @@ from ..models.sonar import SonarPing
 from . import left_panel as lp
 from . import right_panel as rp
 from .left_panel import LeftPanel
+from .log_console import LogConsole
 from .map_layers import (DetectionLayer, MeasureLayer, MosaicLayer,
                          PingerLayer, PlannedPathLayer, SwathLayer,
                          TileLayer, TrajectoryLayer)
@@ -41,6 +42,10 @@ from .map_view import MapMode, MapView
 from .right_panel import RightPanel
 from .toolbar import AcquisitionToolbar
 from .waterfall_view import WaterfallView
+
+#: Base minimum width of the left/right dock panels [px] — bump here if
+#: labels ever get cramped.
+PANEL_MIN_WIDTH = 270
 
 
 class MainWindow(QMainWindow):
@@ -111,10 +116,27 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea,
                            self._dock("Tools", self.right_panel))
 
-        # ---- bottom toolbar + status bar ----------------------------------------
+        # ---- bottom toolbar + console + status bar ----------------------------------
         self.toolbar = AcquisitionToolbar(self)
         self.addToolBar(Qt.BottomToolBarArea, self.toolbar)
         self.statusBar().showMessage("Ready.")
+
+        # Embedded application console (collapsed by default; the
+        # "Console" toolbar button or dragging the dock expands it).
+        self.console = LogConsole()
+        self._console_dock = QDockWidget("Console")
+        self._console_dock.setFeatures(QDockWidget.DockWidgetMovable
+                                       | QDockWidget.DockWidgetClosable)
+        self._console_dock.setWidget(self.console)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self._console_dock)
+        self._console_dock.hide()
+        self._console_dock.visibilityChanged.connect(
+            self.toolbar.set_console_checked)
+
+        # Live visualization gate: data may flow at any time (the
+        # pipeline starts with the application), but the map/waterfall
+        # only update after START.
+        self._viz_enabled = False
 
         self._mission_timer = QTimer(self)
         self._mission_timer.setInterval(1000)
@@ -130,7 +152,7 @@ class MainWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidget(widget)
         scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(250)
+        scroll.setMinimumWidth(PANEL_MIN_WIDTH)
         dock.setWidget(scroll)
         return dock
 
@@ -139,9 +161,8 @@ class MainWindow(QMainWindow):
         s = self._signals
 
         # Data streams (queued from the ROS thread) -> services & layers.
-        s.sonar_ping.connect(self._mosaic_service.on_sonar_ping)
-        s.sonar_ping.connect(self.waterfall_service.on_sonar_ping)
-        s.sonar_ping.connect(self._on_sonar_ping_gui)
+        # SSS ingestion is gated on the START button (viz gate).
+        s.sonar_ping.connect(self._on_sonar_ping_data)
         s.robot_state.connect(self._on_robot_state)
         s.detection.connect(self._on_detection)
         s.pinger_fix.connect(self._on_pinger)
@@ -149,6 +170,9 @@ class MainWindow(QMainWindow):
         s.pipeline_state.connect(self.toolbar.on_pipeline_state)
         s.status_message.connect(
             lambda msg: self.statusBar().showMessage(msg, 8000))
+        s.status_message.connect(
+            lambda msg: self.console.append_line("app", msg))
+        s.log_line.connect(self.console.append_line)
         self._mosaic_service.raster_updated.connect(self._on_raster)
         self.waterfall_service.image_updated.connect(
             self.waterfall_view.on_image)
@@ -185,13 +209,30 @@ class MainWindow(QMainWindow):
         # Bottom toolbar.
         self.toolbar.start_clicked.connect(self._on_start)
         self.toolbar.stop_clicked.connect(self._on_stop)
-        self.toolbar.svlog_clicked.connect(self._on_svlog)
+        self.toolbar.record_toggled.connect(self._on_record_toggled)
+        self.toolbar.console_toggled.connect(self._console_dock.setVisible)
+
+        # Apply the initial (all-disabled) layer states to the scene so
+        # checkboxes and items agree at startup.
+        for key, cb in self.left_panel._checks.items():
+            self._on_layer_toggled(key, cb.isChecked())
 
     # ---- data slots (GUI thread) ---------------------------------------------------
     def _on_raster(self, image: QImage, extent: tuple, cell: float) -> None:
         self.mosaic_layer.update(image, extent, cell)
 
-    def _on_sonar_ping_gui(self, ping: SonarPing) -> None:
+    def _on_sonar_ping_data(self, ping: SonarPing) -> None:
+        """Single entry point for SSS data, gated on the START button.
+
+        The pipeline runs from application startup, so pings may arrive
+        at any time — but the mosaic, waterfall, range line and altitude
+        plot only update while live visualization is enabled.
+        """
+        if not self._viz_enabled:
+            return
+        self._mosaic_service.on_sonar_ping(ping)
+        self.waterfall_service.on_sonar_ping(ping)
+        self.right_panel.altitude_plot.append(ping.water_depth)
         # Sonar range line: extent taken from the actual samples, so it
         # tracks the current sonar configuration automatically.
         if ping.y_local.size:
@@ -213,6 +254,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Telemetry resumed.", 4000)
         self.left_panel.on_robot_state(state)
         self.trajectory_layer.add_pose(state.x, state.y, state.yaw)
+        # Live distances (#6/#7): selected point + both measure points +
+        # the pinger panel update continuously as the robot moves.
+        for card in (self.left_panel.coordinate_card,
+                     self.right_panel.point_a, self.right_panel.point_b):
+            card.update_robot_position(state.x, state.y)
         # Bind the GPS origin exactly once, on the first full state.
         if not self.converter.ready and state.lat is not None:
             self.converter.bind_origin(state.lat, state.lon, state.x, state.y)
@@ -227,6 +273,7 @@ class MainWindow(QMainWindow):
 
     def _on_pinger(self, fix: PingerFix) -> None:
         self.pinger_layer.update(fix)
+        self.left_panel.on_pinger(fix.x, fix.y)   # live info + distance
 
     # ---- view mode / display -----------------------------------------------------
     def _on_view_mode(self, mode: str) -> None:
@@ -353,36 +400,52 @@ class MainWindow(QMainWindow):
         elif key == lp.LAYER_INTERPOLATION:
             self._mosaic_service.set_interpolation(on)
 
-    # ---- acquisition ---------------------------------------------------------------------
+    # ---- acquisition lifecycle ---------------------------------------------------
+    # The processing pipeline is launched at application startup (see
+    # main.py). START only enables pinging + live visualization — no
+    # node is restarted. STOP terminates the nodes (and START relaunches
+    # them if pressed again). Recording is fully independent.
     def _on_start(self) -> None:
         self._mission_start = time.monotonic()
-        # Robot-state reset (as if the application had just been launched),
-        # while PRESERVING the displayed trajectory: forget the cached pose
-        # and break the track polyline so that, if the boat moved while
-        # acquisition was stopped, no phantom segment joins the old and new
-        # positions. The marker re-syncs on the very next ROS message.
+        # Robot-state re-sync (as if the application had just launched),
+        # while PRESERVING any displayed trajectory: forget the cached
+        # pose and break the track polyline so no phantom segment joins
+        # pre/post-stop positions. The marker snaps to the next message.
         self._last_robot_state = None
         self.trajectory_layer.begin_new_segment()
         self._mosaic_service.reset_tracking()  # no interp across the break
         self.swath_layer.clear()          # redrawn by the first new ping
-        self._acquisition.start()
+        if not getattr(self._acquisition, "running", False):
+            self._acquisition.start()     # relaunch after a STOP
+        self._acquisition.enable_pinging()
+        self._viz_enabled = True
+        self.toolbar.on_viz_state(True)
+        self.statusBar().showMessage("Live acquisition started.", 6000)
 
-    def _on_svlog(self) -> None:
-        # PipelineLauncher publishes true once on the log/enable topic
-        # (Simulator: status-message stub) and a recording session opens.
-        self._acquisition.start_svlog_recording()
-        self.recording.begin()
+    def _on_record_toggled(self, on: bool) -> None:
+        """Record ON/OFF — independent from visualization."""
+        if on:
+            self._acquisition.set_recording(True)   # publish log_enable
+            self.recording.begin()
+        else:
+            self._acquisition.set_recording(False)  # close the .svlog
+            saved = self.recording.end()            # save every artifact
+            if saved is not None:
+                self.statusBar().showMessage(
+                    f"Recording session saved to {saved}", 15000)
 
     def _on_stop(self) -> None:
-        self._acquisition.stop()
+        """Full stop: pinging off, session closed (if any), nodes down."""
+        self._acquisition.disable_pinging()
+        self._viz_enabled = False
         self._mission_start = None
-        if self.recording.active:
-            # One experiment = one folder: the session gathers everything.
+        self.toolbar.on_viz_state(False)
+        if self.recording.active:                  # save ONLY if recording
+            self._acquisition.set_recording(False)
             saved = self.recording.end()
-        else:
-            saved = self._mosaic_service.save()   # legacy quick-save
-        if saved is not None:
-            self.statusBar().showMessage(f"Saved to {saved}", 15000)
+            if saved is not None:
+                self.statusBar().showMessage(f"Saved to {saved}", 15000)
+        self._acquisition.stop()                   # terminate ROS 2 nodes
 
     def _update_mission_time(self) -> None:
         self.left_panel.set_mission_time(
@@ -391,9 +454,11 @@ class MainWindow(QMainWindow):
 
     # ---- shutdown --------------------------------------------------------------------------
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        self._acquisition.stop()
+        # Save only if a recording session was actually active; nothing
+        # is exported otherwise (acquisition-lifecycle spec).
         if self.recording.active:
+            self._acquisition.set_recording(False)
             self.recording.end()
-        elif self._mosaic_service.has_data:
-            self._mosaic_service.save()
+        self._acquisition.disable_pinging()
+        self._acquisition.stop()
         super().closeEvent(event)

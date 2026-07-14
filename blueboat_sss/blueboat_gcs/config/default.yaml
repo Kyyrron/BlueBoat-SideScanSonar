@@ -18,7 +18,6 @@ topics:
 pipeline:
   launch_command: ["ros2", "launch", "blueboat_sss", "SSS_processing_launch.py"]
   publish_ping_enable: true
-  enable_svlog_on_start: false   # use the manual toolbar button instead
   start_delay_s: 2.0
   stop_grace_s: 5.0            # SIGINT -> SIGTERM after this grace
   stop_term_grace_s: 3.0       # SIGTERM -> SIGKILL after this grace

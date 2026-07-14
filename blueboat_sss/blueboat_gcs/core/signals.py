@@ -38,3 +38,6 @@ class AppSignals(QObject):
     pipeline_state = Signal(str)       # "stopped" | "starting" | "running" | "error"
     ros_connected = Signal(bool)       # rclpy context up / down
     status_message = Signal(str)       # transient message for the status bar
+    #: Console line: (source, text). Sources: "python", "app", "rosout",
+    #: "processor", "error". Emitted from any thread (queued to the GUI).
+    log_line = Signal(str, str)

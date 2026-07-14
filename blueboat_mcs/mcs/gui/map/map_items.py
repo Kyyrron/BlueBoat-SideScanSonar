@@ -1,0 +1,203 @@
+"""Graphics items composing the mission map.
+
+All items live directly in ROS world coordinates (metres, x east-ish,
+y north-ish per the local frame of ``robot_interface.py``).  The view
+applies a y-flip so +y points up on screen.  Items that must keep constant
+*pixel* size regardless of zoom (markers, the robot glyph) use
+``ItemIgnoresTransformations`` around a world-anchored origin.
+
+Z-order (back to front): tiles(-100) < grid(view background) < mission path
+< trajectories < target line < prediction < markers < robot.
+"""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
+from PySide6.QtGui import QBrush, QColor, QPainterPath, QPen, QPolygonF
+from PySide6.QtWidgets import (
+    QGraphicsEllipseItem, QGraphicsItem, QGraphicsItemGroup, QGraphicsLineItem,
+    QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsSimpleTextItem,
+)
+
+from mcs.gui import theme
+
+
+def _cosmetic_pen(color: QColor, width: float, style=Qt.PenStyle.SolidLine) -> QPen:
+    pen = QPen(color, width, style, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+    pen.setCosmetic(True)  # constant pixel width at any zoom
+    return pen
+
+
+class PolylineItem(QGraphicsPathItem):
+    """Efficient polyline rebuilt from an (n, 2) numpy array."""
+
+    def __init__(self, color: QColor, width: float = 2.0,
+                 style=Qt.PenStyle.SolidLine, z: float = 0.0) -> None:
+        super().__init__()
+        self.setPen(_cosmetic_pen(color, width, style))
+        self.setZValue(z)
+
+    def set_points(self, xy: np.ndarray) -> None:
+        path = QPainterPath()
+        if len(xy) >= 2:
+            path.moveTo(xy[0, 0], xy[0, 1])
+            for i in range(1, len(xy)):
+                path.lineTo(xy[i, 0], xy[i, 1])
+        self.setPath(path)
+
+
+class RobotItem(QGraphicsItemGroup):
+    """Boat glyph (constant pixel size) + world-scaled heading arrow.
+
+    Yaw convention: identical to the stack (``master_control`` /
+    ``bridge_node`` both take yaw from ``R.from_quat(...).as_euler('xyz')``:
+    CCW-positive about +z in the y-up world frame). The *heading arrow* is a
+    plain world-coordinate line, so the view's y-flip orients it correctly
+    for free. The *glyph*, however, uses ``ItemIgnoresTransformations`` and
+    is therefore rotated in **device** space, where +y points down and Qt
+    rotations are clockwise-positive — a world yaw θ must be applied as
+    ``setRotation(-degrees(θ))`` there, otherwise the glyph renders mirrored
+    about the x-axis (the original "arrow not properly oriented" defect).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setZValue(50)
+        # Constant-pixel-size hull glyph, drawn pointing +x, then rotated.
+        self._glyph = QGraphicsPolygonItem(QPolygonF([
+            QPointF(14, 0), QPointF(-8, 7), QPointF(-4, 0), QPointF(-8, -7),
+        ]))
+        self._glyph.setBrush(QBrush(theme.C_ROBOT))
+        self._glyph.setPen(QPen(QColor("white"), 1.2))
+        self._glyph.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+        self.addToGroup(self._glyph)
+        # Heading arrow: world-scaled SOLID white line ahead of the boat
+        # (solid, so it can never be confused with the dashed target line).
+        self._arrow = QGraphicsLineItem()
+        self._arrow.setPen(_cosmetic_pen(QColor("white"), 1.8))
+        self.addToGroup(self._arrow)
+        self._arrow_visible = True
+
+    def set_pose(self, x: float, y: float, yaw: float) -> None:
+        self._glyph.setPos(x, y)
+        # Device-space (y-down, CW-positive) rotation for the untransformed
+        # glyph — see class docstring.
+        self._glyph.setRotation(-math.degrees(yaw))
+        length = 4.0  # metres of look-ahead
+        self._arrow.setLine(QLineF(
+            x, y, x + length * math.cos(yaw), y + length * math.sin(yaw)))
+        self._arrow.setVisible(self._arrow_visible)
+
+    def set_heading_visible(self, visible: bool) -> None:
+        self._arrow_visible = visible
+        self._arrow.setVisible(visible)
+
+
+class MarkerItem(QGraphicsItemGroup):
+    """Constant-pixel-size circular marker with an optional text label."""
+
+    def __init__(self, color: QColor, radius_px: float = 6.0,
+                 label: str = "", z: float = 40.0) -> None:
+        super().__init__()
+        self.setZValue(z)
+        self._dot = QGraphicsEllipseItem(-radius_px, -radius_px,
+                                         2 * radius_px, 2 * radius_px)
+        self._dot.setBrush(QBrush(color))
+        self._dot.setPen(QPen(QColor("white"), 1.2))
+        self._dot.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+        self.addToGroup(self._dot)
+        self._text = QGraphicsSimpleTextItem(label, self._dot)
+        self._text.setBrush(QBrush(QColor(theme.TEXT)))
+        self._text.setPos(radius_px + 3, -radius_px)
+
+    def set_world_pos(self, x: float, y: float) -> None:
+        self._dot.setPos(x, y)
+
+    def set_label(self, text: str) -> None:
+        self._text.setText(text)
+
+
+class CrosshairItem(QGraphicsItemGroup):
+    """Constant-pixel-size crosshair marking the manual target."""
+
+    def __init__(self, color: QColor, z: float = 45.0) -> None:
+        super().__init__()
+        self.setZValue(z)
+        self._group = QGraphicsItemGroup()
+        pen = QPen(color, 2)
+        s = 9.0
+        for line in (QLineF(-s, 0, s, 0), QLineF(0, -s, 0, s)):
+            item = QGraphicsLineItem(line, self._group)
+            item.setPen(pen)
+        ring = QGraphicsEllipseItem(-s * 0.7, -s * 0.7, s * 1.4, s * 1.4, self._group)
+        ring.setPen(pen)
+        self._group.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+        self.addToGroup(self._group)
+
+    def set_world_pos(self, x: float, y: float) -> None:
+        self._group.setPos(x, y)
+
+
+class TargetLineItem(QGraphicsLineItem):
+    """Thin straight line between the robot and the current target."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setPen(_cosmetic_pen(theme.C_TARGET_LINE, 1.0, Qt.PenStyle.DashLine))
+        self.setZValue(30)
+
+    def set_endpoints(self, x0: float, y0: float, x1: float, y1: float) -> None:
+        self.setLine(QLineF(x0, y0, x1, y1))
+
+
+class MissionPathItem(PolylineItem):
+    """The published/requested mission path with small waypoint ticks."""
+
+    def __init__(self) -> None:
+        super().__init__(theme.C_MISSION_PATH, 2.0, Qt.PenStyle.SolidLine, z=10)
+        self.setOpacity(0.9)
+
+
+def draw_grid(painter, rect: QRectF, px_per_m: float) -> float:
+    """Draw an adaptive metric grid in view background coordinates.
+
+    Returns the chosen grid spacing in metres (for the scale indicator).
+    Spacing follows a 1/2/5 decade progression targeting >= ~60 px cells.
+    """
+    target_px = 60.0
+    raw = target_px / max(px_per_m, 1e-9)
+    exp = math.floor(math.log10(max(raw, 1e-9)))
+    base = raw / (10 ** exp)
+    for mult in (1.0, 2.0, 5.0, 10.0):
+        if base <= mult:
+            spacing = mult * 10 ** exp
+            break
+    else:  # pragma: no cover
+        spacing = 10 ** (exp + 1)
+
+    pen_minor = _cosmetic_pen(theme.C_GRID, 1.0)
+    pen_major = _cosmetic_pen(theme.C_GRID_MAJOR, 1.0)
+    x0 = math.floor(rect.left() / spacing) * spacing
+    y0 = math.floor(rect.top() / spacing) * spacing
+    i = 0
+    x = x0
+    while x <= rect.right():
+        painter.setPen(pen_major if abs((x / spacing) % 5) < 1e-6 else pen_minor)
+        painter.drawLine(QLineF(x, rect.top(), x, rect.bottom()))
+        x += spacing
+        i += 1
+        if i > 400:
+            break
+    i = 0
+    y = y0
+    while y <= rect.bottom():
+        painter.setPen(pen_major if abs((y / spacing) % 5) < 1e-6 else pen_minor)
+        painter.drawLine(QLineF(rect.left(), y, rect.right(), y))
+        y += spacing
+        i += 1
+        if i > 400:
+            break
+    return spacing

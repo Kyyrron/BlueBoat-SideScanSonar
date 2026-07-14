@@ -54,34 +54,43 @@ Processing scripts can treat any `sessions/*/` directory as a complete, closed
 experiment. Note on the `.svlog`: it is written by `sss_processor_node` wherever that
 node decides; after the session ends, every `*.svlog` under `data_root` whose mtime
 falls inside the session window is *moved* into `svlog/`. If your processor writes
-elsewhere, extend the sweep in `core/recording_session.py::_adopt_svlogs`. If STOP is
-pressed with no session active, the old quick-save behaviour applies
-(`data_root/<date>/`, unchanged artifact names). `pipeline.enable_svlog_on_start:
-true` restores automatic svlog-on-START if ever needed.
+elsewhere, extend the sweep in `core/recording_session.py::_adopt_svlogs`. If no
+recording session was active, STOP and application close export **nothing** — data
+only leaves the application through recording sessions.
 
-**Acquisition lifecycle.** STOP now walks a SIGINT→SIGTERM→SIGKILL escalation
-(graces: `pipeline.stop_grace_s`, `pipeline.stop_term_grace_s`) and afterwards kills
-any process still matching `pipeline.leftover_process_patterns` (default:
-`sss_processor_node`) — the same sweep also runs at application start and before each
-START, so orphaned nodes from a crash can never block or corrupt the next run.
+**Acquisition lifecycle (current workflow).** The processing pipeline is launched
+automatically at application startup; all visualization layers start disabled and no
+recording is active. **START** = enable pinging + live visualization (no node
+restart). **Record ON/OFF** (toolbar toggle) = open / close-and-save a recording
+session, fully independent from visualization. **STOP** (or closing the app) =
+pinging off, active session closed and saved, ROS 2 nodes gracefully terminated
+(SIGINT→SIGTERM→SIGKILL escalation with `pipeline.stop_grace_s` /
+`pipeline.stop_term_grace_s`, then a sweep killing anything matching
+`pipeline.leftover_process_patterns`, default `sss_processor_node`; the sweep also
+runs at startup and before each relaunch). **If no recording session was active,
+nothing is exported.** START after STOP relaunches the pipeline automatically.
 
-## 3. Placeholder topics — YOUR integration points
+**Embedded console.** The "Console" toolbar button opens the bottom console dock:
+Python prints and app logging (via `core/logging_bus.py`), ROS 2 log messages from
+every node via `/rosout`, and the raw stdout/stderr of the launch subprocess — the
+operator never needs an external terminal. Removed control: the manual Min/Max dB
+dynamic-range sliders are gone; real Omniscan data (uint16 `pwr_results`, per-gain
+`min/max_pwr_db` e.g. +7…+64 dB) makes a fixed dB window meaningless, so the range is
+always derived from data percentiles, with Contrast/Brightness/Colormap/Opacity as
+the operator controls. Panel base width is `PANEL_MIN_WIDTH` in
+`gui/main_window.py`.
 
-Both placeholders follow the same pattern: **all GUI functionality is finished and
-demonstrated by the simulator**; you only edit the topic constant in the YAML and one
-small `_msg_to_*` adapter in the listener.
+## 3. Integration points
 
-### 3.1 USBL pinger — `ros/pinger_listener.py`
-* Expected topic: `topics.pinger` (default `/usbl/pinger/position`)
-* Expected type: `geometry_msgs/PointStamped`, `point.x/.y` = pinger position **in the
-  local odom frame** (same frame as `/blueboat/odom`), metres; `point.z` ignored.
-* Expected rate: 1–5 Hz (only the last fix is displayed, any rate works).
-* If your USBL stack publishes `PoseWithCovarianceStamped` or a WGS-84 fix instead,
-  change the import and `_msg_to_fix()` only (for GPS input, convert through
-  `window.converter.gps_to_local`). Replace `DEFAULT_ACCURACY_M` with the real
-  covariance when available — it draws the dashed accuracy ring.
+### 3.1 USBL pinger — `ros/pinger_listener.py` (now the real interface)
+* Topic: `topics.pinger` (default `/blueboat/pinger_coordinates`)
+* Type: `std_msgs/Float32MultiArray`, `data = [x_world, y_world]` in the world/odom
+  frame [m]; extra elements ignored, NaN/short messages dropped.
+* Any rate works (last fix displayed). The left panel shows live pinger world
+  coordinates and the continuously updated robot↔pinger distance;
+  `DEFAULT_ACCURACY_M` draws the dashed ring (no covariance in the message).
 
-### 3.2 AI detections — `ros/detections_listener.py`
+### 3.2 AI detections — `ros/detections_listener.py` (placeholder)
 * Expected topic: `topics.detections` (default `/sss_ai/detections`)
 * Expected type: `vision_msgs/Detection2DArray` with, per detection:
   `results[0].hypothesis.class_id` (class name), `.score` (confidence),

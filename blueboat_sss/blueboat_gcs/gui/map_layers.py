@@ -127,12 +127,21 @@ class TrajectoryLayer:
         operator can see the displayed pose is no longer live."""
         self._marker.setOpacity(0.35 if stale else 1.0)
 
+    #: A pose jump larger than this starts a new polyline segment even if
+    #: no state machine armed a break — the stateless safety net that
+    #: guarantees recovery (teleport, no phantom line) whenever
+    #: localization resumes after a silent displacement.
+    JUMP_BREAK_M = 5.0
+
     def add_pose(self, x: float, y: float, yaw: float) -> None:
+        jump = (self._points
+                and math.hypot(x - self._points[-1][0],
+                               y - self._points[-1][1]) > self.JUMP_BREAK_M)
         self._points.append((x, y))
         # Rebuilding a QPainterPath for tens of thousands of points every
         # ping would be wasteful; append incrementally instead.
         path = self._path_item.path()
-        if path.elementCount() == 0 or self._break_next:
+        if path.elementCount() == 0 or self._break_next or jump:
             path.moveTo(w2s(x, y))     # start a new subpath (no joining line)
             self._break_next = False
         else:

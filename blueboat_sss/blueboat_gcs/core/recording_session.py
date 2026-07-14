@@ -113,8 +113,8 @@ class RecordingManager(QObject):
                    / self._start_stamp)
         session.mkdir(parents=True, exist_ok=True)
 
-        self._mosaic.save_into(session)
-        self._waterfall.export_into(session)
+        self._mosaic.save_into(session / "mosaic")
+        self._waterfall.export_into(session / "waterfall")
         self._write_detections(session)
         adopted = self._adopt_svlogs(session, start_wall)
         self._write_metadata(session, start_wall, adopted)
@@ -153,7 +153,7 @@ class RecordingManager(QObject):
                 continue
             try:
                 if lo <= f.stat().st_mtime <= hi:
-                    dest = session
+                    dest = session / "svlog"
                     dest.mkdir(exist_ok=True)
                     shutil.move(str(f), dest / f.name)
                     adopted.append(f.name)
@@ -186,5 +186,5 @@ class RecordingManager(QObject):
                      "raw, unrendered data; PNGs go through the display "
                      "pipeline and are quick-looks only."),
         }
-        with open(session / "metadata" / "metadata.json", "w", encoding="utf-8") as f:
+        with open(session / "metadata.json", "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)

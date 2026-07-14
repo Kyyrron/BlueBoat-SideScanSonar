@@ -118,9 +118,7 @@ class WaterfallService(QObject):
         rgba = self._renderer.to_rgba(chrono)
         cv2.imwrite(str(target / "waterfall.png"),
                     cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
-        metadata_target = target / "metadata"
-        metadata_target.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(metadata_target / "waterfall_raw.npz",
+        np.savez_compressed(target / "waterfall_raw.npz",
                             intensity_db=chrono,
                             swath_half_range_m=self._range_m,
                             columns=self._cols)

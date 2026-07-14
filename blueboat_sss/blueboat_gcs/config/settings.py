@@ -46,9 +46,9 @@ class PipelineConfig:
     # If true, START also publishes `true` on topics.ping_enable so the
     # already-running sss_node begins firing, and STOP publishes `false`.
     publish_ping_enable: bool = True
-    # If true, START also enables .svlog logging. Default false: recording
-    # is started manually with the toolbar's "Start SVLOG recording" button
-    # (STOP always publishes false so an open .svlog is closed cleanly).
+    # DEPRECATED — kept only so existing YAML files still load. Recording
+    # is controlled by the Record ON/OFF toolbar toggle (recording
+    # sessions); this flag is no longer read by the launcher.
     enable_svlog_on_start: bool = False
     # Delay between launching the pipeline and enabling pinging, to let
     # the processor node come up and subscribe.
