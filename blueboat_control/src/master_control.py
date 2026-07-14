@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+### FOR MANUAL TARGET IMPLEMENTATION IN THE VISUALISATION APP ###
+
 # rclpy
 from rclpy.node import Node, QoSProfile
 from rclpy.qos import QoSDurabilityPolicy
@@ -31,6 +33,7 @@ class Controller(Node):
 
         super().__init__('master_control', namespace='blueboat')
 
+
         self.declare_parameter('controller_type', 'MPC') 
         self.controller_type = self.get_parameter('controller_type').get_parameter_value().string_value
 
@@ -45,6 +48,7 @@ class Controller(Node):
         latched = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
         self.ready_subscriber = self.create_subscription(
             Bool, '/blueboat/controller_ready', self.ready_callback, latched)
+        self.manual_target_subscriber = self.create_subscription(Float32MultiArray, '/blueboat/manual_target', self.manual_target_callback, 10)
 
         self.data_publisher = self.create_publisher(Float32MultiArray, "/monitoring_data", 10)
         self.target_publisher = self.create_publisher(Float32MultiArray,'/controller_target', 10)
@@ -71,6 +75,7 @@ class Controller(Node):
         self.ready = False
         self.init = False
         self.pinger_target = None
+        self.manual_target = [0.0,0.0]
 
         # Initialize controller 
         self.controller_path = Path()
@@ -171,6 +176,9 @@ class Controller(Node):
         self.ready = msg.data
         if msg.data:
             self.get_logger().info(f'Controller ready')
+
+    def manual_target_callback(self, msg: Float32MultiArray):
+        self.manual_target = msg.data # [x,y] in world frame
 
     def solve_LoS(self, target, current_time):
         x,y,z = target
@@ -298,10 +306,14 @@ class Controller(Node):
                                 self.current_twist[1], # v
                                 self.current_twist[5]]) # r
 
-
         current_state = np.array(current_state).reshape(-1)
 
-        if self.controller_path.poses: # Make sure the path is not empty
+        if self.manual_target[:2] != [0.0,0.0]: # If a manual target is set, use it instead with LoS
+            target = [*self.manual_target[:2], 0, 0, 0, 0] # We don't need to use the yaw for LoS, so we set it to 0
+            target = self.inRobotFrame(current_state, target)
+            u = self.solve_LoS(target, current_time)
+
+        elif self.controller_path.poses: # Make sure the path is not empty
             # Display the current desired pose if using gazebo
             if self.isSimulation:
                 desired_pose = self.controller_path.poses[0].pose
@@ -358,6 +370,8 @@ class Controller(Node):
 
         if self.pinger_target is not None:
             self.get_logger().info(f'Pinger coordinates: {self.pinger_target}')
+        if self.manual_target[:2] != [0.0,0.0]:
+            self.get_logger().info(f'Manual target coordinates: {self.manual_target}')
         # self.get_logger().info(f'Pose: {self.current_pose} \nTwist: {self.current_twist} \nComputed thrust: {u}')
 
         # Update and save monitoring metrics to be graphed later
