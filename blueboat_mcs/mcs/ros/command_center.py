@@ -209,6 +209,9 @@ class CommandCenter(QObject):
         # (2) Publication — synchronous into the reliable DDS writer.
         try:
             node.publish_input_str("default")
+            # Keep the Default/Override toggle truthful: 'default' was just
+            # published, so the button's next command must be 'override'.
+            self._mode_toggle_next = "override"
         except Exception as exc:  # noqa: BLE001
             _LOG.error("publish('default') raised: %s — retrying once", exc)
             QTimer.singleShot(100, lambda: self._safe_republish())

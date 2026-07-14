@@ -141,12 +141,12 @@ class Controller(Node):
             self.path_time = self.dt
             self.path_steps = 2
 
-            self.k_v = 0.15
-            self.k_psi = 10.0
+        self.k_v = 0.15
+        self.k_psi = 10.0
 
-            self.safety_distance = -1.     # Brakes and stop moving if the distance to the pinger is smaller than this value, set it to negative to disable it
-            self.stopping_sequence = False # Used as a safety to stop LoS control when it gets close to target
-            self.stopping_time = None
+        self.safety_distance = -1.     # Brakes and stop moving if the distance to the pinger is smaller than this value, set it to negative to disable it
+        self.stopping_sequence = False # Used as a safety to stop LoS control when it gets close to target
+        self.stopping_time = None
 
         # Initialize monitoring values
         self.monitoring = []
@@ -308,7 +308,7 @@ class Controller(Node):
 
         current_state = np.array(current_state).reshape(-1)
 
-        if self.manual_target[:2] != [0.0,0.0]: # If a manual target is set, use it instead with LoS
+        if list(self.manual_target) != [0.0,0.0]: # If a manual target is set, use it instead with LoS
             target = [*self.manual_target[:2], 0, 0, 0, 0] # We don't need to use the yaw for LoS, so we set it to 0
             target = self.inRobotFrame(current_state, target)
             u = self.solve_LoS(target, current_time)
@@ -370,8 +370,9 @@ class Controller(Node):
 
         if self.pinger_target is not None:
             self.get_logger().info(f'Pinger coordinates: {self.pinger_target}')
-        if self.manual_target[:2] != [0.0,0.0]:
-            self.get_logger().info(f'Manual target coordinates: {self.manual_target}')
+        if list(self.manual_target)[:2] != [0.0,0.0]:
+            target_str = ", ".join(f"{float(x):.2f}" for x in list(self.manual_target))
+            self.get_logger().info(f'\nManual target coordinates: {target_str}')
         # self.get_logger().info(f'Pose: {self.current_pose} \nTwist: {self.current_twist} \nComputed thrust: {u}')
 
         # Update and save monitoring metrics to be graphed later

@@ -29,7 +29,7 @@ class RosTopics:
     svlog_enable: str = "/sss_processor/log/enable"
     # ---- placeholders (repositories not present yet) ----------------------
     detections: str = "/sss_ai/detections"     # see ros/detections_listener.py
-    pinger: str = "/usbl/pinger/position"      # see ros/pinger_listener.py
+    pinger: str = "/blueboat/pinger_coordinates"      # see ros/pinger_listener.py
     # Planned mission path (nav_msgs/Path), published by path_publisher.py.
     planned_path: str = "/set_path"
 

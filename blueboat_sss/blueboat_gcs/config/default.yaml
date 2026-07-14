@@ -12,7 +12,7 @@ topics:
   svlog_enable: /sss_processor/log/enable
   # ---- placeholders: set these once the other repositories are connected ----
   detections: /sss_ai/detections
-  pinger: /usbl/pinger/position
+  pinger: /blueboat/pinger_coordinates
   planned_path: /set_path            # nav_msgs/Path from path_publisher.py
 
 pipeline:

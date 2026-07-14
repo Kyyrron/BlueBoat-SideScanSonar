@@ -36,6 +36,7 @@ class BottomToolbar(QWidget):
 
     manual_target_mode_changed = Signal(bool)
     measure_mode_changed = Signal(bool)
+    continue_mission_clicked = Signal()
     mission_launched = Signal(object)   # LaunchParameters
     mission_stopped = Signal()
 
@@ -73,9 +74,28 @@ class BottomToolbar(QWidget):
 
         row.addSpacing(14)
 
-        self.estop_button = QPushButton("EMERGENCY STOP")
+        # Two direct emergency buttons (no confirmation popup — an emergency
+        # action must be one click). Both run the same guaranteed sequence
+        # (publish 'default' → confirm transmission → …); they differ only in
+        # whether the launched nodes are terminated afterwards.
+        self.estop_kill_button = QPushButton("E-STOP + Stop Override")
+        self.estop_kill_button.setObjectName("estopButton")
+        self.estop_kill_button.setToolTip(
+            "Publish 'default' on /blueboat/input_str, confirm transmission, "
+            "THEN terminate every launched node (stops whatever is driving "
+            "the motors). One click, no confirmation dialog.")
+        self.estop_kill_button.clicked.connect(
+            lambda: self._commands.emergency_stop(terminate_nodes=True))
+        row.addWidget(self.estop_kill_button)
+
+        self.estop_button = QPushButton("E-STOP")
         self.estop_button.setObjectName("estopButton")
-        self.estop_button.clicked.connect(self._on_estop)
+        self.estop_button.setToolTip(
+            "Publish 'default' on /blueboat/input_str and confirm "
+            "transmission. Nodes keep running. One click, no confirmation "
+            "dialog.")
+        self.estop_button.clicked.connect(
+            lambda: self._commands.emergency_stop(terminate_nodes=False))
         row.addWidget(self.estop_button)
 
         self.mode_button = QPushButton()
@@ -85,10 +105,29 @@ class BottomToolbar(QWidget):
 
         row.addSpacing(14)
 
+        # Manual target: one-shot arming. Checking the button arms the next
+        # map click as a target; the click publishes and auto-disarms, so the
+        # map immediately returns to normal interaction (pan / inspect /
+        # measure) while the boat drives to the target. 'Continue Original
+        # Mission' appears while a target is active and ONLY publishes the
+        # [0.0, 0.0] resume message.
         self.manual_button = QPushButton("Manual Target")
         self.manual_button.setCheckable(True)
-        self.manual_button.toggled.connect(self._on_manual_toggled)
+        self.manual_button.setToolTip(
+            "Arm: the next map click is published as a manual target, then "
+            "the map returns to normal interaction. Press again to arm a "
+            "replacement target; press while armed to cancel arming "
+            "(publishes nothing).")
+        self.manual_button.toggled.connect(self.manual_target_mode_changed.emit)
         row.addWidget(self.manual_button)
+
+        self.continue_button = QPushButton("Continue Original Mission")
+        self.continue_button.setToolTip(
+            "Publish the [0.0, 0.0] manual target: master_control resumes "
+            "the original mission. This button does nothing else.")
+        self.continue_button.setVisible(False)
+        self.continue_button.clicked.connect(self.continue_mission_clicked.emit)
+        row.addWidget(self.continue_button)
 
         self.measure_button = QPushButton("Measure")
         self.measure_button.setCheckable(True)
@@ -112,6 +151,10 @@ class BottomToolbar(QWidget):
         bus.launch_state_changed.connect(self._on_launch_state)
         bus.launch_output.connect(self._on_launch_output)
         bus.estop_state_changed.connect(self._on_estop_state)
+        # The safe-shutdown sequence publishes 'default' outside the toggle
+        # button's own bookkeeping; CommandCenter resyncs its state, and this
+        # refresh keeps the label consistent with it.
+        bus.estop_state_changed.connect(lambda _s: self._refresh_mode_button())
 
     # ================================================================ actions
     def _on_launch(self) -> None:
@@ -139,23 +182,6 @@ class BottomToolbar(QWidget):
         self._commands.safe_stop_mission()
         self.mission_stopped.emit()
 
-    def _on_estop(self) -> None:
-        box = QMessageBox(self)
-        box.setWindowTitle("Emergency Stop")
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setText("Publish 'default' on /blueboat/input_str now.\n"
-                    "Also terminate all launched nodes afterwards?")
-        publish_only = box.addButton("E-STOP only", QMessageBox.ButtonRole.AcceptRole)
-        publish_kill = box.addButton("E-STOP + terminate nodes",
-                                     QMessageBox.ButtonRole.DestructiveRole)
-        box.addButton(QMessageBox.StandardButton.Cancel)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is publish_only:
-            self._commands.emergency_stop(terminate_nodes=False)
-        elif clicked is publish_kill:
-            self._commands.emergency_stop(terminate_nodes=True)
-
     def _on_mode_toggle(self) -> None:
         self._commands.publish_mode_toggle()
         self._refresh_mode_button()
@@ -167,12 +193,9 @@ class BottomToolbar(QWidget):
             f"Publishes String('{nxt}') on {self._cfg.topics.input_str}; "
             "the button then alternates to the other command.")
 
-    def _on_manual_toggled(self, on: bool) -> None:
-        self.manual_button.setText(
-            "Continue Original Mission" if on else "Manual Target")
-        if on:
-            self.measure_button.setChecked(False)
-        self.manual_target_mode_changed.emit(on)
+    def set_manual_target_active(self, active: bool) -> None:
+        """Show 'Continue Original Mission' while a manual target is active."""
+        self.continue_button.setVisible(active)
 
     # ================================================================ feedback
     def _on_launch_state(self, state: str) -> None:

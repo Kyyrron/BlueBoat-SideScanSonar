@@ -43,16 +43,21 @@ anywhere shows, in the status bar: world coordinates, GPS coordinates (once
 georeferenced) and the live distance from the robot to that point; the point
 is marked on the map.
 
-**Manual Target** (toolbar button): while active, every map click publishes
-that point as a temporary navigation target on `/blueboat/manual_target`. The
-clicked point stays highlighted with a crosshair; a dashed purple line shows
-the *approximate* path the boat should follow under the LoS law, re-simulated
-live from the current pose. Clicking elsewhere replaces the target. When the
-boat arrives (≤ 1 m), a "Manual Target Reached" banner appears at the top of
-the map. The button relabels to **Continue Original Mission**; clicking it
-publishes `[0.0, 0.0]`, which hands control back to the mission, and leaves
-the mode. (Note: this resume requires the one-line robot-side fix documented
-in `03_ros_integration.md` §Observations 1.)
+**Manual Target** (toolbar button): a one-shot arming control. Press it,
+then click the map once — that point is published as the target on
+`/blueboat/manual_target` and the button disarms itself, so the map
+immediately returns to normal interaction: you can pan, inspect points and
+measure distances while the boat drives to the target. The target stays
+highlighted with a crosshair and a dashed purple line shows the
+*approximate* LoS path, re-simulated live. To replace the target, press
+**Manual Target** again and click a new point; pressing it while armed
+cancels arming and publishes nothing. While a target is active, a
+**Continue Original Mission** button is shown: it does exactly one thing —
+publish `[0.0, 0.0]`, which hands control back to the mission — and the
+target highlight is cleared. When the boat arrives (≤ 1 m), a "Manual
+Target Reached" banner appears at the top of the map. (Note: the resume
+requires the one-line robot-side fix documented in `03_ros_integration.md`
+§Observations 1.)
 
 **Measure** (toolbar button): first click sets point A, the line and distance
 follow the cursor, second click freezes the measurement; the status bar shows
@@ -108,11 +113,16 @@ waits for confirmed transmission (the same guarantee as the Emergency Stop),
 then shuts every launched node down gracefully (SIGINT first) and releases
 the process; the station remains open and the mission can be relaunched.
 
-**EMERGENCY STOP** always acts first by publishing `default` on
-`/blueboat/input_str`, waits until the command is confirmed transmitted (the
-`param_mode` echo, with a timeout fallback), and only then — if you chose
-"E-STOP + terminate nodes" — stops the launch. The label next to the buttons
-reports each phase.
+**E-STOP + Stop Override** and **E-STOP** are two direct, one-click
+emergency buttons (no confirmation dialog). Both first publish `default` on
+`/blueboat/input_str` and wait until the command is confirmed transmitted
+(the `param_mode` echo, with a graph-verified reliable-delivery fallback).
+**E-STOP** stops there — nodes keep running with safe parameters restored.
+**E-STOP + Stop Override** additionally terminates every launched node once
+transmission is confirmed, stopping whatever is driving the motors. The
+label next to the buttons reports each phase, and the Default/Override
+toggle is resynchronized automatically (after either E-STOP the mode is
+`default`, so its next command is `override`).
 
 **Publish Default Control Mode** publishes the same `default` command
 immediately; the button then alternates to **Publish Override Control Mode**

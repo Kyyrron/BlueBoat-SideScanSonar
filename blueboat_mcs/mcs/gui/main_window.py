@@ -145,6 +145,7 @@ class MainWindow(QMainWindow):
 
         # Toolbar
         self.toolbar.manual_target_mode_changed.connect(self._on_manual_mode)
+        self.toolbar.continue_mission_clicked.connect(self._on_continue_mission)
         self.toolbar.measure_mode_changed.connect(self._on_measure_mode)
         self.toolbar.mission_launched.connect(self._on_mission_launched)
         self.toolbar.mission_stopped.connect(self._on_mission_stopped)
@@ -202,22 +203,26 @@ class MainWindow(QMainWindow):
             self.store.mission.manual_target = None
             self.store.mission.simulation = False
             self.commands.set_simulation_mode(False)
+            self.map_view.clear_manual_target()
+            self.toolbar.set_manual_target_active(False)
             if self.toolbar.manual_button.isChecked():
                 self.toolbar.manual_button.setChecked(False)
 
     # ============================================================ manual target
-    def _on_manual_mode(self, on: bool) -> None:
-        if on:
+    def _on_manual_mode(self, armed: bool) -> None:
+        """Manual Target button = one-shot *arming* of the next map click.
+
+        Arming/disarming never publishes anything; the [0.0, 0.0] resume
+        message is published exclusively by 'Continue Original Mission'.
+        """
+        if armed:
+            self.toolbar.measure_button.setChecked(False)
             self.map_view.set_mode(MapMode.MANUAL_TARGET)
             self._status.showMessage(
-                "Manual Target mode: click the map to send a target. "
-                "Click the button again to resume the original mission.", 8000)
+                "Manual Target armed: the next map click is published as the "
+                "target, then the map returns to normal interaction.", 8000)
         else:
             self.map_view.set_mode(MapMode.NORMAL)
-            # Deactivation publishes [0.0, 0.0] → master_control resumes mission.
-            self.commands.resume_original_mission()
-            self.store.mission.manual_target = None
-            self.map_view.clear_manual_target()
 
     def _on_target_clicked(self, x: float, y: float) -> None:
         if x == 0.0 and y == 0.0:
@@ -226,10 +231,25 @@ class MainWindow(QMainWindow):
         self.commands.publish_manual_target(x, y)
         self.store.mission.manual_target = (x, y)
         self.map_view.show_manual_target(x, y)
+        # One-shot: disarm immediately so pan / inspect / measure work while
+        # the boat drives to the target (the crosshair and the predicted path
+        # persist through the store until the mission is resumed).
+        self.toolbar.manual_button.setChecked(False)  # -> _on_manual_mode(False)
+        self.toolbar.set_manual_target_active(True)
+
+    def _on_continue_mission(self) -> None:
+        """'Continue Original Mission': publish [0.0, 0.0], nothing else."""
+        self.commands.resume_original_mission()
+        self.store.mission.manual_target = None
+        self.map_view.clear_manual_target()
+        self.toolbar.set_manual_target_active(False)
+        self._status.showMessage(
+            "Published [0.0, 0.0] — master_control resumes the original "
+            "mission.", 6000)
 
     def _on_measure_mode(self, on: bool) -> None:
         if on and self.toolbar.manual_button.isChecked():
-            self.toolbar.manual_button.setChecked(False)
+            self.toolbar.manual_button.setChecked(False)  # disarm selection only
         self.map_view.set_mode(MapMode.MEASURE if on else MapMode.NORMAL)
 
     # ================================================================ shutdown
