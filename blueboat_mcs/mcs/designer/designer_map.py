@@ -35,7 +35,8 @@ from mcs.config.settings import AppConfig
 from mcs.designer.model import MissionModel, Waypoint
 from mcs.designer.sampling import SampledMission
 from mcs.gui import theme
-from mcs.gui.map.map_items import MarkerItem, PolylineItem, RobotItem, draw_grid
+from mcs.gui.map.map_items import (
+    MarkerItem, PolylineItem, RobotItem, draw_grid, draw_scale_bar)
 from mcs.gui.map.tile_layer import TileLayer
 
 C_WAYPOINT = QColor("#e3b341")
@@ -281,7 +282,39 @@ class DesignerMapView(QGraphicsView):
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         super().drawBackground(painter, rect)
         if self.grid_visible:
-            draw_grid(painter, rect, abs(self.transform().m11()))
+            self._grid_spacing = draw_grid(painter, rect,
+                                           abs(self.transform().m11()))
+
+    def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
+        super().drawForeground(painter, rect)
+        if self.grid_visible:
+            draw_scale_bar(painter, self.viewport().width(),
+                           self.viewport().height(),
+                           abs(self.transform().m11()),
+                           getattr(self, "_grid_spacing", 0.0))
+
+    # ---------------------------------------------------------------- framing
+    def center_on_bounds(self, xs: list[float], ys: list[float],
+                         margin_m: float = 5.0) -> None:
+        """Frame the given world extents, preserving the y-up flip.
+
+        (fitInView is avoided on purpose: it may normalise the scale signs
+        and silently undo the y-flip of this view.)
+        """
+        if not xs:
+            return
+        w = max(max(xs) - min(xs), 1.0) + 2 * margin_m
+        h = max(max(ys) - min(ys), 1.0) + 2 * margin_m
+        cx = (max(xs) + min(xs)) / 2.0
+        cy = (max(ys) + min(ys)) / 2.0
+        s = min(self.viewport().width() / w, self.viewport().height() / h)
+        s = max(0.05, min(s, 200.0))
+        transform = self.transform()
+        transform.setMatrix(s, 0, 0, 0, -s, 0,
+                            transform.m31(), transform.m32(), 1.0)
+        self.setTransform(transform)
+        self.centerOn(cx, cy)
+        self._update_tiles()
 
     # ================================================================== input
     def wheelEvent(self, event) -> None:
@@ -318,10 +351,16 @@ class DesignerMapView(QGraphicsView):
 
     def mouseMoveEvent(self, event) -> None:
         if self._panning is not None:
+            # 1:1 panning via scrollbar deltas. The previous
+            # transform-translate approach compounded with the
+            # AnchorUnderMouse policy, making panning move far faster than
+            # the cursor.
             delta = event.position() - self._panning
             self._panning = event.position()
-            self.translate(delta.x() / self.transform().m11(),
-                           delta.y() / self.transform().m22())
+            h = self.horizontalScrollBar()
+            v = self.verticalScrollBar()
+            h.setValue(h.value() - int(round(delta.x())))
+            v.setValue(v.value() - int(round(delta.y())))
             return
         super().mouseMoveEvent(event)
 

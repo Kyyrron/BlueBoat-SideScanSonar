@@ -167,3 +167,32 @@ Steps (once):
 
 Station side, saved missions appear automatically in **Launch Mission →
 Trajectory → custom paths**; selecting one builds the `from_yaml:` string.
+
+
+## Mission-path preview and `path_publisher.py`
+
+The station previews the mission path by calling the **`/path_request`
+service directly** (the same request `path_publisher.py` makes at startup),
+so the preview works identically on the real robot and in simulation and
+never depends on `path_publisher`. The request horizon is
+`launch.path_preview_total_time_s` (default 120 s, configurable); for
+designer trajectories the YAML's own `duration_s` replaces it
+automatically, so long custom missions are previewed completely.
+
+`path_publisher.py` itself is only started by `Sim_launch.py`. It is not
+simulation-specific code — it merely was never added to the real-robot
+launch. To make it available in the real world (e.g. to keep RViz support),
+add to `BlueBoat_launch.py` inside the `controller_type != ''` /
+`use_pinger == False` branch, next to `path_generation.py`:
+
+```python
+sl.node('blueboat_control',
+        'path_publisher.py',
+        parameters={'total_time': 300.0,   # horizon in seconds
+                    'dt': 0.5})
+```
+
+Its 120 s "time limit" is just the default of its declared `total_time`
+parameter — override it as above (match the mission duration; for YAML
+trajectories, the `duration_s` field of the file). Note it also busy-waits
+for the service at startup, which is harmless in this launch ordering.

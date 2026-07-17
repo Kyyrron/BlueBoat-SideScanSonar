@@ -16,7 +16,7 @@ import math
 
 import numpy as np
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QBrush, QColor, QFont, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsItemGroup, QGraphicsLineItem,
     QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsSimpleTextItem,
@@ -159,6 +159,31 @@ class MissionPathItem(PolylineItem):
     def __init__(self) -> None:
         super().__init__(theme.C_MISSION_PATH, 2.0, Qt.PenStyle.SolidLine, z=10)
         self.setOpacity(0.9)
+
+
+def draw_scale_bar(painter, viewport_w: int, viewport_h: int,
+                   px_per_m: float, spacing_m: float) -> None:
+    """Draw the grid-scale indicator (bar + label) in device coordinates.
+
+    Called from a view's ``drawForeground`` with the grid spacing chosen by
+    :func:`draw_grid`, so the bar length always equals exactly one grid cell.
+    """
+    if spacing_m <= 0 or px_per_m <= 0:
+        return
+    bar_px = spacing_m * px_per_m
+    x0, y0 = 16.0, viewport_h - 16.0
+    painter.save()
+    painter.resetTransform()  # scene -> device coordinates
+    pen = QPen(QColor(230, 235, 240), 2)
+    painter.setPen(pen)
+    painter.drawLine(QLineF(x0, y0, x0 + bar_px, y0))
+    for x in (x0, x0 + bar_px):
+        painter.drawLine(QLineF(x, y0 - 4, x, y0 + 4))
+    label = f"{spacing_m:g} m"
+    painter.setFont(QFont("DejaVu Sans Mono", 9))
+    painter.setPen(QColor(230, 235, 240))
+    painter.drawText(QPointF(x0 + bar_px + 8, y0 + 4), label)
+    painter.restore()
 
 
 def draw_grid(painter, rect: QRectF, px_per_m: float) -> float:

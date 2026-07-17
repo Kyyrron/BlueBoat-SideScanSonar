@@ -331,16 +331,7 @@ class Controller(Node):
                 target = cf.compute_target(self.controller_path, self.dt)
                 u,_ = self.controller.compute(current_state, target[:3])
                 #self.get_logger().info(f'\nState: {current_state} \n Target: {target} \nThrust: {u}')
-                target_str = ", ".join(f"{float(x):.2f}" for x in target)
-                thrust_str = np.array2string(
-                    u,
-                    formatter={'float_kind': lambda x: f"{x:.2f}"}
-                )
-
-                self.get_logger().info(
-                    f"\nTarget: [{target_str}]\n"
-                    f"Thrust: {thrust_str}"
-                )
+                
 
             if self.controller_type == 'LoS':
                 target = cf.compute_target(self.controller_path, self.dt)
@@ -363,6 +354,24 @@ class Controller(Node):
             msg.data = target
             self.target_publisher.publish(msg)
 
+        else:
+            self.get_logger().info('Nothing to target yet.')
+            return
+
+        target_str = ", ".join(f"{float(x):.2f}" for x in target)
+        try:
+            thrust_str = np.array2string(
+                u,
+                formatter={'float_kind': lambda x: f"{x:.2f}"}
+            )
+        except:
+            thrust_str = ", ".join(f"{float(x):.2f}" for x in u)
+
+        self.get_logger().info(
+            f"\nTarget: [{target_str}]\n"
+            f"Thrust: {thrust_str}"
+        )
+
         # Publish thruster input
         msg = Float32MultiArray()
         msg.data = u
@@ -372,7 +381,7 @@ class Controller(Node):
             self.get_logger().info(f'Pinger coordinates: {self.pinger_target}')
         if list(self.manual_target)[:2] != [0.0,0.0]:
             target_str = ", ".join(f"{float(x):.2f}" for x in list(self.manual_target))
-            self.get_logger().info(f'\nManual target coordinates: {target_str}')
+            self.get_logger().info(f'\n\nManual target coordinates: {target_str}')
         # self.get_logger().info(f'Pose: {self.current_pose} \nTwist: {self.current_twist} \nComputed thrust: {u}')
 
         # Update and save monitoring metrics to be graphed later

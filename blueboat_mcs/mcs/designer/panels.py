@@ -217,6 +217,7 @@ class PropertiesPanel(QWidget):
         super().__init__(parent)
         self._model = model
         self._uid: int | None = None
+        self._pos_spins: dict[str, QDoubleSpinBox] = {}
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._placeholder = QLabel("Select one item to edit its properties.")
@@ -224,11 +225,30 @@ class PropertiesPanel(QWidget):
         self._layout.addWidget(self._placeholder)
         self._body: QWidget | None = None
 
+    def refresh_values(self) -> None:
+        """Live update of the X/Y read-outs while the waypoint is dragged.
+
+        Values are pushed with signals blocked, so refreshing can neither
+        loop back into a ``set_pos`` action nor steal keyboard focus (the
+        form is NOT rebuilt — only the two spinboxes are updated)."""
+        if self._uid is None or not self._pos_spins:
+            return
+        wp = self._model.waypoint(self._uid)
+        if wp is None:
+            return
+        for axis, spin in self._pos_spins.items():
+            value = getattr(wp, axis)
+            if abs(spin.value() - value) > 1e-9 and not spin.hasFocus():
+                spin.blockSignals(True)
+                spin.setValue(value)
+                spin.blockSignals(False)
+
     def show_selection(self, uids: set[int]) -> None:
         if self._body is not None:
             self._body.deleteLater()
             self._body = None
         self._uid = None
+        self._pos_spins = {}
         single = self._model.item(next(iter(uids))) if len(uids) == 1 else None
         self._placeholder.setVisible(single is None)
         if single is None:
@@ -255,6 +275,7 @@ class PropertiesPanel(QWidget):
             spin.valueChanged.connect(
                 lambda v, a=axis: self.action.emit("set_pos", (wp.uid, a, v)))
             form.addRow(axis.upper() + " (m)", spin)
+            self._pos_spins[axis] = spin
         locked = QCheckBox("Locked")
         locked.setChecked(wp.locked)
         locked.toggled.connect(

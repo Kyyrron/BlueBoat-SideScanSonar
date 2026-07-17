@@ -100,6 +100,12 @@ class LaunchConfig:
     ])
     sigint_timeout_s: float = 8.0
     sigterm_timeout_s: float = 4.0
+    # Mission-path preview: the station requests the whole path from the
+    # path_generation SERVICE (/path_request) — never via path_publisher —
+    # over this horizon. For from_yaml trajectories the YAML's own
+    # duration_s overrides it automatically.
+    path_preview_total_time_s: float = 120.0
+    path_preview_dt_s: float = 0.5
     # Nodes considered "required" before mission controls are enabled.
     readiness_topics: list[str] = field(default_factory=lambda: [
         "/mavros/state", "/blueboat/odom",

@@ -168,7 +168,7 @@ class MapView(QGraphicsView):
     # ---- adaptive X/Y grid overlay -----------------------------------------------
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802
         step = self._grid_step()
-        pen = QPen(theme.COLOR_GRID, 0)
+        pen = QPen(theme.COLOR_GRID, 10.0)
         pen.setCosmetic(True)
         painter.setPen(pen)
 

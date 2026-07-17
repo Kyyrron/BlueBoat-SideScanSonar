@@ -16,7 +16,7 @@ import logging
 import math
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QPixmap, QTransform
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import QGraphicsItemGroup, QGraphicsPixmapItem, QGraphicsScene
@@ -124,7 +124,10 @@ class TileLayer:
 
     def _add_tile(self, key: tuple[int, int, int], pm: QPixmap, fit: GeoFit) -> None:
         item = QGraphicsPixmapItem(pm)
-        item.setTransformationMode(1)  # Qt.SmoothTransformation
+        # Strict PySide6 builds reject raw ints for enum parameters — the
+        # previous `setTransformationMode(1)` raised TypeError on every tile,
+        # which is why the satellite layer never appeared at all.
+        item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         self._group.addToGroup(item)
         self._items[key] = item
         self._place_tile(item, *key, fit)

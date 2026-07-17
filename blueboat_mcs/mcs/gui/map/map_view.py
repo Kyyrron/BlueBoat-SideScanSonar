@@ -34,7 +34,7 @@ from mcs.core.los_predictor import predict_los_path
 from mcs.gui import theme
 from mcs.gui.map.map_items import (
     CrosshairItem, MarkerItem, MissionPathItem, PolylineItem, RobotItem,
-    TargetLineItem, draw_grid,
+    TargetLineItem, draw_grid, draw_scale_bar,
 )
 from mcs.gui.map.tile_layer import TileLayer
 from mcs.models.store import DataStore
@@ -270,7 +270,14 @@ class MapView(QGraphicsView):
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         super().drawBackground(painter, rect)
         if self._grid_visible:
-            draw_grid(painter, rect, self._px_per_m())
+            self._grid_spacing = draw_grid(painter, rect, self._px_per_m())
+
+    def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
+        super().drawForeground(painter, rect)
+        if self._grid_visible:
+            draw_scale_bar(painter, self.viewport().width(),
+                           self.viewport().height(), self._px_per_m(),
+                           getattr(self, "_grid_spacing", 0.0))
 
     def _px_per_m(self) -> float:
         return abs(self.transform().m11())

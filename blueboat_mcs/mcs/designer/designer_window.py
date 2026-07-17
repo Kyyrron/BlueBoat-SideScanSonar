@@ -80,6 +80,7 @@ class DesignerWindow(QMainWindow):
         # ---- Wiring -----------------------------------------------------------
         self.model.structure_changed.connect(self._on_structure_changed)
         self.model.changed.connect(self._schedule_resample)
+        self.model.changed.connect(self.props.refresh_values)
         self.map.selection_changed.connect(self._on_map_selection)
         self.map.edit_started.connect(self._push_undo)
         self.map.point_added.connect(self._on_point_added)
@@ -209,6 +210,19 @@ class DesignerWindow(QMainWindow):
         edit.addSeparator()
         act(edit, "Undo", self._undo_op, "Ctrl+Z")
         act(edit, "Redo", self._redo_op, "Ctrl+Y")
+        edit.addSeparator()
+        act(edit, "Center Pattern", self._center_pattern, "F")
+
+    def _center_pattern(self) -> None:
+        """Frame the selection (or, without one, the whole mission) on screen."""
+        uids = self._selection()
+        wps = [w for w in self.model.flatten() if w.uid in uids] or \
+            self.model.flatten()
+        if not wps:
+            self.statusBar().showMessage("Nothing to center — the mission is "
+                                         "empty.", 4000)
+            return
+        self.map.center_on_bounds([w.x for w in wps], [w.y for w in wps])
 
     # ================================================================ undo
     def _push_undo(self) -> None:
@@ -466,6 +480,7 @@ class DesignerWindow(QMainWindow):
                                   lat0=latlon[0], lon0=latlon[1],
                                   rms_m=0.0, n_pairs=0)
         self._update_geo_fit()
+        self._sat_box.setChecked(True)   # imagery is what the origin is for
         self.map.centerOn(0.0, 0.0)
         self.statusBar().showMessage(
             f"GPS origin set: {latlon[0]:.6f}, {latlon[1]:.6f} — satellite "

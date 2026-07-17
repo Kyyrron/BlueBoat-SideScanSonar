@@ -222,34 +222,54 @@ class MissionModel(QObject):
         self.changed.emit()
 
     def duplicate(self, uids: set[int], offset: float = 2.0) -> list[int]:
-        """Duplicate selected items (with offset); returns new uids."""
+        """Duplicate selected items with an offset; returns the new uids.
+
+        Pattern-aware semantics (the map selects *child* uids while the tree
+        may select the *group* uid, so both must work and must not combine
+        into double duplication):
+
+        * a group is duplicated **as a group** when its own uid is selected
+          OR all of its children are (the map's way of selecting a pattern);
+        * grouped children selected partially are duplicated as free
+          top-level waypoints;
+        * top-level waypoints duplicate as before.
+        """
+        uids = set(uids)
         new_uids: list[int] = []
-        for item in list(self.items):
-            if item.uid not in uids:
-                continue
+        handled_children: set[int] = set()
+        originals = list(self.items)
+        original_flat = self.flatten()
+
+        def copy_wp(w: Waypoint, name_suffix: str = " copy") -> Waypoint:
+            return Waypoint(uid=self.next_uid(), name=w.name + name_suffix,
+                            x=w.x + offset, y=w.y + offset,
+                            seg_out=SegmentSpec.from_dict(w.seg_out.to_dict()))
+
+        for item in originals:
             if isinstance(item, PatternGroup):
-                copy = PatternGroup(uid=self.next_uid(),
-                                    name=item.name + " copy",
-                                    pattern=item.pattern,
-                                    params=dict(item.params))
-                for w in item.children:
-                    copy.children.append(Waypoint(
-                        uid=self.next_uid(), name=w.name, x=w.x + offset,
-                        y=w.y + offset, seg_out=SegmentSpec.from_dict(
-                            w.seg_out.to_dict())))
-                self.items.append(copy)
-                new_uids.append(copy.uid)
-            else:
-                wp = Waypoint(uid=self.next_uid(), name=item.name + " copy",
-                              x=item.x + offset, y=item.y + offset,
-                              seg_out=SegmentSpec.from_dict(item.seg_out.to_dict()))
+                child_uids = {w.uid for w in item.children}
+                if item.uid in uids or (child_uids and child_uids <= uids):
+                    copy = PatternGroup(uid=self.next_uid(),
+                                        name=item.name + " copy",
+                                        pattern=item.pattern,
+                                        params=dict(item.params))
+                    copy.children = [copy_wp(w, "") for w in item.children]
+                    self.items.append(copy)
+                    new_uids.append(copy.uid)
+                    handled_children |= child_uids
+            elif item.uid in uids:
+                wp = copy_wp(item)
                 self.items.append(wp)
                 new_uids.append(wp.uid)
-        # grouped children selected individually -> duplicate as free waypoints
-        for wp in self.flatten():
-            if wp.uid in uids and self.container_of(wp.uid) is not None \
-                    and wp.uid not in [i for i in uids if self.item(i) in self.items]:
-                pass  # covered by group duplication rules above; keep simple
+
+        # Partially-selected grouped children → duplicated as free waypoints.
+        for wp in original_flat:
+            if wp.uid in uids and wp.uid not in handled_children \
+                    and self.container_of(wp.uid) is not None:
+                copy = copy_wp(wp)
+                self.items.append(copy)
+                new_uids.append(copy.uid)
+
         if new_uids:
             self.structure_changed.emit()
             self.changed.emit()

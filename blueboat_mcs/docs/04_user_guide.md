@@ -38,7 +38,8 @@ visible within one second.
 
 ## Mission map
 
-Drag to pan, mouse-wheel to zoom (anchored under the cursor). A simple click
+Drag to pan, mouse-wheel to zoom (anchored under the cursor). The grid's
+scale bar in the bottom-left corner shows the current cell size in metres. A simple click
 anywhere shows, in the status bar: world coordinates, GPS coordinates (once
 georeferenced) and the live distance from the robot to that point; the point
 is marked on the map.
@@ -142,8 +143,10 @@ the station throughout (the terminal is the complete debug output; add
 
 **Create Survey Pattern** (bottom toolbar) opens the designer — a small
 path-design application inside the station. Its map pans (middle-button
-drag), zooms (wheel), shows the metric grid and, when a georeference
-exists, the same satellite layer as the main map. If the robot is
+drag), zooms (wheel), shows the metric grid — with a scale bar in the bottom-left corner whose
+length always equals one grid cell — and, when a georeference exists, the
+same satellite layer as the main map. **Center Pattern** (`F`) frames the
+current selection, or the whole mission, on screen. If the robot is
 connected, its position sets the initial view and the live robot arrow and
 pinger overlays can be toggled from the toolbar; otherwise **Set GPS
 Origin…** accepts Google-Maps-format coordinates (`33.660196, 130.657780`)

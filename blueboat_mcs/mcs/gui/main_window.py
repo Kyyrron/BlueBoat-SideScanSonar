@@ -9,6 +9,7 @@ is what keeps the UI smooth and flicker-free during long experiments).
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCloseEvent
@@ -189,11 +190,35 @@ class MainWindow(QMainWindow):
         m.manual_target = None
         self.commands.set_simulation_mode(params.simulation)
         self.store.reset_experiment()
-        # Fetch the mission path for display once the service is up.
+        # Mission-path preview: the station asks the path_generation SERVICE
+        # (/path_request) for the whole path — the same call path_publisher
+        # makes, but direct, so it works identically on the real robot and
+        # in simulation (path_publisher is only launched by Sim_launch.py).
         # Sim_launch.py always starts path_generation; the real launch only
         # does so with a controller and use_pinger:=False.
         if params.simulation or (params.controller_type and not params.use_pinger):
-            QTimer.singleShot(3000, lambda: self.commands.request_mission_path())
+            QTimer.singleShot(
+                3000, lambda: self._request_path_preview(params.trajectory))
+
+    def _request_path_preview(self, trajectory: str) -> None:
+        """Request the full mission path over the right horizon.
+
+        Default horizon comes from launch.path_preview_total_time_s; for a
+        designer trajectory the YAML's own duration_s replaces it, so long
+        custom missions are previewed completely instead of being cut at the
+        legacy 120 s limit.
+        """
+        total = self.cfg.launch.path_preview_total_time_s
+        if trajectory.startswith("from_yaml:"):
+            try:
+                import yaml  # PyYAML, already a station dependency
+                data = yaml.safe_load(
+                    Path(trajectory.partition(":")[2]).read_text()) or {}
+                total = float(data.get("duration_s", total)) + 1.0
+            except Exception as exc:  # noqa: BLE001 - preview is best-effort
+                _LOG.warning("Could not read YAML duration: %s", exc)
+        self.commands.request_mission_path(
+            total_time=total, dt=self.cfg.launch.path_preview_dt_s)
 
     def _on_mission_stopped(self) -> None:
         pass  # state cleared on 'idle' launch_state
