@@ -147,6 +147,7 @@ class MainWindow(QMainWindow):
         self.toolbar.manual_target_mode_changed.connect(self._on_manual_mode)
         self.toolbar.continue_mission_clicked.connect(self._on_continue_mission)
         self.toolbar.measure_mode_changed.connect(self._on_measure_mode)
+        self.toolbar.create_pattern_clicked.connect(self._open_designer)
         self.toolbar.mission_launched.connect(self._on_mission_launched)
         self.toolbar.mission_stopped.connect(self._on_mission_stopped)
         bus.launch_state_changed.connect(self._on_launch_state)
@@ -251,6 +252,19 @@ class MainWindow(QMainWindow):
         if on and self.toolbar.manual_button.isChecked():
             self.toolbar.manual_button.setChecked(False)  # disarm selection only
         self.map_view.set_mode(MapMode.MEASURE if on else MapMode.NORMAL)
+
+    # ================================================================ designer
+    def _open_designer(self) -> None:
+        """Open the Survey Pattern Designer (one shared, non-modal instance
+        with live robot/pinger overlays and the station's georeference)."""
+        from mcs.designer.designer_window import DesignerWindow  # lazy import
+        if getattr(self, "_designer", None) is None:
+            self._designer = DesignerWindow(self.cfg, self.store, parent=self)
+            self._designer.destroyed.connect(
+                lambda: setattr(self, "_designer", None))
+        self._designer.show()
+        self._designer.raise_()
+        self._designer.activateWindow()
 
     # ================================================================ shutdown
     def closeEvent(self, event: QCloseEvent) -> None:

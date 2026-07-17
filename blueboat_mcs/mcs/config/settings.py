@@ -152,6 +152,19 @@ class GeoConfig:
 
 
 @dataclass
+class DesignerConfig:
+    """Mission Pattern Designer settings."""
+
+    trajectories_dir: str = str(DEFAULT_CONFIG_DIR / "trajectories")
+    grid_snap_m: float = 1.0          # Ctrl-drag / fixed-distance creation step
+    waypoint_snap_px: float = 12.0    # snap-to-waypoint radius (screen px)
+    sample_ds_m: float = 0.25         # spatial resolution of exported samples
+    default_speed_mps: float = 0.5    # time-parameterization cruise speed
+    preview_arrow_every_m: float = 8.0
+    undo_depth: int = 100
+
+
+@dataclass
 class AppConfig:
     """Root configuration object."""
 
@@ -161,6 +174,7 @@ class AppConfig:
     los: LosApproximation = field(default_factory=LosApproximation)
     map: MapConfig = field(default_factory=MapConfig)
     geo: GeoConfig = field(default_factory=GeoConfig)
+    designer: DesignerConfig = field(default_factory=DesignerConfig)
     estop_confirm_timeout_s: float = 2.0
     estop_flush_delay_s: float = 0.3
 

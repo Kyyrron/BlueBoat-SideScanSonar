@@ -37,6 +37,7 @@ class BottomToolbar(QWidget):
     manual_target_mode_changed = Signal(bool)
     measure_mode_changed = Signal(bool)
     continue_mission_clicked = Signal()
+    create_pattern_clicked = Signal()
     mission_launched = Signal(object)   # LaunchParameters
     mission_stopped = Signal()
 
@@ -133,6 +134,16 @@ class BottomToolbar(QWidget):
         self.measure_button.setCheckable(True)
         self.measure_button.toggled.connect(self.measure_mode_changed.emit)
         row.addWidget(self.measure_button)
+
+        row.addSpacing(14)
+
+        self.designer_button = QPushButton("Create Survey Pattern")
+        self.designer_button.setToolTip(
+            "Open the Survey Pattern Designer: create, edit and manage "
+            "trajectories. Saved missions appear in Launch Mission → "
+            "custom paths.")
+        self.designer_button.clicked.connect(self.create_pattern_clicked.emit)
+        row.addWidget(self.designer_button)
 
         row.addStretch(1)
 

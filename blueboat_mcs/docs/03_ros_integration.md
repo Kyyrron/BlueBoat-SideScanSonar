@@ -133,3 +133,37 @@ Node termination is never initiated before steps 1–4 complete.
 
 MAVROS sensor topics are subscribed BEST_EFFORT (matching the stack); all
 custom topics use default RELIABLE depth 10, matching their publishers.
+
+
+## Designer trajectories — integrating with `path_generation.py`
+
+The Mission Pattern Designer exports `blueboat_trajectory/1` YAML files
+(specification: `08_trajectory_format.md`). Integration changes **only the
+loading mechanism** of `path_generation.py`; `generate_path()` and every
+hard-coded trajectory are untouched.
+
+Steps (once):
+
+1. Copy `integration/yaml_trajectory.py` into the `blueboat_control`
+   package next to `path_generation.py` (it depends only on PyYAML and
+   numpy, both shipped with ROS2).
+2. Replace `path_generation.py` with `integration/path_generation.py` — or
+   apply its three marked blocks by hand: the `import yaml_trajectory as
+   yt`, the loader in `__init__` (parses `trajectory:=from_yaml:<path>` or
+   the optional `yaml_path` parameter, loads once, falls back to
+   `station_keeping` with an error log on failure), and the `from_yaml`
+   branch at the top of `single_pose()`:
+
+   ```python
+   if path_shape.startswith('from_yaml') and self.yaml_traj is not None:
+       x, y, z, roll, pitch, yaw = yt.read_yaml(self.yaml_traj, t)
+       ...
+   ```
+
+3. Rebuild the workspace. No launch-file modification is needed: the YAML
+   path is carried inside the existing `trajectory` argument
+   (`trajectory:=from_yaml:/abs/path.yaml`), which both `BlueBoat_launch.py`
+   and `Sim_launch.py` already forward to the node.
+
+Station side, saved missions appear automatically in **Launch Mission →
+Trajectory → custom paths**; selecting one builds the `from_yaml:` string.

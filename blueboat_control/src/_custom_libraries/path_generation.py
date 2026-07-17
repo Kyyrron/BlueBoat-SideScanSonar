@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
 
+# ============================================================================
+# PATCHED for the Mission Pattern Designer (Mission Control Station).
+# The ONLY changes relative to the original file are marked with
+# "# --- YAML trajectory support ---":
+#   1. import of the yaml_trajectory helper module (same directory);
+#   2. loading of a designer-generated YAML file in __init__ when the
+#      'trajectory' parameter is 'from_yaml:<absolute path>' (or the
+#      optional 'yaml_path' parameter is set);
+#   3. one new branch in single_pose().
+# Every hard-coded trajectory below is byte-identical to the original and
+# keeps working exactly as before. generate_path() is unchanged.
+# ============================================================================
+
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
@@ -10,6 +23,10 @@ from scipy.spatial.transform import Rotation as R
 from blueboat_interfaces.srv import RequestPath
 import math
 import custom_functions as cf
+
+# --- YAML trajectory support ------------------------------------------------
+import yaml_trajectory as yt
+# -----------------------------------------------------------------------------
 
 """
 Creates a services that handle path generation requests. Receives a an array of time values and responds with the associated path.
@@ -26,6 +43,29 @@ class PathGeneration(Node):
         self.declare_parameter('trajectory', 'station_keeping')
         self.trajectory = self.get_parameter('trajectory').get_parameter_value().string_value
 
+        # --- YAML trajectory support -----------------------------------------
+        # A designer-generated trajectory is selected either with
+        #   trajectory:=from_yaml:<absolute path to .yaml>
+        # (no launch-file change needed: the file path rides inside the
+        # existing 'trajectory' argument), or with the optional dedicated
+        # parameter yaml_path:=<path> combined with trajectory:=from_yaml.
+        self.declare_parameter('yaml_path', '')
+        yaml_path = self.get_parameter('yaml_path').get_parameter_value().string_value
+        self.yaml_traj = None
+        if self.trajectory.startswith('from_yaml'):
+            selected_path = yaml_path or self.trajectory.partition(':')[2]
+            try:
+                self.yaml_traj = yt.YamlTrajectory(selected_path)
+                self.get_logger().info(
+                    f"Loaded YAML trajectory '{self.yaml_traj.name}' "
+                    f"({self.yaml_traj.duration:.1f} s) from {selected_path}")
+            except Exception as exc:
+                self.get_logger().error(
+                    f"Failed to load YAML trajectory '{selected_path}': {exc} "
+                    "— falling back to station_keeping")
+                self.trajectory = 'station_keeping'
+        # -----------------------------------------------------------------------
+
         # Service
         self.path_service = self.create_service(RequestPath, '/path_request', self.generate_path)
 
@@ -38,6 +78,24 @@ class PathGeneration(Node):
         depth_per_circle = 2.0  # meters
         num_turns = 3
         total_length = 2 * np.pi * num_turns
+
+        # --- YAML trajectory support -----------------------------------------
+        # Designer-generated trajectory: dense [t, x, y, yaw] samples,
+        # linearly interpolated at time t (see yaml_trajectory.py).
+        if path_shape.startswith('from_yaml') and self.yaml_traj is not None:
+            x, y, z, roll, pitch, yaw = yt.read_yaml(self.yaml_traj, t)
+            quat = R.from_euler('zyx', [yaw, 0.0, 0.0]).as_quat()
+            pose = PoseStamped()
+            pose.header.frame_id = "world"
+            pose.pose.position.x = float(x)
+            pose.pose.position.y = float(y)
+            pose.pose.position.z = float(z)
+            pose.pose.orientation.x = quat[0]
+            pose.pose.orientation.y = quat[1]
+            pose.pose.orientation.z = quat[2]
+            pose.pose.orientation.w = quat[3]
+            return pose
+        # -----------------------------------------------------------------------
 
         # Station keeping
         if path_shape == 'station_keeping':

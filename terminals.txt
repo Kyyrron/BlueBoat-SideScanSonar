@@ -11,6 +11,13 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: override"
 ./QGroundControl.AppImage
 
 
+----- App Visu & Control
+
+source env.sh
+cd src/BlueBoat-SideScanSonar/blueboat_mcs
+python3 run.py
+
+
 -- SSS
 
 ----- App Visu

@@ -57,6 +57,20 @@ publishers) generalises directly to click-to-build waypoint lists; the missing
 piece is a robot-side consumer, since `path_generation` currently serves
 analytic trajectories only.
 
+**Mission Pattern Designer — future work.** Cubic Bézier segments are
+implemented; the following were assessed and deliberately deferred as they
+change the product's scope rather than extend a registry: **Dubins paths**
+(turn-radius-constrained segments — natural fit as one more
+`Interpolation`, but honest support requires the vehicle's real minimum
+turn radius, which should first be identified from field logs);
+**polygon-area coverage planners** (the lawnmower already covers
+rectangular areas; general polygons need cell decomposition — recommended
+as a new `Pattern` backed by a `coverage.py` module); **automatic survey
+generation** (detector-driven replanning belongs to the thesis's adaptive
+pipeline, not the manual designer — the YAML format is deliberately
+sufficient as its output target: an adaptive planner can write
+`blueboat_trajectory/1` files and they run unchanged).
+
 ## Things to be careful with
 
 * Keep the ROS/GUI boundary intact: never call a widget from the ROS thread,

@@ -29,6 +29,8 @@ install(PROGRAMS src/_custom_libraries/path_generation.py
         DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS src/_custom_libraries/custom_functions.py
         DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS src/_custom_libraries/yaml_trajectory.py
+        DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS src/robot_interaction/robot_interface.py
         DESTINATION lib/${PROJECT_NAME})

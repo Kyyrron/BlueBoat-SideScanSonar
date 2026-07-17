@@ -98,3 +98,31 @@ reading the stack (manual-target resume comparison, target published on the
 thruster topic in pinger mode, unpublished corrected pinger). The station is
 written against the stack *as it is*; each observation lists the one-line
 robot-side fix if you choose to apply it.
+
+
+## Mission Pattern Designer (mcs/designer/)
+
+Layering mirrors the station: `model.py` (mission data + mutations +
+snapshot undo), `interpolation.py` and `patterns.py` (pure registries),
+`sampling.py` (mission → time-stamped samples), `io_yaml.py` (runtime +
+metadata files, library ops) are Qt-widget-free and covered by the smoke
+test; `designer_map.py`, `panels.py`, `designer_window.py` are
+presentation. Robot-side, `integration/yaml_trajectory.py` is the only
+runtime dependency.
+
+How to extend:
+
+* **New interpolation** — subclass `Interpolation` in `interpolation.py`
+  (`key`, `label`, `schema`, `sample()` returning points from A inclusive
+  to B exclusive) and add it to `REGISTRY`. The properties panel form, the
+  sampler, the YAML metadata and the runtime need no changes (the runtime
+  only ever sees samples).
+* **New pattern** — subclass `Pattern` in `patterns.py` (`generate(params)`
+  with `x0`/`y0` anchor injected by the dialog) and register it; the
+  library button and parameter dialog are generated from `schema`.
+* **New file format revision** — bump `FORMAT` in `io_yaml.py` and
+  `SUPPORTED_FORMAT` in the runtime loader together; readers reject unknown
+  tags by contract (see `08_trajectory_format.md`).
+
+Undo is snapshot-based: any new mutating entry point must call
+`DesignerWindow._push_undo()` first — nothing else is required.

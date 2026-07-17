@@ -18,6 +18,8 @@ The dialog returns a :class:`~mcs.ros.launch_manager.LaunchParameters`;
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel,
     QLineEdit, QVBoxLayout,
@@ -29,6 +31,15 @@ from mcs.ros.launch_manager import LaunchParameters
 
 _REAL = "Real robot"
 _SIM = "Gazebo simulation"
+
+
+def _list_custom_paths(cfg: AppConfig) -> list[tuple[str, Path]]:
+    """Saved designer missions: (name, runtime yaml path), sorted."""
+    directory = Path(cfg.designer.trajectories_dir)
+    if not directory.exists():
+        return []
+    return sorted((p.stem, p) for p in directory.glob("*.yaml")
+                  if not p.name.endswith(".meta.yaml"))
 
 
 class LaunchDialog(QDialog):
@@ -60,6 +71,18 @@ class LaunchDialog(QDialog):
 
         self._trajectory = QComboBox()
         self._trajectory.addItems(cfg.launch.trajectories)
+        # Designer-generated missions appear under a 'custom paths' section;
+        # each entry carries the runtime YAML path as item data, turned into
+        # trajectory:=from_yaml:<path> by parameters(). Works identically on
+        # the real robot and in simulation (path_generation runs in both).
+        customs = _list_custom_paths(cfg)
+        if customs:
+            self._trajectory.insertSeparator(self._trajectory.count())
+            header = self._trajectory.count()
+            self._trajectory.addItem("── custom paths ──")
+            self._trajectory.model().item(header).setEnabled(False)
+            for name, path in customs:
+                self._trajectory.addItem(f"custom: {name}", str(path))
         form.addRow("Trajectory", self._trajectory)
 
         # ---- Real-robot-only fields ----------------------------------------------
@@ -105,7 +128,13 @@ class LaunchDialog(QDialog):
         # ---- Restore last parameters ------------------------------------------------
         if last is not None:
             self._mode.setCurrentText(_SIM if last.simulation else _REAL)
-            self._trajectory.setCurrentText(last.trajectory)
+            if last.trajectory.startswith("from_yaml:"):
+                idx = self._trajectory.findData(
+                    last.trajectory.partition(":")[2])
+                if idx >= 0:
+                    self._trajectory.setCurrentIndex(idx)
+            else:
+                self._trajectory.setCurrentText(last.trajectory)
             self._use_pinger.setChecked(last.use_pinger)
             self._enable_motors.setChecked(False)  # always re-confirm motors
             self._note.setText(last.note)
@@ -172,11 +201,14 @@ class LaunchDialog(QDialog):
             if ":=" in token:
                 key, value = token.split(":=", 1)
                 extra[key] = value
+        custom = self._trajectory.currentData()
+        trajectory = (f"from_yaml:{custom}" if custom
+                      else self._trajectory.currentText())
         return LaunchParameters(
             enable_motors=(not sim) and self._enable_motors.isChecked(),
             note="" if sim else self._note.text().strip(),
             controller_type=self._controller.currentText(),
-            trajectory=self._trajectory.currentText(),
+            trajectory=trajectory,
             use_pinger=(not sim) and self._use_pinger.isChecked(),
             simulation=sim,
             robot_file=self._robot_file.currentText().strip() or "thrusters_ur",

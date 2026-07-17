@@ -136,3 +136,48 @@ confirmed *before* the nodes are stopped; the window closes once the launch
 tree has exited. Application logs are mirrored to the terminal that started
 the station throughout (the terminal is the complete debug output; add
 `--verbose` to also see the raw launch stream there).
+
+
+## Survey Pattern Designer
+
+**Create Survey Pattern** (bottom toolbar) opens the designer — a small
+path-design application inside the station. Its map pans (middle-button
+drag), zooms (wheel), shows the metric grid and, when a georeference
+exists, the same satellite layer as the main map. If the robot is
+connected, its position sets the initial view and the live robot arrow and
+pinger overlays can be toggled from the toolbar; otherwise **Set GPS
+Origin…** accepts Google-Maps-format coordinates (`33.660196, 130.657780`)
+to define world (0,0) — the origin remains optional, and without one the
+editor simply works in the local world frame.
+
+**Editing.** *✚ Add Waypoints* (or `A`) arms click-to-add: Shift constrains
+the new point horizontally/vertically from the previous waypoint, Ctrl
+creates at a fixed distance (multiples of the grid step); right-click
+leaves the mode. In select mode, drag handles to move (multi-selection via
+rubber band or Ctrl-click): Shift = axis constraint, Ctrl = snap to grid,
+snapping to nearby waypoints is on by default (Alt disables). Copy/Paste
+(`Ctrl+C/V`), Duplicate+Offset (`Ctrl+D`), Delete, Align ─ / Align │,
+Distribute (equal spacing between the first and last selected), Group /
+Explode, Lock/Unlock, rename (edit in the tree), reorder (▲/▼) and
+snapshot Undo/Redo (`Ctrl+Z/Y`) are all in the toolbar and tree panel.
+
+**Segments.** Select a waypoint to edit the segment *leaving* it: straight,
+sinusoidal, circular arc, Catmull-Rom spline or cubic Bézier, each with its
+own parameters; the preview updates live with interpolation curves,
+travel-direction chevrons, waypoint numbering and START/END markers.
+
+**Patterns.** The library inserts parameterized survey patterns as grouped
+objects in the mission tree — Lawnmower (area, spacing, orientation,
+starting corner), Circle (radius, points, direction), Rectangle, Square,
+Figure Eight, Spiral, Expanding Square, Station Keeping, Regular Polygon.
+Groups move, duplicate, reorder and lock as one object; "Edit pattern
+parameters…" regenerates in place, "Explode" turns a group into individual
+waypoints.
+
+**Mission settings & files.** Cruise speed (time-parameterization), loop
+and a comment live in the right column; the status bar shows waypoint
+count, length and duration. Save / Save As (with overwrite confirmation),
+and the library dialog's Duplicate / Rename / Delete manage the mission
+files (`~/.config/blueboat_mcs/trajectories/`). Saved missions immediately
+appear in **Launch Mission → Trajectory → custom paths** for both the real
+robot and the simulation.
