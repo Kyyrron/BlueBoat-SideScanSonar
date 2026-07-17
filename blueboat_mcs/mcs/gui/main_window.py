@@ -199,6 +199,70 @@ class MainWindow(QMainWindow):
         if params.simulation or (params.controller_type and not params.use_pinger):
             QTimer.singleShot(
                 3000, lambda: self._request_path_preview(params.trajectory))
+        self._start_gps_deployment(params)
+
+    # ======================================================== GPS deployment
+    def _start_gps_deployment(self, params: LaunchParameters) -> None:
+        """GPS-anchored mission: path_generation was pointed at a deployed
+        file that does not exist yet (it holds position meanwhile). The
+        robot's world origin is created at power-on, and the odom↔GPS fit
+        for THIS run only becomes observable after a few metres of motion —
+        so deployment is deferred: this watcher polls the georeferencer and,
+        once the fit is valid, converts the anchored mission into today's
+        world frame and writes the deployed file; path_generation reloads it
+        on its next path request and the boat transitions onto the true-GPS
+        path. Every waypoint therefore lands on its real-world GPS
+        coordinates regardless of where the robot was switched on."""
+        self._stop_gps_deployment()
+        if not params.gps_anchored_source or params.simulation:
+            return
+        from mcs.designer import io_yaml  # lazy: PyYAML machinery
+        self._gps_src = Path(params.gps_anchored_source)
+        self._gps_dst = Path(params.gps_deployed_target)
+        self._gps_dst.unlink(missing_ok=True)  # never reuse a stale frame
+        self._gps_hint_countdown = 0
+        self._gps_timer = QTimer(self)
+        self._gps_timer.timeout.connect(lambda: self._poll_gps_deployment(io_yaml))
+        self._gps_timer.start(1000)
+        self._status.showMessage(
+            "GPS-anchored mission: holding position — drive the boat a few "
+            "metres so the georeference converges; the path deploys "
+            "automatically.", 10000)
+
+    def _poll_gps_deployment(self, io_yaml) -> None:
+        if not self.store.mission.launch_running:
+            self._stop_gps_deployment()
+            return
+        geo = self.store.geo
+        if not geo.is_valid or geo.fit is None:
+            self._gps_hint_countdown -= 1
+            if self._gps_hint_countdown <= 0:
+                self._gps_hint_countdown = 20
+                self._status.showMessage(
+                    "GPS path pending: georeference not established yet "
+                    "(needs GPS fix + a few metres of motion).", 8000)
+            return
+        try:
+            io_yaml.deploy_mission(self._gps_src, geo.fit, self._gps_dst)
+        except Exception as exc:  # noqa: BLE001 - surfaced, retried next poll
+            _LOG.error("GPS deployment failed: %s", exc)
+            return
+        self._stop_gps_deployment()
+        _LOG.info("GPS mission deployed to %s (fit rms %.2f m)",
+                  self._gps_dst, geo.fit.rms_m)
+        self._status.showMessage(
+            f"GPS path deployed (georef rms {geo.fit.rms_m:.2f} m) — the "
+            "robot transitions onto the mission at its next path request.",
+            10000)
+        QTimer.singleShot(
+            1500, lambda: self._request_path_preview(f"from_yaml:{self._gps_dst}"))
+
+    def _stop_gps_deployment(self) -> None:
+        timer = getattr(self, "_gps_timer", None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+            self._gps_timer = None
 
     def _request_path_preview(self, trajectory: str) -> None:
         """Request the full mission path over the right horizon.

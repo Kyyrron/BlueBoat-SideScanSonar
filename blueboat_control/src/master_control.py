@@ -141,8 +141,12 @@ class Controller(Node):
             self.path_time = self.dt
             self.path_steps = 2
 
-        self.k_v = 0.15
-        self.k_psi = 10.0
+        if self.isSimulation:
+            self.k_v = 2.0
+            self.k_psi = 16.0
+        else:
+            self.k_v = 0.15
+            self.k_psi = 10.0
 
         self.safety_distance = -1.     # Brakes and stop moving if the distance to the pinger is smaller than this value, set it to negative to disable it
         self.stopping_sequence = False # Used as a safety to stop LoS control when it gets close to target
@@ -381,7 +385,7 @@ class Controller(Node):
             self.get_logger().info(f'Pinger coordinates: {self.pinger_target}')
         if list(self.manual_target)[:2] != [0.0,0.0]:
             target_str = ", ".join(f"{float(x):.2f}" for x in list(self.manual_target))
-            self.get_logger().info(f'\n\nManual target coordinates: {target_str}')
+            self.get_logger().info(f'\nManual target coordinates: \n{target_str}')
         # self.get_logger().info(f'Pose: {self.current_pose} \nTwist: {self.current_twist} \nComputed thrust: {u}')
 
         # Update and save monitoring metrics to be graphed later

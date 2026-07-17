@@ -11,6 +11,8 @@ between rows — every interpolation model stays editor-side.
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -41,36 +43,43 @@ def sample_mission(model: MissionModel, ds: float = 0.25) -> SampledMission:
         return SampledMission(np.array([0.0]), np.array([[w.x, w.y]]),
                               np.array([0.0]), 0.0, 0.0)
 
-    pts_list: list[np.ndarray] = []
+    mission_speed = max(float(model.speed), 1e-3)
     pairs = list(zip(wps[:-1], wps[1:]))
     if model.loop:
         pairs.append((wps[-1], wps[0]))
+
+    xy_pts: list[tuple[float, float]] = [(wps[0].x, wps[0].y)]
+    t_pts: list[float] = [0.0]
+    length = 0.0
+
     for i, (a, b) in enumerate(pairs):
         prev = (wps[i - 1].x, wps[i - 1].y) if i > 0 else None
         nxt_wp = pairs[i + 1][1] if i + 1 < len(pairs) else None
         nxt = (nxt_wp.x, nxt_wp.y) if nxt_wp is not None else None
         interp = REGISTRY.get(a.seg_out.kind, REGISTRY["straight"])
-        seg = interp.sample(prev, (a.x, a.y), (b.x, b.y), nxt,
-                            a.seg_out.params, ds)
-        if len(seg):
-            pts_list.append(np.asarray(seg, dtype=float))
-    end = wps[0] if model.loop else wps[-1]
-    pts_list.append(np.array([[end.x, end.y]]))
-    xy = np.vstack(pts_list)
+        seg = np.asarray(interp.sample(prev, (a.x, a.y), (b.x, b.y), nxt,
+                                       a.seg_out.params, ds), dtype=float)
+        # Per-segment speed: 0 (or negative) means "mission cruise speed".
+        speed = a.seg_out.speed if a.seg_out.speed > 1e-6 else mission_speed
+        # Walk the segment polyline (a inclusive .. b exclusive) plus its
+        # closing point b, accumulating time at THIS segment's speed.
+        pts = list(map(tuple, seg)) + [(b.x, b.y)]
+        for p in pts:
+            dx = p[0] - xy_pts[-1][0]
+            dy = p[1] - xy_pts[-1][1]
+            step = math.hypot(dx, dy)
+            if step <= 1e-9:
+                continue
+            length += step
+            t_pts.append(t_pts[-1] + step / speed)
+            xy_pts.append(p)
 
-    d = np.diff(xy, axis=0)
-    step = np.hypot(d[:, 0], d[:, 1])
-    keep = np.concatenate([[True], step > 1e-9])
-    xy = xy[keep]
+    xy = np.asarray(xy_pts, dtype=float)
+    t = np.asarray(t_pts, dtype=float)
     if len(xy) < 2:
-        return SampledMission(np.array([0.0]), xy[:1],
-                              np.array([0.0]), 0.0, 0.0)
+        return SampledMission(np.array([0.0]), xy[:1], np.array([0.0]), 0.0, 0.0)
     d = np.diff(xy, axis=0)
-    step = np.hypot(d[:, 0], d[:, 1])
-    s = np.concatenate([[0.0], np.cumsum(step)])
-    speed = max(float(model.speed), 1e-3)
-    t = s / speed
     yaw = np.arctan2(d[:, 1], d[:, 0])
     yaw = np.concatenate([yaw, yaw[-1:]])
     return SampledMission(t=t, xy=xy, yaw=yaw,
-                          length_m=float(s[-1]), duration_s=float(t[-1]))
+                          length_m=float(length), duration_s=float(t[-1]))

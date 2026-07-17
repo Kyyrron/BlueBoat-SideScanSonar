@@ -218,6 +218,9 @@ class PropertiesPanel(QWidget):
         self._model = model
         self._uid: int | None = None
         self._pos_spins: dict[str, QDoubleSpinBox] = {}
+        self._gps_label: QLabel | None = None
+        #: callable returning the active GeoFit or None (set by the window)
+        self.fit_provider = None
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._placeholder = QLabel("Select one item to edit its properties.")
@@ -242,6 +245,13 @@ class PropertiesPanel(QWidget):
                 spin.blockSignals(True)
                 spin.setValue(value)
                 spin.blockSignals(False)
+        if self._gps_label is not None:
+            fit = self.fit_provider() if self.fit_provider else None
+            if fit is not None:
+                lat, lon = fit.world_to_latlon(wp.x, wp.y)
+                self._gps_label.setText(f"{lat:.6f}, {lon:.6f}")
+            else:
+                self._gps_label.setText("— (no georeference)")
 
     def show_selection(self, uids: set[int]) -> None:
         if self._body is not None:
@@ -249,6 +259,7 @@ class PropertiesPanel(QWidget):
             self._body = None
         self._uid = None
         self._pos_spins = {}
+        self._gps_label = None
         single = self._model.item(next(iter(uids))) if len(uids) == 1 else None
         self._placeholder.setVisible(single is None)
         if single is None:
@@ -282,6 +293,11 @@ class PropertiesPanel(QWidget):
             lambda on: self.action.emit("lock_one", (wp.uid, on)))
         form.addRow("", locked)
 
+        # Read-only GPS readout (live) when a georeference is available.
+        self._gps_label = QLabel("—")
+        self._gps_label.setStyleSheet(f"color: {theme.TEXT_DIM};")
+        form.addRow("GPS", self._gps_label)
+
         seg_box = QGroupBox("Segment → next waypoint")
         seg_layout = QVBoxLayout(seg_box)
         combo = QComboBox()
@@ -290,6 +306,17 @@ class PropertiesPanel(QWidget):
         idx = combo.findData(wp.seg_out.kind)
         combo.setCurrentIndex(max(idx, 0))
         seg_layout.addWidget(combo)
+        speed_row = QFormLayout()
+        speed = QDoubleSpinBox()
+        speed.setRange(0.0, 10.0)
+        speed.setDecimals(2)
+        speed.setSingleStep(0.1)
+        speed.setSpecialValueText("mission speed")   # shown at 0.0
+        speed.setValue(wp.seg_out.speed)
+        speed.setToolTip("Cruise speed on this segment; 'mission speed' (0) "
+                         "uses the mission-wide setting.")
+        speed_row.addRow("Speed (m/s)", speed)
+        seg_layout.addLayout(speed_row)
         interp = interpolation.REGISTRY.get(wp.seg_out.kind,
                                             interpolation.REGISTRY["straight"])
         params_form = SchemaForm(interp.schema,
@@ -298,12 +325,15 @@ class PropertiesPanel(QWidget):
 
         def commit() -> None:
             self.action.emit("segment",
-                             (wp.uid, combo.currentData(), params_form.values()))
+                             (wp.uid, combo.currentData(), params_form.values(),
+                              speed.value()))
 
         params_form.edited.connect(commit)
+        speed.valueChanged.connect(lambda *_: commit())
         combo.currentIndexChanged.connect(
             lambda *_: self.action.emit("segment",
-                                        (wp.uid, combo.currentData(), {})))
+                                        (wp.uid, combo.currentData(), {},
+                                         speed.value())))
         form.addRow(seg_box)
         return box
 

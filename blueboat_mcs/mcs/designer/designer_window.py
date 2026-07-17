@@ -88,6 +88,7 @@ class DesignerWindow(QMainWindow):
         self.tree.action.connect(self._on_action)
         self.props.action.connect(self._on_action)
         self.library.pattern_requested.connect(self._on_pattern_requested)
+        self.props.fit_provider = self._active_fit
 
         self._resample_timer = QTimer(self)
         self._resample_timer.setSingleShot(True)
@@ -313,16 +314,18 @@ class DesignerWindow(QMainWindow):
                 self.model.changed.emit()
                 self.map.sync_positions()
         elif verb == "segment":
-            uid, kind, params = payload
+            uid, kind, params, speed = payload
             wp = self.model.waypoint(uid)
             if wp is not None:
                 self._push_undo()
                 changed_kind = wp.seg_out.kind != kind
                 wp.seg_out.kind = kind
                 wp.seg_out.params = dict(params)
+                wp.seg_out.speed = float(speed)
                 self.model.changed.emit()
                 if changed_kind:
                     self.props.show_selection({uid})
+                    self.props.refresh_values()
         elif verb == "edit_pattern":
             self._edit_pattern(payload)
 
@@ -446,12 +449,16 @@ class DesignerWindow(QMainWindow):
                                   self._robot_box.isChecked(),
                                   self._pinger_box.isChecked())
 
-    def _update_geo_fit(self, center: bool = False) -> None:
-        fit = None
+    def _active_fit(self):
+        """The georeference the design frame is expressed in: the station's
+        live fit when the robot is connected and calibrated, else the manual
+        GPS origin, else None."""
         if self._store is not None and self._store.geo.is_valid:
-            fit = self._store.geo.fit
-        elif self._manual_fit is not None:
-            fit = self._manual_fit
+            return self._store.geo.fit
+        return self._manual_fit
+
+    def _update_geo_fit(self, center: bool = False) -> None:
+        fit = self._active_fit()
         self.map.set_geo_fit(fit)
         self._sat_box.setEnabled(fit is not None)
         if fit is None:
@@ -540,20 +547,44 @@ class DesignerWindow(QMainWindow):
             return
         samples = sample_mission(self.model, self._cfg.designer.sample_ds_m)
         self.model.name = name
-        path = io_yaml.save_mission(self._dir, name, self.model, samples)
+        # Embed the GPS anchor: lat/lon of the design-frame origin + its
+        # rotation vs east/north. This is what links every waypoint to real
+        # GPS coordinates and lets the station deploy the mission into the
+        # robot's per-run world frame (docs/08).
+        fit = self._active_fit()
+        anchor = None
+        if fit is not None:
+            import math as _math
+            lat0, lon0 = fit.world_to_latlon(0.0, 0.0)
+            anchor = {"lat0": lat0, "lon0": lon0,
+                      "theta_deg": _math.degrees(fit.theta)}
+        path = io_yaml.save_mission(self._dir, name, self.model, samples,
+                                    geo_anchor=anchor)
         self._dirty = False
         self._update_title()
+        anchored = " · GPS-anchored" if anchor is not None else ""
         self.statusBar().showMessage(
             f"Saved {path} ({len(samples.t)} samples, "
-            f"{samples.length_m:.1f} m) — available in Launch Mission → "
-            "custom paths.", 8000)
+            f"{samples.length_m:.1f} m{anchored}) — available in Launch "
+            "Mission → custom paths.", 8000)
 
     def _file_open(self) -> None:
         if not self._confirm_discard():
             return
         dialog = LibraryDialog(self._dir, self)
         if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected:
-            io_yaml.load_mission(self._dir, dialog.selected, self.model)
+            anchor = io_yaml.load_mission(self._dir, dialog.selected, self.model)
+            if anchor is not None:
+                # The GPS origin the mission was designed with is remembered:
+                # restore it so satellite imagery and GPS readouts are
+                # immediately available for further editing.
+                self._manual_fit = GeoFit(
+                    theta=__import__("math").radians(
+                        float(anchor.get("theta_deg", 0.0))),
+                    tx=0.0, ty=0.0, lat0=float(anchor["lat0"]),
+                    lon0=float(anchor["lon0"]), rms_m=0.0, n_pairs=0)
+                self._update_geo_fit()
+                self._sat_box.setChecked(True)
             self._undo.clear()
             self._redo.clear()
             self._dirty = False

@@ -56,6 +56,11 @@ class LaunchParameters:
     use_pinger: bool = False
     simulation: bool = False
     robot_file: str = "thrusters_ur"
+    # GPS-anchored custom paths: source design YAML + the deployed file the
+    # station writes once the run's georeference is established (the
+    # 'trajectory' argument already points path_generation at the latter).
+    gps_anchored_source: str = ""
+    gps_deployed_target: str = ""
     extra_args: dict[str, str] = field(default_factory=dict)
 
     def to_cli(self) -> list[str]:

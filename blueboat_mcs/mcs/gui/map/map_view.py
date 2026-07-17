@@ -270,7 +270,8 @@ class MapView(QGraphicsView):
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         super().drawBackground(painter, rect)
         if self._grid_visible:
-            self._grid_spacing = draw_grid(painter, rect, self._px_per_m())
+            self._grid_spacing = draw_grid(painter, rect, self._px_per_m(),
+                                           high_contrast=self.tiles.enabled)
 
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
         super().drawForeground(painter, rect)

@@ -5,9 +5,14 @@
 # The ONLY changes relative to the original file are marked with
 # "# --- YAML trajectory support ---":
 #   1. import of the yaml_trajectory helper module (same directory);
-#   2. loading of a designer-generated YAML file in __init__ when the
-#      'trajectory' parameter is 'from_yaml:<absolute path>' (or the
-#      optional 'yaml_path' parameter is set);
+#   2. loading of a designer-generated YAML file when the 'trajectory'
+#      parameter is 'from_yaml:<absolute path>' (or the optional
+#      'yaml_path' parameter is set). The file is WATCHED: if it does not
+#      exist yet, or its modification time changes, it is (re)loaded on the
+#      next path request. This enables GPS-anchored missions: the station
+#      writes the deployed file only once the run's odom<->GPS fit is
+#      established, and the node holds position (station-keeping fallback
+#      pose) until then;
 #   3. one new branch in single_pose().
 # Every hard-coded trajectory below is byte-identical to the original and
 # keeps working exactly as before. generate_path() is unchanged.
@@ -52,22 +57,46 @@ class PathGeneration(Node):
         self.declare_parameter('yaml_path', '')
         yaml_path = self.get_parameter('yaml_path').get_parameter_value().string_value
         self.yaml_traj = None
+        self._yaml_selected_path = ''
+        self._yaml_mtime = None
         if self.trajectory.startswith('from_yaml'):
-            selected_path = yaml_path or self.trajectory.partition(':')[2]
-            try:
-                self.yaml_traj = yt.YamlTrajectory(selected_path)
+            self._yaml_selected_path = yaml_path or self.trajectory.partition(':')[2]
+            self._maybe_reload_yaml()
+            if self.yaml_traj is None:
                 self.get_logger().info(
-                    f"Loaded YAML trajectory '{self.yaml_traj.name}' "
-                    f"({self.yaml_traj.duration:.1f} s) from {selected_path}")
-            except Exception as exc:
-                self.get_logger().error(
-                    f"Failed to load YAML trajectory '{selected_path}': {exc} "
-                    "— falling back to station_keeping")
-                self.trajectory = 'station_keeping'
+                    f"YAML trajectory '{self._yaml_selected_path}' not "
+                    "available yet — holding position until it appears "
+                    "(GPS-anchored missions are deployed by the station "
+                    "once the georeference is established).")
         # -----------------------------------------------------------------------
 
         # Service
         self.path_service = self.create_service(RequestPath, '/path_request', self.generate_path)
+
+    # --- YAML trajectory support ------------------------------------------
+    def _maybe_reload_yaml(self):
+        """(Re)load the YAML trajectory when the file appears or changes."""
+        if not self._yaml_selected_path:
+            return
+        import os
+        try:
+            mtime = os.path.getmtime(self._yaml_selected_path)
+        except OSError:
+            return  # not written yet -- keep holding position
+        if self.yaml_traj is not None and mtime == self._yaml_mtime:
+            return
+        try:
+            self.yaml_traj = yt.YamlTrajectory(self._yaml_selected_path)
+            self._yaml_mtime = mtime
+            self.get_logger().info(
+                f"Loaded YAML trajectory '{self.yaml_traj.name}' "
+                f"({self.yaml_traj.duration:.1f} s) from "
+                f"{self._yaml_selected_path}")
+        except Exception as exc:
+            self.get_logger().error(
+                f"Failed to load YAML trajectory "
+                f"'{self._yaml_selected_path}': {exc}")
+    # -----------------------------------------------------------------------
 
     def single_pose(self, t: float, path_shape = 'station_keeping') -> PoseStamped:
         """
@@ -81,9 +110,15 @@ class PathGeneration(Node):
 
         # --- YAML trajectory support -----------------------------------------
         # Designer-generated trajectory: dense [t, x, y, yaw] samples,
-        # linearly interpolated at time t (see yaml_trajectory.py).
-        if path_shape.startswith('from_yaml') and self.yaml_traj is not None:
-            x, y, z, roll, pitch, yaw = yt.read_yaml(self.yaml_traj, t)
+        # linearly interpolated at time t (see yaml_trajectory.py). While
+        # the file has not been written/loaded yet (GPS-anchored mission
+        # awaiting deployment), a station-keeping pose at the origin is
+        # returned so the controller holds position.
+        if path_shape.startswith('from_yaml'):
+            if self.yaml_traj is None:
+                x, y, z, roll, pitch, yaw = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+            else:
+                x, y, z, roll, pitch, yaw = yt.read_yaml(self.yaml_traj, t)
             quat = R.from_euler('zyx', [yaw, 0.0, 0.0]).as_quat()
             pose = PoseStamped()
             pose.header.frame_id = "world"
@@ -258,6 +293,9 @@ class PathGeneration(Node):
         return pose
 
     def generate_path(self, request, response):
+        # --- YAML trajectory support: pick up newly deployed files ---------
+        self._maybe_reload_yaml()
+        # -------------------------------------------------------------------
         if self.display_log:
             self.get_logger().info(f"Received path_request of type: {type(request.path_request)}")
 

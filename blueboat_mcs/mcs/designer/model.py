@@ -24,17 +24,24 @@ from PySide6.QtCore import QObject, Signal
 
 @dataclass
 class SegmentSpec:
-    """Interpolation of the segment from this waypoint to the next one."""
+    """Interpolation + speed of the segment from this waypoint to the next.
+
+    ``speed`` in m/s; ``0.0`` means "use the mission cruise speed".
+    """
 
     kind: str = "straight"
     params: dict = field(default_factory=dict)
+    speed: float = 0.0
 
     def to_dict(self) -> dict:
-        return {"kind": self.kind, "params": dict(self.params)}
+        return {"kind": self.kind, "params": dict(self.params),
+                "speed": self.speed}
 
     @classmethod
     def from_dict(cls, d: dict) -> "SegmentSpec":
-        return cls(kind=d.get("kind", "straight"), params=dict(d.get("params", {})))
+        return cls(kind=d.get("kind", "straight"),
+                   params=dict(d.get("params", {})),
+                   speed=float(d.get("speed", 0.0)))
 
 
 @dataclass

@@ -48,8 +48,9 @@ class RightPanel(QWidget):
         super().__init__(parent)
         self._cfg = cfg
         self._store = store
-        self.setMinimumWidth(320)
-        self.setMaximumWidth(480)
+        # Freely resizable via the splitter: a small minimum only, no
+        # maximum (a max-width cap prevented widening the panel at will).
+        self.setMinimumWidth(260)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 6, 6, 6)

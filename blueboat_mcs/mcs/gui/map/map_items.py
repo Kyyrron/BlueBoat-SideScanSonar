@@ -186,11 +186,15 @@ def draw_scale_bar(painter, viewport_w: int, viewport_h: int,
     painter.restore()
 
 
-def draw_grid(painter, rect: QRectF, px_per_m: float) -> float:
+def draw_grid(painter, rect: QRectF, px_per_m: float,
+              high_contrast: bool = False) -> float:
     """Draw an adaptive metric grid in view background coordinates.
 
     Returns the chosen grid spacing in metres (for the scale indicator).
     Spacing follows a 1/2/5 decade progression targeting >= ~60 px cells.
+    ``high_contrast`` is used over satellite imagery: lines are drawn with a
+    dark halo underneath a brighter stroke so the grid stays legible on any
+    background.
     """
     target_px = 60.0
     raw = target_px / max(px_per_m, 1e-9)
@@ -203,26 +207,36 @@ def draw_grid(painter, rect: QRectF, px_per_m: float) -> float:
     else:  # pragma: no cover
         spacing = 10 ** (exp + 1)
 
-    pen_minor = _cosmetic_pen(theme.C_GRID, 1.0)
-    pen_major = _cosmetic_pen(theme.C_GRID_MAJOR, 1.0)
-    x0 = math.floor(rect.left() / spacing) * spacing
-    y0 = math.floor(rect.top() / spacing) * spacing
-    i = 0
-    x = x0
-    while x <= rect.right():
-        painter.setPen(pen_major if abs((x / spacing) % 5) < 1e-6 else pen_minor)
-        painter.drawLine(QLineF(x, rect.top(), x, rect.bottom()))
-        x += spacing
-        i += 1
-        if i > 400:
-            break
-    i = 0
-    y = y0
-    while y <= rect.bottom():
-        painter.setPen(pen_major if abs((y / spacing) % 5) < 1e-6 else pen_minor)
-        painter.drawLine(QLineF(rect.left(), y, rect.right(), y))
-        y += spacing
-        i += 1
-        if i > 400:
-            break
+    if high_contrast:
+        passes = [
+            (_cosmetic_pen(QColor(0, 0, 0, 140), 2.6),
+             _cosmetic_pen(QColor(0, 0, 0, 170), 3.0)),
+            (_cosmetic_pen(QColor(255, 255, 255, 150), 1.1),
+             _cosmetic_pen(QColor(255, 255, 255, 220), 1.4)),
+        ]
+    else:
+        passes = [(_cosmetic_pen(theme.C_GRID, 1.0),
+                   _cosmetic_pen(theme.C_GRID_MAJOR, 1.0))]
+
+    for pen_minor, pen_major in passes:
+        x0 = math.floor(rect.left() / spacing) * spacing
+        y0 = math.floor(rect.top() / spacing) * spacing
+        i = 0
+        x = x0
+        while x <= rect.right():
+            painter.setPen(pen_major if abs((x / spacing) % 5) < 1e-6 else pen_minor)
+            painter.drawLine(QLineF(x, rect.top(), x, rect.bottom()))
+            x += spacing
+            i += 1
+            if i > 400:
+                break
+        i = 0
+        y = y0
+        while y <= rect.bottom():
+            painter.setPen(pen_major if abs((y / spacing) % 5) < 1e-6 else pen_minor)
+            painter.drawLine(QLineF(rect.left(), y, rect.right(), y))
+            y += spacing
+            i += 1
+            if i > 400:
+                break
     return spacing

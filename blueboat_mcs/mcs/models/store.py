@@ -179,7 +179,21 @@ class DataStore:
     def on_monitoring(self, t: float, data) -> None:
         # [t_ctrl, x, y, psi, x_d, y_d, psi_d, u1, u2]
         if len(data) >= 7:
-            self.mission.path_target = (float(data[4]), float(data[5]))
+            xd, yd = float(data[4]), float(data[5])
+            # master_control's LoS path branch overwrites its `target` with
+            # the ROBOT-FRAME conversion before the monitoring block runs,
+            # so x_d/y_d arrive in body coordinates for that controller.
+            # Rotate them back to world with the same message's own pose so
+            # the displayed target lies on the path. (Robot-side one-line
+            # fix documented in 03_ros_integration.md; harmless once
+            # applied, since this branch then simply won't be entered.)
+            if (self.mission.controller_type == "LoS"
+                    and not self.mission.use_pinger
+                    and self.mission.manual_target is None):
+                x, y, psi = float(data[1]), float(data[2]), float(data[3])
+                c, s = math.cos(psi), math.sin(psi)
+                xd, yd = x + c * xd - s * yd, y + s * xd + c * yd
+            self.mission.path_target = (xd, yd)
         self._record_target_distance(t)
 
     def on_thruster(self, t: float, right: float, left: float) -> None:

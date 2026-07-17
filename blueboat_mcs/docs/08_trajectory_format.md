@@ -39,11 +39,40 @@ Semantics:
 * `t` beyond the last sample: **clamped** to the final pose — the same
   "default to last known point" convention as the hard-coded trajectories —
   unless `loop: true`, in which case `t` wraps modulo `duration_s`.
+* `speed` is the mission cruise speed; per-segment speeds set in the
+  designer are already baked into the sample timing (`t` column), so the
+  runtime needs no per-segment knowledge;
 * `z`, `roll`, `pitch` are always 0 for this surface vehicle; a future
   `blueboat_trajectory/2` may extend rows to 7 columns — readers must reject
   unknown `format` values rather than guess (the provided loader does).
 * Sample spacing is an exporter choice (default 0.25 m); readers must not
   assume uniform `t` steps.
+
+### Optional `geo_anchor` block — GPS-anchored missions
+
+```yaml
+geo_anchor:
+  lat0: 33.660196      # GPS of the design frame's (0, 0)
+  lon0: 130.657780
+  theta_deg: 25.0      # rotation of the design frame vs local east/north
+```
+
+`points` stay in the design frame. Because the robot's world origin is
+created wherever `robot_interface` starts, an anchored mission is **never
+executed directly**: at launch the station points `path_generation` at a
+*deployed* file (`<dir>/.deployed/<name>.yaml`) that does not exist yet;
+the patched node holds position (station-keeping fallback) and re-checks
+the file on every path request. Once the run's odom↔GPS fit is established
+(a few metres of motion), the station converts every sample design-frame →
+GPS → today's world frame (yaw rotated by `θ_fit − θ_anchor`), writes the
+deployed file (with `deployed_from` / `deployed_fit_rms_m` provenance
+fields and no `geo_anchor`), and the robot transitions onto the true-GPS
+path — every waypoint lands on its real-world coordinates regardless of
+where the robot was switched on. The anchor also serves the editor: it is
+the remembered GPS origin restored when the mission is reopened.
+
+Segment metadata note: `seg_out` in the metadata file additionally carries
+`speed` (m/s, `0` = mission speed).
 
 ## 2. Editor metadata file — `<name>.meta.yaml`
 

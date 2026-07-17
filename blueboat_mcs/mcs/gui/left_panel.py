@@ -49,8 +49,9 @@ class LeftPanel(QWidget):
         super().__init__(parent)
         self._cfg = cfg
         self._store = store
-        self.setMinimumWidth(280)
-        self.setMaximumWidth(360)
+        # Freely resizable via the splitter: a small minimum only, no
+        # maximum (a max-width cap prevented widening the panel at will).
+        self.setMinimumWidth(220)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)

@@ -151,7 +151,16 @@ connected, its position sets the initial view and the live robot arrow and
 pinger overlays can be toggled from the toolbar; otherwise **Set GPS
 Origin…** accepts Google-Maps-format coordinates (`33.660196, 130.657780`)
 to define world (0,0) — the origin remains optional, and without one the
-editor simply works in the local world frame.
+editor simply works in the local world frame. A mission saved with a GPS
+reference remembers it: reopening the mission restores the origin (and the
+satellite layer), every waypoint is linked to real-world GPS coordinates,
+and the launch dialog labels it “(GPS)”. Launching such a mission uses
+deferred deployment: the boat holds position while you drive it a few
+metres to establish the run's georeference (status messages guide you),
+then the path deploys automatically onto its true GPS coordinates —
+independent of where the robot was powered on. At the end of any custom
+path the target clamps at the final pose forever, so the boat
+station-keeps there; the same holds on a reached manual target.
 
 **Editing.** *✚ Add Waypoints* (or `A`) arms click-to-add: Shift constrains
 the new point horizontally/vertically from the previous waypoint, Ctrl
@@ -166,7 +175,10 @@ snapshot Undo/Redo (`Ctrl+Z/Y`) are all in the toolbar and tree panel.
 
 **Segments.** Select a waypoint to edit the segment *leaving* it: straight,
 sinusoidal, circular arc, Catmull-Rom spline or cubic Bézier, each with its
-own parameters; the preview updates live with interpolation curves,
+own parameters, plus a **per-segment speed** (leave at “mission speed” to
+use the mission-wide setting) — the status-bar duration updates
+accordingly; the waypoint's live GPS coordinates are shown whenever a
+georeference exists; the preview updates live with interpolation curves,
 travel-direction chevrons, waypoint numbering and START/END markers.
 
 **Patterns.** The library inserts parameterized survey patterns as grouped

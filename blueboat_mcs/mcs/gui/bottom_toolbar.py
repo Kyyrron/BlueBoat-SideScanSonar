@@ -127,6 +127,12 @@ class BottomToolbar(QWidget):
             "Publish the [0.0, 0.0] manual target: master_control resumes "
             "the original mission. This button does nothing else.")
         self.continue_button.setVisible(False)
+        # Reserve the button's footprint while hidden: its appearance after
+        # a manual target used to reflow the toolbar and nudge the window /
+        # panel geometry ("the window becomes weird").
+        policy = self.continue_button.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self.continue_button.setSizePolicy(policy)
         self.continue_button.clicked.connect(self.continue_mission_clicked.emit)
         row.addWidget(self.continue_button)
 

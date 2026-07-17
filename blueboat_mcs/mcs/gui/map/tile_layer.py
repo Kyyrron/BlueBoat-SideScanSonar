@@ -44,8 +44,13 @@ class TileLayer:
         self._items: dict[tuple[int, int, int], QGraphicsPixmapItem] = {}
         self._pending: set[tuple[int, int, int]] = set()
         self._enabled = False
+        self._current_zoom = -1
 
     # ------------------------------------------------------------------ API
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled
         self._group.setVisible(enabled)
@@ -62,6 +67,15 @@ class TileLayer:
             if metres_per_pixel(lat_c, z) * px_per_m <= 1.2:
                 zoom = z
                 break
+
+        # Show only the current zoom level: without this, tiles fetched at an
+        # earlier zoom stay on top/underneath and the imagery looks blurry
+        # after zooming in or out.
+        if zoom != self._current_zoom:
+            self._current_zoom = zoom
+            for (z, _x, _y), item in self._items.items():
+                item.setVisible(z == zoom)
+            self._evict(keep_zoom=zoom)
 
         corners = [
             (view_rect_world.left(), view_rect_world.top()),
@@ -85,6 +99,17 @@ class TileLayer:
         for tx in range(x_min, x_max + 1):
             for ty in range(y_min, y_max + 1):
                 self._ensure_tile(zoom, tx, ty, fit)
+
+    def _evict(self, keep_zoom: int, limit: int = 384) -> None:
+        """Bound memory across zoom changes: drop hidden other-zoom tiles
+        once the cache grows (disk cache makes re-adding cheap)."""
+        if len(self._items) <= limit:
+            return
+        for key in [k for k in self._items if k[0] != keep_zoom]:
+            item = self._items.pop(key)
+            self._group.removeFromGroup(item)
+            if item.scene() is not None:
+                item.scene().removeItem(item)
 
     # ------------------------------------------------------------- internal
     def _ensure_tile(self, z: int, x: int, y: int, fit: GeoFit) -> None:
@@ -129,6 +154,7 @@ class TileLayer:
         # which is why the satellite layer never appeared at all.
         item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         self._group.addToGroup(item)
+        item.setVisible(key[0] == self._current_zoom)
         self._items[key] = item
         self._place_tile(item, *key, fit)
 

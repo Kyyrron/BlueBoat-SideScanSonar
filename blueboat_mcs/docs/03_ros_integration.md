@@ -106,6 +106,29 @@ Node termination is never initiated before steps 1–4 complete.
 
 ## Observations on the existing stack (flagged, not silently patched)
 
+0. **LoS target monitored in the wrong frame; LoS crawls in path mode** —
+   in `master_control`'s LoS branches, `target` is overwritten by
+   `self.inRobotFrame(...)` before the monitoring block, so
+   `/monitoring_data` carries a ROBOT-FRAME target for LoS; the station now
+   rotates it back to world for display (path mode). Robot-side fix:
+   capture `world_target = target` before the `inRobotFrame` call and
+   monitor that. Separately, the LoS speed law `v = 2·ln(0.15·d+1)` yields
+   *Newtons of thrust* and, in path mode, `d` is only the tracking error to
+   the pose `dt = 0.05 s` ahead — hence near-zero thrust and a crawling
+   boat. Recommended robot-side tuning: request the path with a look-ahead
+   (`current_time + 1–2 s` instead of `+ dt`) and/or rescale the speed law;
+   the law as-is suits far-target pinger homing, not close-carrot tracking.
+
+0b. **Keep-position semantics** — YAML trajectories clamp at their final
+   pose forever, so every controller station-keeps at the end of a custom
+   path; the hard-coded shapes already "default to last known point". For
+   the manual target, the default `safety_distance = -1` means the LoS
+   stopping sequence never triggers and the boat naturally station-keeps on
+   the fixed target. Caution if you ever set `safety_distance ≥ 0`: the
+   stopping sequence latches (`stopping_sequence` is never reset), zeroing
+   thrust for every later LoS command — reset it in
+   `manual_target_callback` if you enable that feature.
+
 1. **Manual-target resume comparison** — `master_control.manual_target_callback`
    stores `msg.data` (an `array('f')`), but the guard is
    `self.manual_target != [0.0,0.0]`; an `array` never compares equal to a
@@ -167,6 +190,11 @@ Steps (once):
 
 Station side, saved missions appear automatically in **Launch Mission →
 Trajectory → custom paths**; selecting one builds the `from_yaml:` string.
+GPS-anchored missions are labelled **“(GPS)”** and follow the deferred
+deployment flow of `08_trajectory_format.md`: the node holds position until
+the station writes the deployed file (requires the updated
+`integration/path_generation.py`, which watches the file's mtime on every
+path request).
 
 
 ## Mission-path preview and `path_publisher.py`

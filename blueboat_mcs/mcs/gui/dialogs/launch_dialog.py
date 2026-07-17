@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from mcs.config.settings import AppConfig
+from mcs.designer import io_yaml
 from mcs.gui import theme
 from mcs.ros.launch_manager import LaunchParameters
 
@@ -82,7 +83,9 @@ class LaunchDialog(QDialog):
             self._trajectory.addItem("── custom paths ──")
             self._trajectory.model().item(header).setEnabled(False)
             for name, path in customs:
-                self._trajectory.addItem(f"custom: {name}", str(path))
+                anchored = io_yaml.read_geo_anchor(path) is not None
+                label = f"custom: {name}" + (" (GPS)" if anchored else "")
+                self._trajectory.addItem(label, str(path))
         form.addRow("Trajectory", self._trajectory)
 
         # ---- Real-robot-only fields ----------------------------------------------
@@ -202,8 +205,23 @@ class LaunchDialog(QDialog):
                 key, value = token.split(":=", 1)
                 extra[key] = value
         custom = self._trajectory.currentData()
-        trajectory = (f"from_yaml:{custom}" if custom
-                      else self._trajectory.currentText())
+        gps_src = gps_dst = ""
+        if custom:
+            src = Path(custom)
+            # Deferred GPS deployment only applies to the REAL robot, whose
+            # world origin changes every run. In simulation there is no GPS
+            # (the georeference can never converge, so the deployed file
+            # would never be written and the boat would hold at (0,0)
+            # forever) and Gazebo's world frame is stable — so an anchored
+            # mission executes its design-frame points directly.
+            if (not sim) and io_yaml.read_geo_anchor(src) is not None:
+                gps_src = str(src)
+                gps_dst = str(io_yaml.deployed_path(src.parent, src.stem))
+                trajectory = f"from_yaml:{gps_dst}"
+            else:
+                trajectory = f"from_yaml:{custom}"
+        else:
+            trajectory = self._trajectory.currentText()
         return LaunchParameters(
             enable_motors=(not sim) and self._enable_motors.isChecked(),
             note="" if sim else self._note.text().strip(),
@@ -212,5 +230,7 @@ class LaunchDialog(QDialog):
             use_pinger=(not sim) and self._use_pinger.isChecked(),
             simulation=sim,
             robot_file=self._robot_file.currentText().strip() or "thrusters_ur",
+            gps_anchored_source=gps_src,
+            gps_deployed_target=gps_dst,
             extra_args=extra,
         )
