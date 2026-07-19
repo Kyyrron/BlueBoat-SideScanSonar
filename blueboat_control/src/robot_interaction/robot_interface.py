@@ -35,7 +35,7 @@ class BlueBoatController(Node):
 
 
         #### PINGER ####
-        self.fixed_pinger = True # True -> Publish pinger coordinates in robot frame, without dead reckoning.
+        self.fixed_pinger = False # True -> Publish pinger coordinates in robot frame, without dead reckoning.
                                  # False -> Publish without yaw compensation and dead reckoning - default behavior in target following 
 
         ################## Get Parameters ##################

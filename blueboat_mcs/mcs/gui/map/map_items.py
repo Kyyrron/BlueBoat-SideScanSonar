@@ -79,7 +79,7 @@ class RobotItem(QGraphicsItemGroup):
         self._arrow = QGraphicsLineItem()
         self._arrow.setPen(_cosmetic_pen(QColor("white"), 1.8))
         self.addToGroup(self._arrow)
-        self._arrow_visible = True
+        self._arrow_visible = False
 
     def set_pose(self, x: float, y: float, yaw: float) -> None:
         self._glyph.setPos(x, y)

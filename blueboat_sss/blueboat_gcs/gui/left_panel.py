@@ -44,11 +44,11 @@ class LeftPanel(QWidget):
         # spec): the operator enables what the experiment needs. The SSS
         # mosaic itself is not a toggle — it appears with START.
         for key, label, default in (
-            (LAYER_SATELLITE, "Satellite layer", False),
-            (LAYER_TRAJECTORY, "Robot trajectory", False),
-            (LAYER_PLANNED_PATH, "Planned mission path", False),
+            (LAYER_SATELLITE, "Satellite layer", True),
+            (LAYER_TRAJECTORY, "Robot trajectory", True),
+            (LAYER_PLANNED_PATH, "Planned mission path", True),
             (LAYER_SWATH, "Sonar range line", False),
-            (LAYER_PINGER, "USBL pinger", False),
+            (LAYER_PINGER, "USBL pinger", True),
             (LAYER_DETECTIONS, "AI detections", False),
             (LAYER_INTERPOLATION, "Interpolation", False),
         ):
