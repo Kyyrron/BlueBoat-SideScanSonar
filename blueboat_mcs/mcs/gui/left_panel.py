@@ -28,7 +28,7 @@ from mcs.gui.widgets import CollapsibleSection, InfoGrid, StatusLed
 from mcs.models.store import DataStore, TargetMode
 
 _LAYERS: list[tuple[str, str, bool]] = [
-    ("satellite", "Satellite map layer", True),
+    ("satellite", "Satellite map layer", False),
     ("robot_track", "Robot trajectory", True),
     ("mission_path", "Published mission path", True),
     ("pinger", "USBL pinger position", True),

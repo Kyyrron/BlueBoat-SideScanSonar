@@ -182,6 +182,8 @@ class MainWindow(QMainWindow):
         self._mosaic_service.raster_updated.connect(self._on_raster)
         self.waterfall_service.image_updated.connect(
             self.waterfall_view.on_image)
+        self.waterfall_service.detections_updated.connect(
+            self.waterfall_view.on_detections)
 
         # Map interactions.
         self.map_view.point_clicked.connect(self._on_point_clicked)
@@ -279,6 +281,9 @@ class MainWindow(QMainWindow):
     def _on_detection(self, det: Detection) -> None:
         self.left_panel.on_detection(det)
         self.detection_layer.upsert(det)
+        # Same detection on the waterfall view (row found by ping time).
+        self.waterfall_service.add_detection(det.t, det.x, det.y,
+                                             det.class_name)
 
     def _on_pinger(self, fix: PingerFix) -> None:
         self.pinger_layer.update(fix)
@@ -298,9 +303,10 @@ class MainWindow(QMainWindow):
             "app", f"seabed image {image.image_id}: "
                    f"{len(image.detections)} detection(s) published")
         for k, det in enumerate(image.detections):
+            t_row = float(det.get("t_s", image.row_t[-1]))
             self._signals.detection.emit(Detection(
                 uid=1_000_000 + image.image_id * 16 + k,
-                t=float(image.row_t[-1]),
+                t=t_row,
                 x=float(det["world"][0]), y=float(det["world"][1]),
                 class_name=det["class_name"],
                 confidence=float(det["confidence"]), extent_m=1.0))
@@ -360,6 +366,7 @@ class MainWindow(QMainWindow):
         if self.left_panel.is_layer_enabled(lp.LAYER_DETECTIONS):
             self.detection_layer.clear()
             self.left_panel.reset_detections()
+            self.waterfall_service.clear_detections()
             cleared.append("detections")
         if self.left_panel.is_layer_enabled(lp.LAYER_PINGER):
             self.pinger_layer.clear()
@@ -468,6 +475,7 @@ class MainWindow(QMainWindow):
                 self.recording.session_dir / "seabed_images")
         else:
             self._acquisition.set_recording(False)  # close the .svlog
+            self.seabed_imager.flush()   # truncated last picture: no data wasted
             self.seabed_imager.set_output_dir(None)
             saved = self.recording.end()            # save every artifact
             if saved is not None:
@@ -482,6 +490,7 @@ class MainWindow(QMainWindow):
         self.toolbar.on_viz_state(False)
         if self.recording.active:                  # save ONLY if recording
             self._acquisition.set_recording(False)
+            self.seabed_imager.flush()   # truncated last picture
             self.seabed_imager.set_output_dir(None)
             saved = self.recording.end()
             if saved is not None:

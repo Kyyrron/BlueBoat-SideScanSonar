@@ -214,7 +214,13 @@ ringing-adaptive noise window → FBR → dual-side FBRTracker → slant-range c
 same SonarPing/RobotState models the GUI already consumes; GPS origin comes from
 GLOBAL_POSITION_INT, so satellite tiles and GPS readouts work in replay. Two modes:
 **Render range** (dual-handle slider selects [start, end], rasterized at once) and
-**Replay** (wall-clock event pump at ×1/×2/×4/×8).
+**Replay** (wall-clock event pump at ×1/×2/×4/×8). Two export buttons: **Save as
+rosbag** — converts the loaded .svlog to a rosbag2 (mcap) folder next to it via the
+verbatim team converter duplicated in `blueboat_gcs/tools/` (name dialog pre-filled
+`bag_<logname>`, `_2/_3` rename-if-exists, guarded rclpy init; requires a sourced
+ROS 2 env) — and **Run AI** — recreates every seabed picture (incl. the truncated
+tail), runs the detection function on each behind a modal progress bar, and shows the
+results on the map's DetectionLayer *and* the waterfall overlay, exactly as live.
 
 ### 2.16 AI seabed imaging (update)
 `core/seabed_imager.py` produces waterfall-domain pictures for the detector — the
@@ -229,6 +235,12 @@ the bus; saved into `<session>/seabed_images/` + inner `metadata/` while recordi
 dummy center analyzer → detections on the map + JSON on
 `topics.seabed_analysis`) and offline (`generate_from_pings`, used by the replay
 window's "Save pictures from the log" → `seabed_images_<logname>/` next to the file).
+`flush()` guarantees no data is wasted: the pings acquired after the last full window
+(or an entire mission shorter than one window) become a final truncated image
+(< rows), emitted on Record OFF / STOP and at the end of every offline pass.
+Detections are stamped with their pixel row's ping time, which is what lets
+`WaterfallService` place markers on the exact ping line in the waterfall view (exact
+inversion of the pixel→world formula for the column).
 
 ## 3. Module map
 
@@ -242,7 +254,8 @@ window's "Save pictures from the log" → `seabed_images_<logname>/` next to the
 | `core/recording_session.py` | recording sessions: one experiment = one folder |
 | `core/logging_bus.py` | stdout/stderr/logging capture -> embedded console |
 | `core/svlog.py` | .svlog reader + offline processing (replay, datasets) |
-| `core/seabed_imager.py` | waterfall-domain AI images + pixel->world metadata |
+| `core/seabed_imager.py` | waterfall-domain AI images + pixel->world metadata + flush |
+| `tools/` | verbatim team converters (svlog_to_rosbag + svlog_helper) |
 | `models/` | ROS-free dataclasses: `SonarPing`, `RobotState`, `Detection`, `PingerFix`, `PlannedPath` |
 | `ros/ros_manager.py` | rclpy lifecycle in a background thread; enable-topic publishers; graceful no-ROS degradation |
 | `ros/sonar_listener.py` | `/sss_processor/processed` → `SonarPing` |

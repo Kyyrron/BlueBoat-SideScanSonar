@@ -51,8 +51,8 @@ from ..models.robot_state import RobotState
 from ..models.sonar import SonarPing
 from . import right_panel as rp
 from .main_window import PANEL_MIN_WIDTH
-from .map_layers import (MeasureLayer, MosaicLayer, TileLayer,
-                         TrajectoryLayer)
+from .map_layers import (DetectionLayer, MeasureLayer, MosaicLayer,
+                         TileLayer, TrajectoryLayer)
 from .map_view import MapMode, MapView
 from .range_slider import RangeSlider
 from .right_panel import RightPanel
@@ -101,6 +101,7 @@ class ReplayWindow(QMainWindow):
         self.tile_layer = TileLayer(scene, self._tile_fetcher, self.converter)
         self.mosaic_layer = MosaicLayer(scene)
         self.trajectory_layer = TrajectoryLayer(scene)
+        self.detection_layer = DetectionLayer(scene)
         self.measure_layer = MeasureLayer(scene)
 
         # GPS origin from the log, if present -> tiles + GPS readouts work.
@@ -164,10 +165,21 @@ class ReplayWindow(QMainWindow):
             self._speed.addItem(f"x{s}", s)
         self._pos_lbl = QLabel("")
         self._pos_lbl.setObjectName("valueLabel")
+        self._ai_btn = QPushButton("Run AI")
+        self._ai_btn.setToolTip(
+            "Recreate every seabed picture from this log (256-row windows,\n"
+            "50 % overlap, plus the truncated tail) and run the detection\n"
+            "function on each; detections appear on the map and in the\n"
+            "waterfall view, exactly as in the live window.")
         self._save_btn = QPushButton("Save pictures from the log")
         self._save_btn.setToolTip(
             "Generate every AI seabed image (+ metadata/) from this log\n"
             "into seabed_images_<logname>/ next to the file.")
+        self._rosbag_btn = QPushButton("Save as rosbag")
+        self._rosbag_btn.setToolTip(
+            "Convert this .svlog to a rosbag2 (mcap) folder next to the\n"
+            "log, using the team's svlog_to_rosbag converter.\n"
+            "Requires a sourced ROS 2 environment.")
 
         lay.addWidget(QLabel("Window"))
         lay.addWidget(self._t_lo_lbl)
@@ -178,7 +190,9 @@ class ReplayWindow(QMainWindow):
         lay.addWidget(self._speed)
         lay.addWidget(self._pos_lbl)
         lay.addStretch(0)
+        lay.addWidget(self._ai_btn)
         lay.addWidget(self._save_btn)
+        lay.addWidget(self._rosbag_btn)
         bar.addWidget(wrap)
         self.addToolBar(Qt.BottomToolBarArea, bar)
 
@@ -192,6 +206,8 @@ class ReplayWindow(QMainWindow):
         self.mosaic_service.cleared.connect(self.mosaic_layer.clear)
         self.waterfall_service.image_updated.connect(
             self.waterfall_view.on_image)
+        self.waterfall_service.detections_updated.connect(
+            self.waterfall_view.on_detections)
 
         p = self.right_panel
         p.zoom_in_clicked.connect(self.map_view.zoom_in)
@@ -213,7 +229,9 @@ class ReplayWindow(QMainWindow):
         self._range.range_changed.connect(self._on_range_changed)
         self._render_btn.clicked.connect(self._render_range)
         self._replay_btn.toggled.connect(self._on_replay_toggled)
+        self._ai_btn.clicked.connect(self._run_ai)
         self._save_btn.clicked.connect(self._save_pictures)
+        self._rosbag_btn.clicked.connect(self._save_rosbag)
 
     # ------------------------------------------------------- event feeding --
     def _on_ping(self, ping: SonarPing) -> None:
@@ -242,6 +260,8 @@ class ReplayWindow(QMainWindow):
 
     def _clear_overlays(self) -> None:
         self.trajectory_layer.clear()
+        self.detection_layer.clear()
+        self.waterfall_service.clear_detections()
         self.measure_layer.clear()
         self.right_panel.set_measure_active(False)
 
@@ -317,6 +337,144 @@ class ReplayWindow(QMainWindow):
         QMessageBox.information(
             self, "Seabed images",
             f"{n} images written to\n{out}\n(+ metadata/ inside).")
+
+    # ------------------------------------------------------------- Run AI --
+    def _run_ai(self) -> None:
+        """Recreate every seabed picture from the log, run the detection
+        function on each, and display the results exactly as live: markers
+        on the map's DetectionLayer and on the waterfall overlay. The
+        window is blocked by a modal progress bar while it runs."""
+        from ..core.seabed_imager import SeabedImager
+        from ..models.detection import Detection
+
+        imager = SeabedImager(self._config)      # dummy analyzer for now
+        results: list = []
+        imager.image_ready.connect(results.append)
+
+        pings = self._mission.pings
+        progress = QProgressDialog("Running AI on the mission…", None,
+                                   0, len(pings), self)
+        progress.setWindowModality(Qt.WindowModal)   # freezes the app
+        progress.setMinimumDuration(0)
+        for k, ping in enumerate(pings):
+            imager.on_sonar_ping(ping)
+            if k % 100 == 0:
+                progress.setValue(k)
+        imager.flush()                               # truncated tail image
+        progress.setValue(len(pings))
+
+        # Make sure there is imagery under the markers: if nothing has
+        # been rendered yet, render the current selection first (renders
+        # clear overlays, so this must happen BEFORE adding detections).
+        if not np.isfinite(self.mosaic_service._grid.render()).any():
+            self._render_range()
+
+        self.detection_layer.clear()
+        self.waterfall_service.clear_detections()
+        n_det = 0
+        for image in results:
+            for k, det in enumerate(image.detections):
+                t_row = float(det.get("t_s", image.row_t[-1]))
+                self.detection_layer.upsert(Detection(
+                    uid=1_000_000 + image.image_id * 16 + k, t=t_row,
+                    x=float(det["world"][0]), y=float(det["world"][1]),
+                    class_name=det["class_name"],
+                    confidence=float(det["confidence"]), extent_m=1.0))
+                self.waterfall_service.add_detection(
+                    t_row, float(det["world"][0]), float(det["world"][1]),
+                    det["class_name"])
+                n_det += 1
+        self.detection_layer.set_visible(True)
+        # Refresh the waterfall overlay against the freshly rendered buffer.
+        was = self.waterfall_service._enabled
+        self.waterfall_service.set_enabled(True)
+        self.waterfall_service.set_enabled(was or
+                                           self._stack.currentWidget()
+                                           is self.waterfall_view)
+        self.statusBar().showMessage(
+            f"AI pass: {len(results)} images "
+            f"(incl. truncated tail), {n_det} detections — shown on the "
+            f"map and in the waterfall view.", 15000)
+
+    # ------------------------------------------------------ rosbag export --
+    def _save_rosbag(self) -> None:
+        """Convert the loaded .svlog to a rosbag2 folder next to it,
+        using the verbatim team converter in blueboat_gcs/tools/."""
+        from PySide6.QtWidgets import QInputDialog
+        default = f"bag_{self._mission.path.stem}"
+        name, ok = QInputDialog.getText(
+            self, "Save as rosbag",
+            "Output folder name (created next to the .svlog):",
+            text=default)
+        if not ok or not name.strip():
+            return
+        out = self._mission.path.parent / name.strip()
+
+        # Import the verbatim tools (they use flat imports for
+        # svlog_helper, so their directory goes on sys.path).
+        import sys as _sys
+        tools_dir = str(Path(__file__).resolve().parent.parent / "tools")
+        if tools_dir not in _sys.path:
+            _sys.path.insert(0, tools_dir)
+        try:
+            import svlog_to_rosbag as s2r
+        except ImportError as exc:
+            QMessageBox.critical(
+                self, "Save as rosbag",
+                "The rosbag converter needs a sourced ROS 2 environment\n"
+                "(rclpy, rosbag2_py, blueboat_interfaces, mavros_msgs,\n"
+                f"geographic_msgs).\n\nImport error: {exc}")
+            return
+
+        # Same rename-if-exists behaviour as the converter's main().
+        if out.exists():
+            i = 2
+            candidate = out.with_name(f"{out.stem}_{i}{out.suffix}")
+            while candidate.exists():
+                i += 1
+                candidate = out.with_name(f"{out.stem}_{i}{out.suffix}")
+            out = candidate
+
+        import rclpy
+        from rosbag2_py import (ConverterOptions, SequentialWriter,
+                                StorageOptions)
+        we_inited = False
+        try:
+            rclpy.init()
+            we_inited = True
+        except RuntimeError:
+            pass                    # app's RosManager already initialized it
+        try:
+            writer = SequentialWriter()
+            writer.open(
+                StorageOptions(uri=str(out), storage_id="mcap"),
+                ConverterOptions(input_serialization_format="cdr",
+                                 output_serialization_format="cdr"))
+            conv = s2r.Converter(writer)
+            conv.setup_topics()
+            data = self._mission.path.read_bytes()
+            packets = list(s2r.walk_packets(data))
+            progress = QProgressDialog(f"Converting to {out.name}…", None,
+                                       0, len(packets), self)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            for k, packet in enumerate(packets):
+                conv.handle_packet(packet)
+                if k % 500 == 0:
+                    progress.setValue(k)
+            del writer              # close cleanly (converter main() does this)
+            progress.setValue(len(packets))
+            counts = "\n".join(f"  {k}: {v}"
+                               for k, v in sorted(conv.counts.items()) if v)
+            QMessageBox.information(
+                self, "Save as rosbag",
+                f"Converted {len(packets)} packets to\n{out}\n\n{counts}")
+        except Exception as exc:               # noqa: BLE001 — surfaced to user
+            QMessageBox.critical(self, "Save as rosbag",
+                                 f"Conversion failed:\n{exc}")
+        finally:
+            if we_inited:
+                rclpy.shutdown()
 
     # ------------------------------------------------------------- helpers --
     def _on_view_mode(self, mode: str) -> None:

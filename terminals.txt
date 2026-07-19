@@ -22,6 +22,8 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: override"
 
 ----- App Visu
 
+    cd ~/ros2_ws/
+    source env.sh
     cd src/BlueBoat-SideScanSonar/blueboat_sss
     python3 -m blueboat_gcs.main
 

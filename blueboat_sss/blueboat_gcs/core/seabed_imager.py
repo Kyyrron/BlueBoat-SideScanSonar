@@ -213,6 +213,7 @@ class SeabedImager(QObject):
         self._buf_rows: List[np.ndarray] = []
         self._buf_meta: List[tuple] = []    # (t, x, y, yaw, range, depth)
         self._last_pose: Optional[Tuple[float, float, float]] = None
+        self._emitted_any = False
 
     # ---- live control -----------------------------------------------------------
     def set_output_dir(self, out_dir: Optional[Path]) -> None:
@@ -226,6 +227,7 @@ class SeabedImager(QObject):
         self._since_last = 0
         self._last_pose = None
         self._next_id = 0
+        self._emitted_any = False
 
     # ---- ingestion --------------------------------------------------------------
     def on_sonar_ping(self, ping: SonarPing) -> None:
@@ -257,14 +259,38 @@ class SeabedImager(QObject):
         if (self._since_last >= self._stride
                 and len(self._buf_rows) >= self._rows):
             self._since_last = 0
-            self._emit_window()
+            self._emitted_any = True
+            self._emit_window(self._rows)
+
+    def flush(self) -> None:
+        """Emit the final, possibly truncated picture — no data wasted.
+
+        Everything acquired after the last full window ended (or the
+        whole buffer if no full window was ever emitted, e.g. a mission
+        shorter than ``rows`` pings) becomes one last image with fewer
+        than ``rows`` rows. Called on Record OFF / STOP (live) and at
+        the end of every offline generation / Run-AI pass.
+        """
+        tail = (self._since_last if self._emitted_any
+                else len(self._buf_rows))
+        tail = min(tail, len(self._buf_rows))
+        if tail >= 2:                       # a 1-row "image" is noise
+            self._emit_window(tail)
+        self._since_last = 0
 
     # ---- window assembly -----------------------------------------------------------
-    def _emit_window(self) -> None:
-        image = self._build(self._buf_rows[-self._rows:],
-                            self._buf_meta[-self._rows:], self._next_id)
+    def _emit_window(self, n_rows: int) -> None:
+        image = self._build(self._buf_rows[-n_rows:],
+                            self._buf_meta[-n_rows:], self._next_id)
         self._next_id += 1
         image.detections = self._analyzer(image)
+        for det in image.detections:
+            # Timestamp each detection with ITS pixel row's ping time —
+            # this is what lets the waterfall view place the marker on
+            # the exact ping line the object was seen on.
+            r = int(min(max(det["pixel"][0], 0),
+                        image.intensity_db.shape[0] - 1))
+            det["t_s"] = float(image.row_t[r])
         png_path = meta_path = None
         if self._out_dir is not None:
             p, m = image.save(self._out_dir)
@@ -314,6 +340,7 @@ def generate_from_pings(pings: Iterable[SonarPing], out_dir: Path,
         if progress is not None and k % 200 == 0:
             progress(k / max(len(pings), 1))
         imager.on_sonar_ping(ping)
+    imager.flush()                       # truncated tail: no data wasted
     if progress is not None:
         progress(1.0)
     return len(written)

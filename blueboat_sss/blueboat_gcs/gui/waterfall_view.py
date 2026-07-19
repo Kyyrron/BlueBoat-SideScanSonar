@@ -56,6 +56,12 @@ class WaterfallView(QGraphicsView):
         self._range_m = 0.0
         self._follow = True
         self._fitted_once = False
+        self._detections: list = []      # {"row", "col", "label"} in px
+
+    def on_detections(self, dets: list) -> None:
+        """Detection overlay from WaterfallService (buffer pixel coords)."""
+        self._detections = list(dets)
+        self.viewport().update()
 
     # ---- data slot -----------------------------------------------------------
     def on_image(self, image: QImage, range_m: float) -> None:
@@ -133,6 +139,23 @@ class WaterfallView(QGraphicsView):
         pen.setStyle(Qt.DashLine)
         painter.setPen(pen)
         painter.drawLine(mid_x, rect.top(), mid_x, rect.bottom())
+        # Detection markers: positioned in image (scene) coordinates,
+        # drawn at fixed device size so they never scale with zoom —
+        # same visual language as the map's DetectionLayer.
+        if self._detections:
+            painter.save()
+            painter.resetTransform()
+            painter.setFont(QFont("DejaVu Sans", 8))
+            for det in self._detections:
+                pt = self.mapFromScene(det["col"] + 0.5, det["row"] + 0.5)
+                pen = QPen(theme.COLOR_DETECTION, 1.6)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(pt, 9, 9)
+                painter.drawLine(pt.x() - 13, pt.y(), pt.x() - 5, pt.y())
+                painter.drawLine(pt.x() + 5, pt.y(), pt.x() + 13, pt.y())
+                painter.drawText(pt.x() + 12, pt.y() - 8, det["label"])
+            painter.restore()
         # Labels in device coordinates (never scale with zoom).
         painter.resetTransform()
         painter.setPen(QPen(theme.COLOR_GRID_TEXT))

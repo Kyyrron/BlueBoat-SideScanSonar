@@ -126,6 +126,13 @@ the raw float `intensity_db` for training — the PNG is display-normalized). A 
 bbox center `(row, col)` maps to the world with one lookup:
 `world = (world_x[row, col], world_y[row, col])`.
 
+**Truncated tail & waterfall markers.** The imager's `flush()` (Record OFF, STOP,
+end of every offline pass) emits one final image with the resting pings (< 256 rows)
+so no data is wasted; a mission shorter than one window yields a single truncated
+image. Every detection is timestamped with its pixel row's ping time and therefore
+also appears as a marker on the exact ping line in the waterfall view (live and in
+replay); markers scroll out with the ring buffer.
+
 **Datasets from logs.** The replay window's "Save pictures from the log" runs the
 identical imager over every ping of the loaded .svlog and writes
 `seabed_images_<logname>/` (+ inner `metadata/`) next to the log file — raw
@@ -138,7 +145,15 @@ colormap/priority/contrast/opacity/view controls as the main window (the RightPa
 is reused as-is), satellite tiles + trajectory + GPS readouts when the log contains
 GLOBAL_POSITION_INT, and two consumption modes — **Render range** (dual-handle
 slider, e.g. begin+5 s → end−10 s, rasterized at once) and **Replay** at ×1/×2/×4/×8
-driving map, waterfall and altitude exactly as live. The offline processing in
+driving map, waterfall and altitude exactly as live. **Save as rosbag** converts the
+log to a rosbag2 (mcap) folder next to it — name dialog pre-filled
+`bag_<logname>` — using the byte-identical team converter duplicated in
+`blueboat_gcs/tools/` (to update it, just re-copy the file from the robot repo);
+this button needs a sourced ROS 2 environment and explains itself if one is
+missing. **Run AI** recreates every seabed picture from the log (256-row windows,
+50 % overlap, plus the truncated tail) behind a modal progress bar and shows the
+detections on the map and in the waterfall view exactly as live. The offline
+processing in
 `core/svlog.py` is a port of the `sss_processor_node` pipeline with its constants
 copied verbatim — if those are ever retuned on the robot, mirror them there.
 

@@ -42,6 +42,9 @@ class WaterfallService(QObject):
 
     #: QImage (row 0 = oldest ping, last row = newest), current range [m]
     image_updated = Signal(QImage, float)
+    #: Detection overlay in buffer pixel coordinates:
+    #: list of {"row": int, "col": int, "label": str} for the emitted image.
+    detections_updated = Signal(object)
 
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
@@ -49,6 +52,10 @@ class WaterfallService(QObject):
         self._cols = int(config.mosaic.waterfall_columns)
         self._buf = np.full((self._rows, self._cols), np.nan,
                             dtype=np.float32)
+        # Per-row ping metadata (t, x, y, yaw, half-range) — needed to
+        # place world-frame detections on their exact ping line.
+        self._meta = np.full((self._rows, 5), np.nan, dtype=np.float64)
+        self._detections: list = []       # dicts: t_s, x, y, label
         self._head = 0                  # next row to write
         self._filled = 0                # rows written so far (<= _rows)
         self._range_m = 0.0             # current per-side swath [m]
@@ -77,6 +84,8 @@ class WaterfallService(QObject):
         row = np.full(self._cols, np.nan, dtype=np.float32)
         row[col] = ping.intensity_db          # duplicates: last sample wins
         self._buf[self._head] = row
+        self._meta[self._head] = (ping.t, ping.robot_x, ping.robot_y,
+                                  ping.yaw, r)
         self._head = (self._head + 1) % self._rows
         self._filled = min(self._filled + 1, self._rows)
         self._dirty = True
@@ -91,10 +100,66 @@ class WaterfallService(QObject):
     def clear(self) -> None:
         """'Clear SSS data': drop the buffered pings; keep streaming."""
         self._buf.fill(np.nan)
+        self._meta.fill(np.nan)
+        self._detections.clear()
         self._head = 0
         self._filled = 0
         self._dirty = False
         self.image_updated.emit(QImage(), self._range_m)  # null -> view clears
+        self.detections_updated.emit([])
+
+    # ---- detections -------------------------------------------------------------
+    def add_detection(self, t_s: float, x: float, y: float,
+                      label: str) -> None:
+        """Register a world-frame detection for waterfall display.
+
+        ``t_s`` should be the ping time of the row the object was seen on
+        (SeabedImager stamps each detection with its pixel row's time).
+        """
+        self._detections.append({"t_s": float(t_s), "x": float(x),
+                                 "y": float(y), "label": label})
+        if len(self._detections) > 500:
+            self._detections.pop(0)
+        self._dirty = True
+        if self._enabled:
+            self._force_render()
+
+    def clear_detections(self) -> None:
+        self._detections.clear()
+        self.detections_updated.emit([])
+        if self._enabled:
+            self._force_render()
+
+    def _overlay(self, meta_chrono: np.ndarray) -> list:
+        """Map world detections to (row, col) of the chrono buffer.
+
+        Row: the ping whose time matches the detection's row time.
+        Column: exact inversion of the pixel->world formula —
+            y_local = (yw - y_r)·cos(yaw) − (xw − x_r)·sin(yaw)
+            col     = (r − y_local) / (2 r) · (W − 1)
+        Detections outside the buffered time span or the row's swath are
+        skipped (they scrolled out or lie off-swath at that instant).
+        """
+        out = []
+        if meta_chrono.shape[0] == 0 or not self._detections:
+            return out
+        times = meta_chrono[:, 0]
+        for det in self._detections:
+            if not (times[0] <= det["t_s"] <= times[-1]):
+                continue
+            i = int(np.searchsorted(times, det["t_s"]))
+            i = min(max(i, 0), meta_chrono.shape[0] - 1)
+            _t, rx, ry, yaw, r = meta_chrono[i]
+            if not np.isfinite(r) or r <= 0:
+                continue
+            y_local = ((det["y"] - ry) * np.cos(yaw)
+                       - (det["x"] - rx) * np.sin(yaw))
+            if abs(y_local) > r * 1.02:
+                continue
+            col = int(round((r - y_local) / (2 * r) * (self._cols - 1)))
+            out.append({"row": i, "col": min(max(col, 0), self._cols - 1),
+                        "label": det["label"]})
+        return out
 
     # ---- persistence -----------------------------------------------------------
     def chronological(self) -> Optional[np.ndarray]:
@@ -140,7 +205,10 @@ class WaterfallService(QObject):
         # Chronological order, oldest first; newest ping = last row.
         if self._filled < self._rows:
             chrono = self._buf[:self._filled]
+            meta_chrono = self._meta[:self._filled]
         else:
             chrono = np.roll(self._buf, -self._head, axis=0)
+            meta_chrono = np.roll(self._meta, -self._head, axis=0)
         img = self._renderer.to_qimage(chrono, flip=False)
         self.image_updated.emit(img, self._range_m)
+        self.detections_updated.emit(self._overlay(meta_chrono))
