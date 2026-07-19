@@ -90,6 +90,58 @@ the operator controls. Panel base width is `PANEL_MIN_WIDTH` in
   coordinates and the continuously updated robot↔pinger distance;
   `DEFAULT_ACCURACY_M` draws the dashed ring (no covariance in the message).
 
+### 3.1bis AI seabed imaging & the analysis topic (new)
+
+**Live pipeline.** While visualization runs, `core/seabed_imager.py` builds a
+waterfall-domain image every `seabed.stride` pings covering the last `seabed.rows`
+pings (defaults 128/256 = 50 % overlap; see ARCHITECTURE §2.16 for the
+justification). Each image goes through the analyzer — currently
+`dummy_center_analyzer`, which "detects" the image center; **replace that one
+function with the real model**, keeping its contract: `SeabedImage -> [ {pixel:
+[row, col], world: [x, y], class_name, confidence} ]`. Detections appear on the map
+and the analysis is published on `topics.seabed_analysis`
+(default `/sss_ai/seabed_analysis`, `std_msgs/String`, JSON):
+
+```json
+{"schema": 1,
+ "image": {"image_id": 12, "t_start_s": ..., "t_end_s": ...,
+           "rows": 256, "cols": 800,
+           "png_path": ".../seabed_00012.png",         // null if not recording
+           "metadata_path": ".../metadata/seabed_00012.json",
+           "boat": {"mean_speed_mps": ..., "mean_altitude_m": ...,
+                     "start_pose": [x,y,yaw], "end_pose": [x,y,yaw]}},
+ "detections": [{"pixel": [128, 400], "world": [x, y],
+                  "class_name": "dummy_center", "confidence": 0.5}]}
+```
+
+Never the pixels — only metadata + analysis. Rationale for JSON-over-String: the
+detector contract is still moving; a schema-versioned JSON needs no interface-package
+release. Once frozen, promote it 1:1 to `blueboat_interfaces/SeabedAnalysis.msg`.
+
+**Files & georeferencing.** While a recording session is active, images stream into
+`<session>/seabed_images/seabed_XXXXX.png` with `metadata/seabed_XXXXX.json`
+(per-row pose/time/speed/altitude + the closed-form pixel→world formula) and
+`metadata/seabed_XXXXX_world.npz` (per-pixel `world_x`/`world_y` float32 grids +
+the raw float `intensity_db` for training — the PNG is display-normalized). A YOLO
+bbox center `(row, col)` maps to the world with one lookup:
+`world = (world_x[row, col], world_y[row, col])`.
+
+**Datasets from logs.** The replay window's "Save pictures from the log" runs the
+identical imager over every ping of the loaded .svlog and writes
+`seabed_images_<logname>/` (+ inner `metadata/`) next to the log file — raw
+to-be-annotated images, no analyzer.
+
+### 3.1ter SVLOG replay window (new)
+
+Toolbar "Open SVLOG" → a standalone replay window per log: same
+colormap/priority/contrast/opacity/view controls as the main window (the RightPanel
+is reused as-is), satellite tiles + trajectory + GPS readouts when the log contains
+GLOBAL_POSITION_INT, and two consumption modes — **Render range** (dual-handle
+slider, e.g. begin+5 s → end−10 s, rasterized at once) and **Replay** at ×1/×2/×4/×8
+driving map, waterfall and altitude exactly as live. The offline processing in
+`core/svlog.py` is a port of the `sss_processor_node` pipeline with its constants
+copied verbatim — if those are ever retuned on the robot, mirror them there.
+
 ### 3.2 AI detections — `ros/detections_listener.py` (placeholder)
 * Expected topic: `topics.detections` (default `/sss_ai/detections`)
 * Expected type: `vision_msgs/Detection2DArray` with, per detection:

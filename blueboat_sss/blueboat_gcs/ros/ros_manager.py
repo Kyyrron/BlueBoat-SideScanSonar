@@ -22,7 +22,7 @@ try:  # pragma: no cover - environment dependent
     import rclpy
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.node import Node
-    from std_msgs.msg import Bool
+    from std_msgs.msg import Bool, String
     ROS_AVAILABLE = True
 except ImportError:  # pragma: no cover
     rclpy = None  # type: ignore[assignment]
@@ -40,6 +40,7 @@ class RosManager:
         self._thread: Optional[threading.Thread] = None
         self._ping_pub = None
         self._svlog_pub = None
+        self._analysis_pub = None
 
     # ---- lifecycle -----------------------------------------------------------
     @property
@@ -63,6 +64,9 @@ class RosManager:
             Bool, self._config.topics.ping_enable, 10)
         self._svlog_pub = self._node.create_publisher(
             Bool, self._config.topics.svlog_enable, 10)
+        # AI seabed analysis output (JSON payload; schema in HANDOVER).
+        self._analysis_pub = self._node.create_publisher(
+            String, self._config.topics.seabed_analysis, 10)
         self._subscribe_rosout()
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
@@ -121,3 +125,9 @@ class RosManager:
     def publish_svlog_enable(self, enable: bool) -> None:
         if self._svlog_pub is not None:
             self._svlog_pub.publish(Bool(data=enable))
+
+    def publish_seabed_analysis(self, payload_json: str) -> None:
+        """Publish one seabed-image analysis (metadata + detections,
+        never the pixels) on topics.seabed_analysis."""
+        if self._analysis_pub is not None:
+            self._analysis_pub.publish(String(data=payload_json))

@@ -29,6 +29,7 @@ class AcquisitionToolbar(QToolBar):
     stop_clicked = Signal()
     record_toggled = Signal(bool)      # True = Record ON, False = OFF
     console_toggled = Signal(bool)
+    open_svlog_clicked = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__("Acquisition", parent)
@@ -72,6 +73,14 @@ class AcquisitionToolbar(QToolBar):
             "ROS 2 /rosout, and the sss_processor_node output.")
         self._console_btn.toggled.connect(self.console_toggled)
         self.addWidget(self._console_btn)
+
+        self._svlog_open_btn = QPushButton("Open SVLOG")
+        self._svlog_open_btn.setToolTip(
+            "Open a recorded .svlog in the replay window:\n"
+            "render any time range, or replay the mission at x1–x8,\n"
+            "with the same map/waterfall options as the live view.")
+        self._svlog_open_btn.clicked.connect(self.open_svlog_clicked)
+        self.addWidget(self._svlog_open_btn)
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)

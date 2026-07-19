@@ -66,6 +66,7 @@ class RecordingManager(QObject):
         self._waterfall = waterfall
         self._start_wall: Optional[float] = None
         self._start_stamp: str = ""
+        self.session_dir: Optional[Path] = None
         self._ping_count = 0
         self._detections: List[Detection] = []
         self._priority_mode = "average"
@@ -100,6 +101,11 @@ class RecordingManager(QObject):
         self._start_stamp = datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
         self._ping_count = 0
         self._detections.clear()
+        # The directory exists from the start of the session so streaming
+        # artifacts (live seabed_images/) land inside it as they are made.
+        self.session_dir = (Path(self._config.data_root).expanduser()
+                            / "sessions" / self._start_stamp)
+        self.session_dir.mkdir(parents=True, exist_ok=True)
         self.recording_state.emit(True)
         self._signals.status_message.emit(
             f"Recording session {self._start_stamp} started.")
@@ -109,9 +115,7 @@ class RecordingManager(QObject):
         if not self.active:
             return None
         start_wall, self._start_wall = self._start_wall, None
-        session = (Path(self._config.data_root).expanduser() / "sessions"
-                   / self._start_stamp)
-        session.mkdir(parents=True, exist_ok=True)
+        session = self.session_dir
 
         self._mosaic.save_into(session / "mosaic")
         self._waterfall.export_into(session / "waterfall")
@@ -153,8 +157,8 @@ class RecordingManager(QObject):
                 continue
             try:
                 if lo <= f.stat().st_mtime <= hi:
-                    dest = session / "svlog"
-                    dest.mkdir(exist_ok=True)
+                    dest = session # / "svlog"
+                    # dest.mkdir(exist_ok=True)
                     shutil.move(str(f), dest / f.name)
                     adopted.append(f.name)
             except OSError:

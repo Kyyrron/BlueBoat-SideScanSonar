@@ -79,6 +79,12 @@ class MainWindow(QMainWindow):
         self.recording = RecordingManager(config, signals,
                                           mosaic_service,
                                           self.waterfall_service)
+        # Live AI seabed imaging (waterfall domain, core/seabed_imager.py):
+        # every stride pings -> image + metadata + dummy analysis; written
+        # to <session>/seabed_images while a recording session is active.
+        from ..core.seabed_imager import SeabedImager
+        self.seabed_imager = SeabedImager(config)
+        self._replay_windows: list = []      # keep references alive
 
         # Telemetry staleness watchdog (robot synchronization): if no
         # RobotState arrives for a while — pipeline stopped, mavros down,
@@ -205,6 +211,8 @@ class MainWindow(QMainWindow):
         self._mosaic_service.cleared.connect(self.mosaic_layer.clear)
         self.recording.recording_state.connect(
             self.toolbar.on_recording_state)
+        self.seabed_imager.image_ready.connect(self._on_seabed_image)
+        self.toolbar.open_svlog_clicked.connect(self._on_open_svlog)
 
         # Bottom toolbar.
         self.toolbar.start_clicked.connect(self._on_start)
@@ -232,6 +240,7 @@ class MainWindow(QMainWindow):
             return
         self._mosaic_service.on_sonar_ping(ping)
         self.waterfall_service.on_sonar_ping(ping)
+        self.seabed_imager.on_sonar_ping(ping)
         self.right_panel.altitude_plot.append(ping.water_depth)
         # Sonar range line: extent taken from the actual samples, so it
         # tracks the current sonar configuration automatically.
@@ -274,6 +283,33 @@ class MainWindow(QMainWindow):
     def _on_pinger(self, fix: PingerFix) -> None:
         self.pinger_layer.update(fix)
         self.left_panel.on_pinger(fix.x, fix.y)   # live info + distance
+
+    # ---- AI seabed imaging (live) -----------------------------------------------
+    def _on_seabed_image(self, image) -> None:
+        """Every completed seabed image: publish the analysis (metadata +
+        detections, never pixels) and show detections on the map."""
+        payload = image.analysis_json(getattr(image, "_png_path", None),
+                                      getattr(image, "_metadata_path", None))
+        # PipelineLauncher exposes the ros manager; Simulator has none.
+        ros = getattr(self._acquisition, "_ros", None)
+        if ros is not None:
+            ros.publish_seabed_analysis(payload)
+        self.console.append_line(
+            "app", f"seabed image {image.image_id}: "
+                   f"{len(image.detections)} detection(s) published")
+        for k, det in enumerate(image.detections):
+            self._signals.detection.emit(Detection(
+                uid=1_000_000 + image.image_id * 16 + k,
+                t=float(image.row_t[-1]),
+                x=float(det["world"][0]), y=float(det["world"][1]),
+                class_name=det["class_name"],
+                confidence=float(det["confidence"]), extent_m=1.0))
+
+    def _on_open_svlog(self) -> None:
+        from .replay_window import open_svlog_dialog
+        win = open_svlog_dialog(self, self._config)
+        if win is not None:
+            self._replay_windows.append(win)
 
     # ---- view mode / display -----------------------------------------------------
     def _on_view_mode(self, mode: str) -> None:
@@ -427,8 +463,12 @@ class MainWindow(QMainWindow):
         if on:
             self._acquisition.set_recording(True)   # publish log_enable
             self.recording.begin()
+            # Live seabed images stream into the session from now on.
+            self.seabed_imager.set_output_dir(
+                self.recording.session_dir / "seabed_images")
         else:
             self._acquisition.set_recording(False)  # close the .svlog
+            self.seabed_imager.set_output_dir(None)
             saved = self.recording.end()            # save every artifact
             if saved is not None:
                 self.statusBar().showMessage(
@@ -442,6 +482,7 @@ class MainWindow(QMainWindow):
         self.toolbar.on_viz_state(False)
         if self.recording.active:                  # save ONLY if recording
             self._acquisition.set_recording(False)
+            self.seabed_imager.set_output_dir(None)
             saved = self.recording.end()
             if saved is not None:
                 self.statusBar().showMessage(f"Saved to {saved}", 15000)

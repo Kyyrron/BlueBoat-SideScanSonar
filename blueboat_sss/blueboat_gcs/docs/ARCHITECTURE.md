@@ -201,6 +201,35 @@ trajectory break after 3 s without RobotState, whether or not START is involved;
 > 5 m — a stateless safety net, so recovery (teleporting arrow, no phantom line)
 cannot depend on any state machine being in the right state.
 
+### 2.15 SVLOG replay window — the app-in-the-app (update)
+`gui/replay_window.py` opens a recorded .svlog as a second, independent instance of
+the live stack: its own signal bus + MosaicService + WaterfallService + MapView with
+tile/mosaic/trajectory/measure layers + the standard RightPanel — zero changes to any
+reused component, which is the designed payoff of the bus architecture.
+`core/svlog.py` decodes the file (ports of `walk_packets`, `decode_os_mono_profile`,
+the burst-aware clock and NED→ENU math from the team's `svlog_to_rosbag.py`) and runs
+a faithful offline port of the `sss_processor_node` pipeline (scale_to_db →
+ringing-adaptive noise window → FBR → dual-side FBRTracker → slant-range correction →
+50 ms port/stbd pairing → pose snap from ATTITUDE+LOCAL_POSITION_NED), yielding the
+same SonarPing/RobotState models the GUI already consumes; GPS origin comes from
+GLOBAL_POSITION_INT, so satellite tiles and GPS readouts work in replay. Two modes:
+**Render range** (dual-handle slider selects [start, end], rasterized at once) and
+**Replay** (wall-clock event pump at ×1/×2/×4/×8).
+
+### 2.16 AI seabed imaging (update)
+`core/seabed_imager.py` produces waterfall-domain pictures for the detector — the
+domain choice matches the SSS detection literature (Sethuraman et al. 2024 IJRR;
+CMRE MCM line) and avoids renderer artifacts; georeferencing is preserved exactly
+because each row is one ping with a known pose (per-pixel `world_x/world_y` grids are
+saved). Sliding window: rows=256, stride=128 (50 % overlap) — ≈7.3 m along-track at
+28 Hz/0.8 m s⁻¹ (near-square footprint) and the standard tiling guarantee that any
+object smaller than the stride appears entirely in ≥1 image (tiled-inference
+practice, e.g. SAHI, Akyön et al. 2022). One implementation serves live (fed from
+the bus; saved into `<session>/seabed_images/` + inner `metadata/` while recording;
+dummy center analyzer → detections on the map + JSON on
+`topics.seabed_analysis`) and offline (`generate_from_pings`, used by the replay
+window's "Save pictures from the log" → `seabed_images_<logname>/` next to the file).
+
 ## 3. Module map
 
 | Path | Responsibility |
@@ -212,6 +241,8 @@ cannot depend on any state machine being in the right state.
 | `core/waterfall_service.py` | ring buffer of raw pings, throttled waterfall rendering, clear, export |
 | `core/recording_session.py` | recording sessions: one experiment = one folder |
 | `core/logging_bus.py` | stdout/stderr/logging capture -> embedded console |
+| `core/svlog.py` | .svlog reader + offline processing (replay, datasets) |
+| `core/seabed_imager.py` | waterfall-domain AI images + pixel->world metadata |
 | `models/` | ROS-free dataclasses: `SonarPing`, `RobotState`, `Detection`, `PingerFix`, `PlannedPath` |
 | `ros/ros_manager.py` | rclpy lifecycle in a background thread; enable-topic publishers; graceful no-ROS degradation |
 | `ros/sonar_listener.py` | `/sss_processor/processed` → `SonarPing` |
@@ -232,6 +263,8 @@ cannot depend on any state machine being in the right state.
 | `gui/waterfall_view.py` | interactive waterfall (zoom / scroll / pin-to-newest) |
 | `gui/log_console.py` | embedded application console (bottom dock) |
 | `gui/live_plot.py` | reusable real-time scrolling plot ("Robot Altitude", …) |
+| `gui/replay_window.py` | SVLOG replay app-in-the-app (range render / x1-x8 replay) |
+| `gui/range_slider.py` | dual-handle time-range slider |
 | `gui/left_panel.py`, `gui/right_panel.py`, `gui/toolbar.py`, `gui/widgets.py`, `gui/theme.py` | panels, tools, dark theme |
 | `sim/simulator.py` | ROS-free data source |
 | `launch/SSS_processing_launch.py` | processor-only launch file for START |

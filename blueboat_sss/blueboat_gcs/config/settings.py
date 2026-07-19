@@ -29,9 +29,11 @@ class RosTopics:
     svlog_enable: str = "/sss_processor/log/enable"
     # ---- placeholders (repositories not present yet) ----------------------
     detections: str = "/sss_ai/detections"     # see ros/detections_listener.py
-    pinger: str = "/blueboat/pinger_coordinates"      # see ros/pinger_listener.py
+    pinger: str = "/blueboat/pinger_coordinates"  # Float32MultiArray [x, y]
     # Planned mission path (nav_msgs/Path), published by path_publisher.py.
     planned_path: str = "/set_path"
+    # AI seabed analysis output (std_msgs/String, JSON; schema in HANDOVER).
+    seabed_analysis: str = "/sss_ai/seabed_analysis"
 
 
 @dataclass
@@ -84,6 +86,18 @@ class MosaicConfig:
 
 
 @dataclass
+class SeabedConfig:
+    """Waterfall-domain AI imaging (core/seabed_imager.py).
+
+    rows/stride: 256/128 = 50 % overlap; see the module docstring for
+    the along-track-footprint and tiling-guarantee justification."""
+
+    rows: int = 256          # pings per image (window height)
+    stride: int = 128        # emit every N pings; overlap = rows - stride
+    columns: int = 800       # across-track resampling width
+
+
+@dataclass
 class InterpolationConfig:
     """Small-gap fill between consecutive sonar lines (render-time only)."""
 
@@ -122,6 +136,7 @@ class AppConfig:
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     mosaic: MosaicConfig = field(default_factory=MosaicConfig)
     interpolation: InterpolationConfig = field(default_factory=InterpolationConfig)
+    seabed: SeabedConfig = field(default_factory=SeabedConfig)
     map: MapConfig = field(default_factory=MapConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     data_root: str = "../../../data/SSS_data"   # same root as the existing pipeline

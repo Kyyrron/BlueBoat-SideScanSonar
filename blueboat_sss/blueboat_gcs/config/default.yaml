@@ -12,8 +12,9 @@ topics:
   svlog_enable: /sss_processor/log/enable
   # ---- placeholders: set these once the other repositories are connected ----
   detections: /sss_ai/detections
-  pinger: /blueboat/pinger_coordinates
+  pinger: /blueboat/pinger_coordinates  # Float32MultiArray [x_world, y_world]
   planned_path: /set_path            # nav_msgs/Path from path_publisher.py
+  seabed_analysis: /sss_ai/seabed_analysis  # std_msgs/String JSON
 
 pipeline:
   launch_command: ["ros2", "launch", "blueboat_sss", "SSS_processing_launch.py"]
@@ -28,6 +29,11 @@ mosaic:
   render_hz: 4.0
   densify: true          # SonarView-grade rasterization (rasterizer.py)
   bilinear_splat: true   # anti-aliased accumulation; false = legacy scatter
+
+seabed:                    # AI seabed imaging (waterfall domain)
+  rows: 256                # pings per image
+  stride: 128              # new image every N pings (50 % overlap)
+  columns: 800
 
 interpolation:
   max_gap_m: 0.75
