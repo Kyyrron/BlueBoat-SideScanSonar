@@ -33,6 +33,11 @@ class BlueBoatController(Node):
     def __init__(self):
         super().__init__('blueboat_controller')
 
+
+        #### PINGER ####
+        self.fixed_pinger = True # True -> Publish pinger coordinates in robot frame, without dead reckoning.
+                                 # False -> Publish without yaw compensation and dead reckoning - default behavior in target following 
+
         ################## Get Parameters ##################
         self.declare_parameter('enable_motors', False)
         self.enable_motors = self.get_parameter('enable_motors').get_parameter_value().bool_value
@@ -394,6 +399,20 @@ class BlueBoatController(Node):
 
         av = self.angular_velocity
 
+        if self.fixed_pinger and not all(self.pinger_coordinates == np.zeros(3)): # Make sure the pinger has been detected
+            # rotate pinger coordinates into original frame
+            x_body = self.pinger_coordinates[0]
+            y_body = self.pinger_coordinates[1]
+
+            x_world, y_world = cf.transform_body_to_world(x_rel, y_rel, yaw_rel, x_body, y_body) # now relative to the original frame of reference 
+
+            self.corrected_pinger = [x_world, y_world]
+            self.publish(Float32MultiArray(), self.corrected_pinger, self.pinger_publisher)
+            return
+
+        if self.fixed_pinger:
+            return
+
         # Apply sensor fusion to get a smoother approximation at higher frequency of pinger_coordinates
         if av is not None and not all(self.pinger_coordinates == np.zeros(3)): # Make sure the pinger has been detected
             omega = np.array([0.0, 0.0, av.z])
@@ -411,7 +430,6 @@ class BlueBoatController(Node):
         y_body = self.pinger_coordinates[1]
 
         x_world, y_world = cf.transform_body_to_world(x_rel, y_rel, yaw_rel, x_body, y_body) # now relative to the original frame of reference 
-
 
         self.corrected_pinger = [x_world, y_world]
 

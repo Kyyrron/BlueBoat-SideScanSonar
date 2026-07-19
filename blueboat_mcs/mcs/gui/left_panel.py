@@ -28,13 +28,13 @@ from mcs.gui.widgets import CollapsibleSection, InfoGrid, StatusLed
 from mcs.models.store import DataStore, TargetMode
 
 _LAYERS: list[tuple[str, str, bool]] = [
-    ("satellite", "Satellite map layer", False),
+    ("satellite", "Satellite map layer", True),
     ("robot_track", "Robot trajectory", True),
     ("mission_path", "Published mission path", True),
     ("pinger", "USBL pinger position", True),
     ("pinger_track", "USBL pinger trajectory", True),
     ("target_line", "Robot → target line", True),
-    ("heading", "Robot heading arrow", True),
+    ("heading", "Robot heading arrow", False),
     ("grid", "World grid", True),
 ]
 
