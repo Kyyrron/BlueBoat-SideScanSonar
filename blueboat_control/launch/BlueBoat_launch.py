@@ -27,6 +27,7 @@ def launch_setup():
             parameters={'enable_motors' : sl_motors,
                         'note' : sl_note,
                         'controller_type' : sl_controller,
+                        'use_UWgps': sl_pinger,
                         'use_sim_time': False})
 
     # Connect to the pinger and log data

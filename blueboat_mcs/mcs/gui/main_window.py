@@ -24,6 +24,7 @@ from mcs.gui import theme
 from mcs.gui.bottom_toolbar import BottomToolbar
 from mcs.gui.left_panel import LeftPanel
 from mcs.gui.map.map_view import MapMode, MapView
+from mcs.gui.mission_stats import FloatingStatsBox
 from mcs.gui.right_panel import RightPanel
 from mcs.models.store import DataStore
 from mcs.ros.command_center import CommandCenter
@@ -56,15 +57,28 @@ class MainWindow(QMainWindow):
         self.map_view = MapView(cfg, self.store)
         self.left_panel = LeftPanel(cfg, self.store)
         self.right_panel = RightPanel(cfg, self.store)
+        self.left_panel.setMinimumWidth(340)
+        self.left_panel.setMaximumWidth(450)
+
+        self.right_panel.setMinimumWidth(340)
+        self.right_panel.setMaximumWidth(500)
         self.toolbar = BottomToolbar(cfg, self.bus, self.launcher, self.commands)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        splitter.setChildrenCollapsible(False)
+
         splitter.addWidget(self.left_panel)
         splitter.addWidget(self.map_view)
         splitter.addWidget(self.right_panel)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 0)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 4)
+        splitter.setStretchFactor(2, 1)
+        splitter.setSizes([320, 900, 320])
+
+        # Floating Mission Stats Box (parented to the map_view so it floats without breaking the splitter)
+        self.stats_box = FloatingStatsBox(self.store, self.map_view)
+        self.right_panel.time_window_changed.connect(self.stats_box.refresh_stats)
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -96,6 +110,18 @@ class MainWindow(QMainWindow):
         self.ros.start()
         self._ros_label.setText(
             "ROS: connected" if self.ros.running else "ROS: unavailable")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+
+        width = self.width()
+
+        if width < 1200:
+            self.left_panel.setMaximumWidth(300)
+            self.right_panel.setMaximumWidth(320)
+        else:
+            self.left_panel.setMaximumWidth(450)
+            self.right_panel.setMaximumWidth(500)
 
     # ============================================================== signal wiring
     def _connect_signals(self) -> None:
@@ -161,6 +187,16 @@ class MainWindow(QMainWindow):
         self.left_panel.refresh()
         self.right_panel.refresh()
         self.map_view.refresh()
+
+        # Keep floating stats box glued to the top-right of the map view 
+        # (which inherently puts it glued to the top-left of the right panel)
+        if hasattr(self, 'stats_box'):
+            expected_x = self.map_view.width() - self.stats_box.width() - 8
+            expected_y = 8
+            if self.stats_box.pos().x() != expected_x or self.stats_box.pos().y() != expected_y:
+                self.stats_box.move(expected_x, expected_y)
+                self.stats_box.raise_()
+
         # Georeference status + satellite availability
         geo = self.store.geo
         if geo.fit is None:

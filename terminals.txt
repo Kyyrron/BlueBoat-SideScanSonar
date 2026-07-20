@@ -1,6 +1,6 @@
 1.
 cd /blueboat_ws && . .venv/bin/activate && . install/setup.bash
-ros2 launch blueboat_control BlueBoat_launch.py enable_motors:=True note:='NEDO'
+ros2 launch blueboat_control BlueBoat_launch.py enable_motors:=True controller_type:='LoS' use_pinger:=True
 ros2 launch blueboat_control BlueBoat_launch.py enable_motors:=True
 
 2.

@@ -76,11 +76,13 @@ class LaunchParameters:
         else:
             args = [
                 f"enable_motors:={b(self.enable_motors)}",
-                f"note:={self.note}",
-                f"controller_type:={self.controller_type}",
                 f"trajectory:={self.trajectory}",
                 f"use_pinger:={b(self.use_pinger)}",
             ]
+            if not self.controller_type == "":
+                args += [f"controller_type:={self.controller_type}"]
+            if not self.note == "":
+                args += [f"note:={self.note}"]
         args += [f"{k}:={v}" for k, v in self.extra_args.items()]
         return args
 

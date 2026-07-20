@@ -326,10 +326,6 @@ class DesignerMapView(QGraphicsView):
         self._update_tiles()
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.MiddleButton:
-            self._panning = event.position()
-            self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
-            return
         if event.button() == Qt.MouseButton.LeftButton:
             world = self.mapToScene(event.position().toPoint())
             if self._mode is EditMode.ADD:
@@ -347,6 +343,10 @@ class DesignerMapView(QGraphicsView):
         if event.button() == Qt.MouseButton.RightButton \
                 and self._mode is EditMode.ADD:
             self.set_mode(EditMode.SELECT)
+            return
+        if event.button() == Qt.MouseButton.MiddleButton or event.button() == Qt.MouseButton.RightButton:
+            self._panning = event.position()
+            self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
             return
         super().mousePressEvent(event)
 
@@ -366,7 +366,7 @@ class DesignerMapView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.MiddleButton:
+        if event.button() == Qt.MouseButton.MiddleButton or event.button() == Qt.MouseButton.RightButton and self._mode is not EditMode.ADD:
             self._panning = None
             self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
             self._update_tiles()

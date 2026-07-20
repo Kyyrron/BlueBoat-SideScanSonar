@@ -62,6 +62,8 @@ class RobotState:
     thrust_left: float = 0.0
     travelled_m: float = 0.0
     has_odom: bool = False
+    yaw_offset: float = 0.0
+    _initial_yaw_latched: bool = False
 
 
 @dataclass
@@ -136,6 +138,12 @@ class DataStore:
         prev = (r.x, r.y) if r.has_odom else None
         r.t = t
         r.x, r.y, r.yaw = float(pose[0]), float(pose[1]), float(pose[5])
+
+        # Latch initial yaw offset on first odometry reception
+        if not r._initial_yaw_latched:
+            r.yaw_offset = -r.yaw
+            r._initial_yaw_latched = True
+
         r.speed = math.hypot(float(twist[0]), float(twist[1]))
         r.has_odom = True
         if prev is not None:
@@ -277,5 +285,7 @@ class DataStore:
                   self.thrust_hist, self.target_dist_hist):
             s.clear()
         self.robot.travelled_m = 0.0
+        self.robot.yaw_offset = 0.0
+        self.robot._initial_yaw_latched = False
         self.mission.started_t = None
         self._t0 = None

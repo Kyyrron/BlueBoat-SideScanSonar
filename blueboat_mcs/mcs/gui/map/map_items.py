@@ -81,14 +81,18 @@ class RobotItem(QGraphicsItemGroup):
         self.addToGroup(self._arrow)
         self._arrow_visible = False
 
-    def set_pose(self, x: float, y: float, yaw: float) -> None:
+    def set_pose(self, x: float, y: float, yaw: float, yaw_offset: float = 0.0) -> None:
         self._glyph.setPos(x, y)
+        
+        # Apply the offset to correct the misalignment between frames
+        corrected_yaw = yaw + yaw_offset
+        
         # Device-space (y-down, CW-positive) rotation for the untransformed
         # glyph — see class docstring.
-        self._glyph.setRotation(-math.degrees(yaw))
+        self._glyph.setRotation(-math.degrees(corrected_yaw))
         length = 4.0  # metres of look-ahead
         self._arrow.setLine(QLineF(
-            x, y, x + length * math.cos(yaw), y + length * math.sin(yaw)))
+            x, y, x + length * math.cos(corrected_yaw), y + length * math.sin(corrected_yaw)))
         self._arrow.setVisible(self._arrow_visible)
 
     def set_heading_visible(self, visible: bool) -> None:

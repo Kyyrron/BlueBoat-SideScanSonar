@@ -217,7 +217,12 @@ class MapView(QGraphicsView):
         self.pinger_track.set_points(pxy if len(pxy) else np.empty((0, 2)))
 
         if robot.has_odom:
-            self.robot_item.set_pose(robot.x, robot.y, robot.yaw)
+            # Retrieve the yaw offset from the data store (default to 0.0 if undefined)
+            yaw_offset = getattr(robot, 'yaw_offset', 0.0)
+            
+            # Pass the yaw_offset to the RobotItem
+            self.robot_item.set_pose(robot.x, robot.y, robot.yaw, yaw_offset)
+            
             if not self._did_initial_center:
                 self.centerOn(robot.x, robot.y)
                 self._did_initial_center = True

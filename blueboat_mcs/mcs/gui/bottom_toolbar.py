@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget, QSizePolicy,
 )
 
 from mcs.config.settings import AppConfig
@@ -50,10 +50,16 @@ class BottomToolbar(QWidget):
         self._commands = commands
 
         outer = QVBoxLayout(self)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.setMinimumWidth(0)
         outer.setContentsMargins(8, 4, 8, 6)
         outer.setSpacing(3)
 
         row = QHBoxLayout()
+        row.setSizeConstraint(QHBoxLayout.SizeConstraint.SetNoConstraint)
         row.setSpacing(8)
         outer.addLayout(row)
 
@@ -149,21 +155,51 @@ class BottomToolbar(QWidget):
             "trajectories. Saved missions appear in Launch Mission → "
             "custom paths.")
         self.designer_button.clicked.connect(self.create_pattern_clicked.emit)
+        self.designer_button.setSizePolicy(
+            QSizePolicy.Policy.Maximum,
+            QSizePolicy.Policy.Fixed,
+        )
         row.addWidget(self.designer_button)
 
         row.addStretch(1)
 
         self._estop_label = QLabel("")
+        self._estop_label = QLabel("")
+        self._estop_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Fixed,
+        )
+        self._estop_label.setMinimumWidth(0)
         self._estop_label.setStyleSheet(f"color: {theme.WARN}; font-weight: bold;")
         row.addWidget(self._estop_label)
 
         self._console = QLabel("")
+        self._console.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Fixed,
+        )
         self._console.setStyleSheet(
             f"color: {theme.TEXT_DIM}; font-family: 'DejaVu Sans Mono', monospace;"
             "font-size: 10px;")
         self._console.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
         outer.addWidget(self._console)
+
+        for b in (
+            self.launch_button,
+            self.stop_button,
+            self.estop_button,
+            self.estop_kill_button,
+            self.mode_button,
+            self.manual_button,
+            self.continue_button,
+            self.measure_button,
+            self.designer_button,
+        ):
+            b.setSizePolicy(
+                QSizePolicy.Policy.Maximum,
+                QSizePolicy.Policy.Fixed,
+            )
 
         bus.launch_state_changed.connect(self._on_launch_state)
         bus.launch_output.connect(self._on_launch_output)
@@ -196,6 +232,7 @@ class BottomToolbar(QWidget):
         # guarantee as E-STOP: publish 'default', confirm transmission, and
         # only then terminate (CommandCenter.safe_shutdown — never a direct
         # launcher.stop()).
+        
         self._commands.safe_stop_mission()
         self.mission_stopped.emit()
 

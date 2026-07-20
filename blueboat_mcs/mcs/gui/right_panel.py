@@ -11,8 +11,6 @@ share the column without crowding each other:
     time window (map trajectories + plot). With the high handle at the end
     the display is *live*; moving it back freezes the display while
     recording continues underneath.
-  * **Mission statistics** — duration, travelled distance, average / max
-    speed and active controller over the selected window.
 * **Bottom part** — the **launch console** (:class:`~mcs.gui.console.
   LaunchConsole`), dedicated exclusively to the launched ROS2 processes'
   stdout/stderr, with severity coloring and its keyword filter toolbox.
@@ -30,12 +28,12 @@ from mcs.config.settings import AppConfig
 from mcs.gui import theme
 from mcs.gui.console import LaunchConsole
 from mcs.gui.plot.distance_plot import DistancePlot
-from mcs.gui.widgets import CollapsibleSection, InfoGrid, RangeSlider
+from mcs.gui.widgets import CollapsibleSection, RangeSlider
 from mcs.models.store import DataStore, TargetMode
 
 
 class RightPanel(QWidget):
-    """Monitoring sidebar: map tools, plot, timeline, statistics, console."""
+    """Monitoring sidebar: map tools, plot, timeline, console."""
 
     #: rel_t0, rel_t1, live
     time_window_changed = Signal(float, float, bool)
@@ -113,13 +111,6 @@ class RightPanel(QWidget):
         sec_tl.add_widget(row_widget)
         layout.addWidget(sec_tl)
 
-        # ---- Statistics ---------------------------------------------------------
-        sec_stats = CollapsibleSection("MISSION STATISTICS")
-        self.stats_grid = InfoGrid()
-        for key in ("Duration", "Travelled", "Avg speed", "Max speed", "Controller"):
-            self.stats_grid.add_row(key)
-        sec_stats.add_widget(self.stats_grid)
-        layout.addWidget(sec_stats)
         layout.addStretch(1)
 
         splitter.addWidget(top_scroll)
@@ -151,17 +142,6 @@ class RightPanel(QWidget):
         }[self._store.mission.target_mode]
         self.plot.set_title(title)
         self.plot.refresh()
-        self._refresh_stats(low, high)
-
-    def _refresh_stats(self, low: float, high: float) -> None:
-        st = self._store.statistics(low, high)
-        g = self.stats_grid
-        g.set("Duration", _fmt_hms(st.duration_s))
-        g.set("Travelled", f"{st.travelled_m:8.1f} m")
-        g.set("Avg speed", f"{st.avg_speed:5.2f} m/s")
-        g.set("Max speed", f"{st.max_speed:5.2f} m/s")
-        ctrl = self._store.mission.controller_type or "—"
-        g.set("Controller", ctrl if self._store.mission.launch_running else "—")
 
     # ---------------------------------------------------------------- slider
     def _on_slider(self, low: float, high: float) -> None:
