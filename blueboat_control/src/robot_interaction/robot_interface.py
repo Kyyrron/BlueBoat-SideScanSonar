@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 
 # Common libraries import
+import os
 import time
 from datetime import datetime
 import numpy as np
 import pandas as pd
-# import math
-# from scipy.spatial.transform import Rotation as R
-# import transformations as tf_transformations
 
 # ROS2 import
 import rclpy
@@ -17,9 +15,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, QoSDurabilityPolicy
 # msg import
 from std_msgs.msg import String, Bool, Float32MultiArray
 from nav_msgs.msg import Odometry
-# from geometry_msgs.msg import Quaternion
 from sensor_msgs.msg import Imu, NavSatFix
-from mavros_msgs.msg import State
+from mavros_msgs.msg import State, OverrideRCIn
 
 # srv import
 from mavros_msgs.srv import CommandBool, SetMode
@@ -27,6 +24,11 @@ from mavros_msgs.srv import CommandLong
 
 # Custom imports
 import custom_functions as cf
+
+# RC override channel conventions (MAVLink / mavros)
+CHAN_RELEASE = 0        # give the channel back to the RC receiver
+CHAN_NOCHANGE = 65535   # leave the channel untouched
+PWM_NEUTRAL = 1500
 
 class BlueBoatController(Node):
 
@@ -42,6 +44,9 @@ class BlueBoatController(Node):
         self.declare_parameter('enable_motors', False)
         self.enable_motors = self.get_parameter('enable_motors').get_parameter_value().bool_value
 
+        self.declare_parameter('use_UWgps', True)
+        self.use_UWgps = self.get_parameter('use_UWgps').get_parameter_value().bool_value
+
         self.declare_parameter('note', '')
         self.note = self.get_parameter('note').get_parameter_value().string_value
 
@@ -54,13 +59,26 @@ class BlueBoatController(Node):
         self.odom_publisher = self.create_publisher(Odometry, '/blueboat/odom',10)
         self.pinger_publisher = self.create_publisher(Float32MultiArray, '/blueboat/pinger_coordinates', 10)
         self.set_controller_publisher = self.create_publisher(Bool, '/blueboat/controller_ready',10)
-        #self.plot_publisher = self.create_publisher(Float32MultiArray, "blueboat/monitoring_data", 10)
+
+        # Actuator stream (this is how QGC drives the boat: a fixed-rate, fire-and-forget
+        # stream where the latest message wins - NOT one acknowledged RPC per actuation)
+        self.rc_override_publisher = self.create_publisher(OverrideRCIn, '/mavros/rc/override', 10)
 
         ## Subscribers
+
+        self.monitoring_data = []
+
+        # Subscriber
+        self.plot_subscriber = self.create_subscription(
+            Float32MultiArray,
+            "/monitoring_data",
+            self.monitoring_data_callback,
+            10
+        )
+
         # Node interaction
         self.str_input_subscriber = self.create_subscription(String, '/blueboat/input_str', self.str_input_callback, 10)
-        latched = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
-        self.ready_publisher = self.create_publisher(Bool, '/blueboat/controller_ready', latched)
+        self.ready_sub = self.create_subscription(Bool,'/blueboat/param_ready',self.param_callback,10)
         self.mode_sub = self.create_subscription(String, '/blueboat/param_mode',self.mode_callback,10)
 
         # Robot sensor
@@ -87,7 +105,18 @@ class BlueBoatController(Node):
         self.init = False
         self.mode = ''
 
+        # Handshake retry state.
+        # One-shot messages published before DDS discovery completes are silently lost,
+        # which is what made the launch fail "at random". Instead of publishing once and
+        # hoping, we keep a desired state and re-publish periodically until confirmed.
+        self.desired_param_mode = None
+        self.last_param_tx = 0.0
+        self.param_retry_period = 1.0   # seconds between re-requests
+        self.last_ready_tx = 0.0
+        self.ready_republish_period = 1.0
+
         self.timer = self.create_timer(0.05, self.timer_callback)
+        self.log_timer = self.create_timer(0.33, self.log_timer_callback) # 3 times per seconds 
 
         # Manual input control init
         self.stopping_sequence = False
@@ -124,49 +153,78 @@ class BlueBoatController(Node):
 
         ################## Initialize data collection ##################
 
-        self.data_columns = ['Year', 
-                             'Month', 
-                             'Day', 
-                             'Hour', 
-                             'Minute', 
-                             'Second', 
-                             'MicroSecond', 
-                             'aco_x', 
-                             'aco_y', 
-                             'aco_z', 
-                             'ant_x', 
-                             'ant_y', 
-                             'ant_z', 
-                             'lat', 
-                             'lon', 
-                             'dep', 
-                             'filaco_x', 
-                             'filaco_y', 
-                             'filaco_z',
-                             'quat_x', 
-                             'quat_y', 
-                             'quat_z', 
-                             'quat_w',
-                             'ang_vel_x',
-                             'ang_vel_y',
-                             'ang_vel_z',
-                             'lin_acc_x',
-                             'lin_acc_y',
-                             'lin_acc_z',
-                             'relative_x',
-                             'relative_y',
-                             'relative_psi',
-                             'target_x',
-                             'target_y',
-                             'target_psi',
-                             'corrected_pinger_x',
-                             'corrected_pinger_y',
-                             'gps_latitude',
-                             'gps_longitude',
-                             'pinger_latitude',
-                             'pinger_longitude',
-                             'left_thr_in',
-                             'right_thr_in']
+        if not self.use_UWgps:
+                self.data_columns = ['Year', 
+                                'Month', 
+                                'Day', 
+                                'Hour', 
+                                'Minute', 
+                                'Second', 
+                                'MicroSecond', 
+                                'quat_x', 
+                                'quat_y', 
+                                'quat_z', 
+                                'quat_w',
+                                'ang_vel_x',
+                                'ang_vel_y',
+                                'ang_vel_z',
+                                'lin_acc_x',
+                                'lin_acc_y',
+                                'lin_acc_z',
+                                'relative_x',
+                                'relative_y',
+                                'relative_psi',
+                                'gps_latitude',
+                                'gps_longitude',
+                                'left_thr_in',
+                                'right_thr_in',
+                                'target_x',
+                                'target_y']
+
+        else:     
+            self.data_columns = ['Year', 
+                                'Month', 
+                                'Day', 
+                                'Hour', 
+                                'Minute', 
+                                'Second', 
+                                'MicroSecond', 
+                                'aco_x', 
+                                'aco_y', 
+                                'aco_z', 
+                                'ant_x', 
+                                'ant_y', 
+                                'ant_z', 
+                                'lat', 
+                                'lon', 
+                                'dep', 
+                                'filaco_x', 
+                                'filaco_y', 
+                                'filaco_z',
+                                'quat_x', 
+                                'quat_y', 
+                                'quat_z', 
+                                'quat_w',
+                                'ang_vel_x',
+                                'ang_vel_y',
+                                'ang_vel_z',
+                                'lin_acc_x',
+                                'lin_acc_y',
+                                'lin_acc_z',
+                                'relative_x',
+                                'relative_y',
+                                'relative_psi',
+                                'target_x',
+                                'target_y',
+                                'target_psi',
+                                'corrected_pinger_x',
+                                'corrected_pinger_y',
+                                'gps_latitude',
+                                'gps_longitude',
+                                'pinger_latitude',
+                                'pinger_longitude',
+                                'left_thr_in',
+                                'right_thr_in']
 
         self.data_size = len(self.data_columns)
 
@@ -176,13 +234,24 @@ class BlueBoatController(Node):
                                   columns=self.data_columns)
 
         self.date = datetime.today().strftime('%Y_%m_%d-%H_%M_%S')
-        self.path = f'data/Robot_data/{self.date}-{self.note}-poslog.csv'
+        os.makedirs('../../../data/Robot_data', exist_ok=True)  # avoid every log write silently failing when the folder is missing
+        self.path = f'../../../data/Robot_data/{self.date}-{self.note}-poslog.csv'
+
+    def monitoring_data_callback(self, msg: Float32MultiArray):
+        """
+        Callback for monitoring data.
+        """
+        self.monitoring_data = msg.data
 
     ################## Thruster interaction ##################
 
     def set_servo(self, n, pwm):
         """
-        Send a PWM signal to a specific servo (n)
+        LEGACY fallback - send a single MAV_CMD_DO_SET_SERVO via the command service.
+        Note: this only works when SERVOn_FUNCTION is 0 (Disabled). It must NOT be
+        called at control-loop rate: every call is an acknowledged RPC, and a lost
+        ACK over WiFi stalls the mavros command plugin for seconds, which was the
+        source of the delayed/overrunning 'move' behavior.
         """
         req = CommandLong.Request()
         req.command = 183
@@ -198,9 +267,29 @@ class BlueBoatController(Node):
 
         self.cmd_client.call_async(req)
 
+    def send_rc_override(self, right_pwm=None, left_pwm=None, release=False):
+        """
+        Publish one RC override message (channel 1 = right/servo1, channel 3 = left/servo3).
+        Fire-and-forget, latest value wins - the same transport class QGC uses.
+        Requires 'override' mode: param_set maps SERVO1/3_FUNCTION to RCIN1/RCIN3
+        passthrough and points the autopilot's GCS sysid at mavros.
+        """
+        msg = OverrideRCIn()
+        channels = [CHAN_NOCHANGE] * 18
+
+        if release:
+            channels[0] = CHAN_RELEASE
+            channels[2] = CHAN_RELEASE
+        else:
+            channels[0] = int(right_pwm)
+            channels[2] = int(left_pwm)
+
+        msg.channels = channels
+        self.rc_override_publisher.publish(msg)
+
     def manualMove(self, input, force=False):
         """
-        Convert a newton input to pwm and send it to motor
+        Convert a newton input to pwm and stream it to the motors through RC override
         """
 
         # Safety
@@ -216,6 +305,7 @@ class BlueBoatController(Node):
         else:
             compensation_gain = 0.75
 
+        compensation_gain=1.0
         # Sanitize input
         max_input = 20.
         min_input = -20.
@@ -228,9 +318,9 @@ class BlueBoatController(Node):
         right_pwm = np.clip(thrust_to_pwm(right), min_PWM, max_PWM)
         left_pwm = 3000 - np.clip(thrust_to_pwm(left), min_PWM, max_PWM) # Reverses direction of thruster rotation to account for asymmetrical propeller
 
-        # Apply PWM to thrusters
-        self.set_servo(1, right_pwm)
-        self.set_servo(3, left_pwm)
+        # Stream PWM to thrusters (published every control tick -> ~20 Hz refresh,
+        # which also keeps ArduPilot's RC_OVERRIDE_TIME watchdog fed)
+        self.send_rc_override(right_pwm=right_pwm, left_pwm=left_pwm)
 
 
     ################## User interaction ##################
@@ -268,6 +358,7 @@ class BlueBoatController(Node):
         """
         Cancels any thruster input and set control parameters to False
         """
+        self.thruster_input = [0,0]
         self.manualMove([0,0], force=True)
         self.setArmedStatus(False) 
         self.set_motors(False)
@@ -279,6 +370,17 @@ class BlueBoatController(Node):
         msg = msg_type
         msg.data = in_msg
         publisher.publish(msg)
+
+    def request_param_mode(self, mode):
+        """
+        Ask param_set for a mode and remember the request so the main loop can
+        re-send it until param_set confirms on /blueboat/param_mode.
+        A single publish can be lost if it races DDS discovery or if param_set is
+        still waiting on mavros - this was the main cause of the random launch hangs.
+        """
+        self.desired_param_mode = mode
+        self.last_param_tx = time.time()
+        self.publish(String(), mode, self.param_publisher)
 
     def move_callback(self, in_str):
         """
@@ -304,12 +406,11 @@ class BlueBoatController(Node):
         """
         input_string = msg.data.split()
         command = input_string[0]
-        param_publish = lambda: self.publish(String(), command, self.param_publisher)
         
         dispatch = {'enable': lambda: self.set_motors(True),
                     'stop': self.full_stop,
-                    'override': param_publish,
-                    'default': param_publish,
+                    'override': lambda: self.request_param_mode('override'),
+                    'default': lambda: self.request_param_mode('default'),
                     'move': lambda: self.move_callback(input_string),
                     'arm': lambda: self.setArmedStatus(True),
                     'disarm': lambda: self.setArmedStatus(False)
@@ -330,8 +431,17 @@ class BlueBoatController(Node):
         """
         Displays the mode sent to the robot to confirm the changes
         """
+        previous_mode = self.mode
         self.mode = msg.data
-        self.get_logger().info(f" Mode received: {self.mode}")
+
+        if previous_mode != self.mode:
+            self.get_logger().info(f" Mode received: {self.mode}")
+
+            # When leaving override, hand the RC channels back so the default
+            # thruster mapping (QGC / xbox controller) works again
+            if previous_mode == 'override':
+                self.send_rc_override(right_pwm=PWM_NEUTRAL, left_pwm=PWM_NEUTRAL)
+                self.send_rc_override(release=True)
 
     def state_callback(self, msg):
         """
@@ -448,6 +558,9 @@ class BlueBoatController(Node):
         Read msg from the underwater_gps node, compile it with robot data and save the log
         """
 
+        if not self.use_UWgps:
+            return
+
         # Make sure the robot's data is available
         if self.orientation is None or self.angular_velocity is None or self.linear_acceleration is None:
             return
@@ -511,6 +624,68 @@ class BlueBoatController(Node):
         """
         self.thruster_input = msg.data
 
+    def log_timer_callback(self):
+
+        # Log here if no uw gps callback
+        if not self.use_UWgps: 
+
+            try:
+                target_x = self.monitoring_data[4]
+                target_y = self.monitoring_data[5]
+                self.get_logger().info(str(target_x))
+                self.get_logger().info(str(target_y))
+
+            except:
+                target_x = 0.0
+                target_y = 0.0
+            
+            try:
+                df_tmp = pd.DataFrame(np.zeros(self.data_size).reshape(1, self.data_size), columns=self.data_columns)
+
+                now = datetime.today()
+
+                df_tmp.iloc[0, 0] = now.year
+                df_tmp.iloc[0, 1] = now.month
+                df_tmp.iloc[0, 2] = now.day
+                df_tmp.iloc[0, 3] = now.hour
+                df_tmp.iloc[0, 4] = now.minute
+                df_tmp.iloc[0, 5] = now.second
+                df_tmp.iloc[0, 6] = now.microsecond // 1000
+                
+                df_tmp.iloc[0, 7] = self.orientation.x
+                df_tmp.iloc[0, 8] = self.orientation.y
+                df_tmp.iloc[0, 9] = self.orientation.z
+                df_tmp.iloc[0, 10] = self.orientation.w
+
+                df_tmp.iloc[0, 11] = self.angular_velocity.x
+                df_tmp.iloc[0, 12] = self.angular_velocity.y
+                df_tmp.iloc[0, 13] = self.angular_velocity.z
+
+                df_tmp.iloc[0, 14] = self.linear_acceleration.x
+                df_tmp.iloc[0, 15] = self.linear_acceleration.y
+                df_tmp.iloc[0, 16] = self.linear_acceleration.z
+
+                df_tmp.iloc[0, 17] = self.relative_coordinates[0]
+                df_tmp.iloc[0, 18] = self.relative_coordinates[1]
+                df_tmp.iloc[0, 19] = self.relative_coordinates[2]
+
+                df_tmp.iloc[0, 20] = self.gps_data[0]
+                df_tmp.iloc[0, 21] = self.gps_data[1]
+
+                df_tmp.iloc[0, 22] = self.thruster_input[0]
+                df_tmp.iloc[0, 23] = self.thruster_input[1]
+
+                df_tmp.iloc[0, 24] = target_x
+                df_tmp.iloc[0, 25] = target_y
+
+                
+                self.df_log = pd.concat([self.df_log, df_tmp])
+
+                self.df_log.to_csv(self.path)
+            except:
+                self.get_logger().warn(f" -- Not ready to log yet")
+
+
     def timer_callback(self):
         """
         Main loop
@@ -528,9 +703,19 @@ class BlueBoatController(Node):
                 self.SetMode('MANUAL')
                 return
 
-            self.publish(String(), 'override', self.param_publisher)
+            self.request_param_mode('override')
 
             self.init = True
+
+        ################## Handshake maintenance ##################
+        # Re-send the mode request until param_set confirms it. This closes the
+        # discovery race that used to make the launch hang at random.
+        if (self.desired_param_mode is not None
+                and self.mode != self.desired_param_mode
+                and time.time() - self.last_param_tx > self.param_retry_period):
+            self.get_logger().info(f"Waiting for param mode '{self.desired_param_mode}' (current: '{self.mode}'), re-requesting...")
+            self.last_param_tx = time.time()
+            self.publish(String(), self.desired_param_mode, self.param_publisher)
 
         # Wait for direct control to be enabled
         if self.mode != 'override':
@@ -544,12 +729,18 @@ class BlueBoatController(Node):
 
             # Send ready msg to controller node
             self.publish(Bool(), True, self.set_controller_publisher)
+            self.last_ready_tx = time.time()
 
             self.time_set = True
+
+        # Periodically re-publish readiness so a controller node that finished
+        # starting late (e.g. blocked on the path service) still receives it
+        if time.time() - self.last_ready_tx > self.ready_republish_period:
+            self.last_ready_tx = time.time()
+            self.publish(Bool(), True, self.set_controller_publisher)
         
         current_time = time.time()
         
-        # self.get_logger().info(f'Corrected pinger: {self.corrected_pinger}')
         ## Send input to thrusters
 
         # If no controller is set, allow for manual input

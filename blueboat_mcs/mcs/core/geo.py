@@ -71,7 +71,22 @@ def metres_per_pixel(lat: float, zoom: int, tile_px: int = 256) -> float:
 # ------------------------------------------------------------- georeferencer
 @dataclass
 class GeoFit:
-    """World(x,y) = R(theta) @ EN + t  is inverted here: EN = R(-theta)(world - t)."""
+    """Rigid map between the robot's local/world frame and GPS.
+
+    ``World(x, y) = R(theta) @ EN + t``  (inverted: ``EN = R(-theta)(world - t)``).
+
+    ``theta`` is the rotation from the local east/north (ENU) frame to the
+    robot's world frame. Equivalently, the robot's world +x axis points at
+    bearing ``theta`` measured CCW from east. A robot yaw expressed in the
+    world frame therefore corresponds to the true (north/east) heading
+    ``world_yaw + theta``.
+
+    ``heading_aligned`` is False for a *translation-only* fit (produced from
+    the very first GPS fix, before the vehicle has moved enough for rotation
+    to be observable): position/tile placement are usable immediately, but
+    ``theta`` is a placeholder (0) and must not be trusted for heading until
+    the flag turns True.
+    """
 
     theta: float          # rotation from local-EN frame to world frame
     tx: float             # world-frame offset
@@ -80,6 +95,7 @@ class GeoFit:
     lon0: float
     rms_m: float          # fit residual
     n_pairs: int
+    heading_aligned: bool = False
 
     # world -> lat/lon
     def world_to_latlon(self, x: float, y: float) -> tuple[float, float]:
@@ -93,6 +109,21 @@ class GeoFit:
         east, north = latlon_to_local_en(lat, lon, self.lat0, self.lon0)
         c, s = math.cos(self.theta), math.sin(self.theta)
         return c * east - s * north + self.tx, s * east + c * north + self.ty
+
+    # --- heading alignment ------------------------------------------------
+    @property
+    def world_heading_offset(self) -> float:
+        """Angle to add to a world-frame yaw to obtain the true heading
+        (measured CCW from east). This is exactly ``theta`` — see the class
+        docstring; exposed by name so heading consumers don't reach into the
+        transform's internals."""
+        return self.theta
+
+    def world_yaw_to_true(self, world_yaw: float) -> float:
+        """Convert a robot yaw in the world frame to a true (north/east)
+        heading, normalised to (-pi, pi]."""
+        a = world_yaw + self.theta
+        return math.atan2(math.sin(a), math.cos(a))
 
 
 class GeoReferencer:
@@ -112,7 +143,19 @@ class GeoReferencer:
 
     @property
     def is_valid(self) -> bool:
+        """True as soon as *any* usable fit exists (translation-only counts).
+
+        Tile placement and GPS read-outs only need the origin, which is known
+        from the first fix; requiring the full rotated fit here is what kept
+        the satellite layer unavailable while GPS was already streaming. Use
+        :attr:`heading_aligned` to know whether ``theta`` is trustworthy."""
         return self._fit is not None and self._fit.rms_m <= self._cfg.max_residual_m
+
+    @property
+    def heading_aligned(self) -> bool:
+        """True once the rotated Kabsch fit has been established (enough
+        motion for the world<->ENU rotation to be observable)."""
+        return self._fit is not None and self._fit.heading_aligned
 
     def add_pair(self, t: float, x: float, y: float, lat: float, lon: float) -> None:
         """Feed a simultaneous odom position and GPS fix (called ~ GPS rate)."""
@@ -120,6 +163,15 @@ class GeoReferencer:
             return
         if self._lat0 is None:
             self._lat0, self._lon0 = lat, lon
+            # Immediate translation-only fit from the very first fix: origin
+            # is known, rotation is not yet observable so theta = 0. This
+            # makes is_valid True right away (satellite/tiles usable) while
+            # heading_aligned stays False until motion permits the Kabsch fit.
+            self._fit = GeoFit(
+                theta=0.0, tx=float(x), ty=float(y),
+                lat0=self._lat0, lon0=self._lon0, rms_m=0.0, n_pairs=1,
+                heading_aligned=False,
+            )
         east, north = latlon_to_local_en(lat, lon, self._lat0, self._lon0)
         self._pairs.append(t, (x, y, east, north))
         if t - self._last_fit_t >= self._cfg.refit_period_s:
@@ -135,7 +187,18 @@ class GeoReferencer:
         en = vs[:, 2:4]
         spread = float(np.linalg.norm(world.max(axis=0) - world.min(axis=0)))
         if spread < self._cfg.min_spread_m:
-            return  # not enough motion, rotation unobservable
+            # Not enough motion yet: rotation is unobservable. Keep the
+            # translation-only fit but refresh its offset from the latest
+            # (world, EN) correspondence so tiles/read-outs track the boat.
+            assert self._lat0 is not None and self._lon0 is not None
+            wx, wy = world.mean(axis=0)
+            ex, ey = en.mean(axis=0)
+            self._fit = GeoFit(
+                theta=0.0, tx=float(wx - ex), ty=float(wy - ey),
+                lat0=self._lat0, lon0=self._lon0, rms_m=0.0, n_pairs=len(ts),
+                heading_aligned=False,
+            )
+            return
 
         # Kabsch: rotation aligning EN onto world (scale fixed to 1: both metres)
         wc = world - world.mean(axis=0)
@@ -152,4 +215,5 @@ class GeoReferencer:
         self._fit = GeoFit(
             theta=theta, tx=float(t[0]), ty=float(t[1]),
             lat0=self._lat0, lon0=self._lon0, rms_m=rms, n_pairs=len(ts),
+            heading_aligned=True,
         )

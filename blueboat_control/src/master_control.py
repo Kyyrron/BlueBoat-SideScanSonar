@@ -8,6 +8,7 @@ from rclpy.qos import QoSDurabilityPolicy
 import rclpy
 
 # Common python libraries
+import os
 import time
 import math
 import numpy as np
@@ -45,9 +46,8 @@ class Controller(Node):
 
         self.odom_subscriber = self.create_subscription(Odometry, '/blueboat/odom', self.odom_callback, 10)
         self.pinger_subscriber = self.create_subscription(Float32MultiArray, '/blueboat/pinger_coordinates', self.pinger_callback, 10)
-        latched = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
-        self.ready_subscriber = self.create_subscription(
-            Bool, '/blueboat/controller_ready', self.ready_callback, latched)
+        self.ready_subscriber = self.create_subscription(Bool, '/blueboat/controller_ready', self.ready_callback, 10)
+   
         self.manual_target_subscriber = self.create_subscription(Float32MultiArray, '/blueboat/manual_target', self.manual_target_callback, 10)
 
         self.data_publisher = self.create_publisher(Float32MultiArray, "/monitoring_data", 10)
@@ -66,7 +66,7 @@ class Controller(Node):
 
         self.time_set = False
         self.initial_time = None
-        self.dt = 0.05
+        self.dt = 1.0
         self.timer = self.create_timer(self.dt, self.timer_callback)
 
         self.current_pose = None
@@ -161,6 +161,7 @@ class Controller(Node):
         ctrl = self.controller_type
         date = datetime.today().strftime('%Y_%m_%d-%H_%M_%S')
         sim = 'simulation' if self.isSimulation else 'real'
+        os.makedirs(f'data/{ctrl}_data', exist_ok=True)  # avoid np.save failing silently at runtime
         self.title = f'data/{ctrl}_data/{date}-{ctrl}_{sim}_data'
 
     def get_time(self):
@@ -177,9 +178,11 @@ class Controller(Node):
         self.pinger_target = msg.data
 
     def ready_callback(self, msg: Bool):
-        self.ready = msg.data
-        if msg.data:
+        # robot_interface now re-publishes readiness periodically (so this node can
+        # never miss it); only log the transition to avoid spam
+        if msg.data and not self.ready:
             self.get_logger().info(f'Controller ready')
+        self.ready = msg.data
 
     def manual_target_callback(self, msg: Float32MultiArray):
         self.manual_target = msg.data # [x,y] in world frame
@@ -190,7 +193,12 @@ class Controller(Node):
         yaw_rate = self.k_psi * np.arctan2(y,x)
         d = np.sqrt(x**2+y**2)
         v = self.k_v * d
-        v = 2*np.log(v+1)
+        v = 5*np.log(v+1)
+        # v = 2*np.log(v+1)
+
+        if list(self.manual_target) != [0.0,0.0]:
+            v = 10*np.log(v+1) # If manual  target, go faster. Don't need to be that precise here.
+            
 
         thruster_input = [0,0]
 
@@ -272,29 +280,31 @@ class Controller(Node):
         current_time = time.time() - self.initial_time
 
         ## Update path
-        # Check if previous future is still pending
+        # IMPORTANT CHANGE: the loop no longer returns while a path request is
+        # pending. Previously, a slow /path_request service froze the whole
+        # control loop (no thrust update at all for that time). Now the last
+        # received path keeps being tracked, and a new request is only issued
+        # once the previous one has completed.
         if not self.use_pinger:
-            if self.future is not None:
-                if self.future.done():
-                    try:
-                        result = self.future.result()
-                        if result is not None:
-                            self.controller_path = result.path
-                        else:
-                            self.get_logger().error("Service returned None.")
-                    except Exception as e:
-                        self.get_logger().error(f"Service call raised exception: {e}")
-                    finally:
-                        self.future = None
-                else:
-                    # Previous request still pending — skip this tick
-                    return
+            if self.future is not None and self.future.done():
+                try:
+                    result = self.future.result()
+                    if result is not None:
+                        self.controller_path = result.path
+                    else:
+                        self.get_logger().error("Service returned None.")
+                except Exception as e:
+                    self.get_logger().error(f"Service call raised exception: {e}")
+                finally:
+                    self.future = None
 
-            # Send new request
-            request = RequestPath.Request()
-            request.path_request.data = np.linspace(current_time, current_time + self.path_time, int(self.path_steps), dtype=float)
+            if self.future is None:
+                # Send new request
+                request = RequestPath.Request()
+                request.path_request.data = np.linspace(current_time, current_time + self.path_time, int(self.path_steps), dtype=float)
 
-            self.future = self.client.call_async(request)
+                self.future = self.client.call_async(request)
+            # else: previous request still pending - keep controlling on the last path
 
         ## Compute thrust
         # Thruster input
@@ -381,8 +391,8 @@ class Controller(Node):
         msg.data = u
         self.thruster_input_publisher.publish(msg)
 
-        if self.pinger_target is not None:
-            self.get_logger().info(f'Pinger coordinates: {self.pinger_target}')
+        if self.pinger_target is not None and self.use_pinger:
+            self.get_logger().info(f'\nPinger coordinates robot frame: \n{self.pinger_target}')
         if list(self.manual_target)[:2] != [0.0,0.0]:
             target_str = ", ".join(f"{float(x):.2f}" for x in list(self.manual_target))
             self.get_logger().info(f'\nManual target coordinates: \n{target_str}')

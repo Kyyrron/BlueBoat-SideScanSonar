@@ -114,6 +114,13 @@ def deploy_mission(src: Path, current_fit, dst: Path) -> Path:
 
     from mcs.core.geo import GeoFit as _GeoFit
 
+    # The current fit's rotation must be trustworthy before deployment: a
+    # translation-only fit (heading_aligned False, theta placeholder 0) would
+    # rotate the whole mission wrong. The watcher retries until this holds.
+    if not getattr(current_fit, "heading_aligned", True):
+        raise ValueError("georeference heading not aligned yet "
+                         "(needs more vehicle motion)")
+
     data = yaml.safe_load(src.read_text()) or {}
     anchor = data.get("geo_anchor")
     if not anchor:

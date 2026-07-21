@@ -6,6 +6,7 @@ ros2 launch blueboat_control BlueBoat_launch.py enable_motors:=True
 2.
 ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: default" 
 ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: override" 
+ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: move 3 3 2"
 
 3.
 ./QGroundControl.AppImage
@@ -48,7 +49,7 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: override"
 
     1. Launch file
     ros2 launch blueboat_sss SSS_launch.py
-    ros2 launch blueboat_sss SSS_launch.py range_length_mm:=20000 
+    ros2 launch blueboat_sss SSS_simple_launch.py range_length_mm:=20000 
 
     2. Topic commands
     Start pinging:

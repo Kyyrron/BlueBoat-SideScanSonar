@@ -145,7 +145,7 @@ class PathGeneration(Node):
         if path_shape == 'circle':
             radius = 4.0 # meters
             t *= 0.08
-            x = radius * np.cos(t)
+            x = -radius + radius * np.cos(t)
             y = radius * np.sin(t)
             z = 0.0
 
@@ -163,9 +163,9 @@ class PathGeneration(Node):
 
         # Sin line
         if path_shape == 'sin':
-            if t>50:
+            if t>500:
                 t = 50
-            a = 1.5
+            a = 3.5
             f = 0.2
             vx = 0.4
 
@@ -229,7 +229,7 @@ class PathGeneration(Node):
 
         # Kinematic square wave
         if path_shape == 'kin_square':
-            if t>50:
+            if t>500:
                 t= 50
             segment_length = 5.0
             surge_speed = 0.3

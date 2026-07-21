@@ -62,8 +62,6 @@ class RobotState:
     thrust_left: float = 0.0
     travelled_m: float = 0.0
     has_odom: bool = False
-    yaw_offset: float = 0.0
-    _initial_yaw_latched: bool = False
 
 
 @dataclass
@@ -138,12 +136,6 @@ class DataStore:
         prev = (r.x, r.y) if r.has_odom else None
         r.t = t
         r.x, r.y, r.yaw = float(pose[0]), float(pose[1]), float(pose[5])
-
-        # Latch initial yaw offset on first odometry reception
-        if not r._initial_yaw_latched:
-            r.yaw_offset = -r.yaw
-            r._initial_yaw_latched = True
-
         r.speed = math.hypot(float(twist[0]), float(twist[1]))
         r.has_odom = True
         if prev is not None:
@@ -241,6 +233,22 @@ class DataStore:
             return self.mission.path_target
         return None
 
+    def robot_true_heading(self) -> float | None:
+        """Robot heading referenced to true north/east (CCW from east), or
+        None until the georeference is heading-aligned.
+
+        The odometry ``yaw`` is expressed in the robot's world frame, which
+        is rotated from ENU by the georeference ``theta``; this applies that
+        offset so any map/view can align its heading with the real world.
+        Returns None while only a translation-only fit exists (rotation not
+        yet observable), so callers can fall back to raw ``yaw``."""
+        if not self.robot.has_odom:
+            return None
+        fit = self.geo.fit
+        if fit is None or not fit.heading_aligned:
+            return None
+        return fit.world_yaw_to_true(self.robot.yaw)
+
     def active_target_distance(self) -> float | None:
         tgt = self.active_target_world()
         if tgt is None or not self.robot.has_odom:
@@ -285,7 +293,5 @@ class DataStore:
                   self.thrust_hist, self.target_dist_hist):
             s.clear()
         self.robot.travelled_m = 0.0
-        self.robot.yaw_offset = 0.0
-        self.robot._initial_yaw_latched = False
         self.mission.started_t = None
         self._t0 = None
