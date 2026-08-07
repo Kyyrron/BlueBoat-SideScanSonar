@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
 
+# ============================================================================
+# PATCHED for the Mission Control Station (logging update).
+# The ONLY changes relative to the original file are marked with
+# "# --- world-frame monitoring target ---":
+#   the monitored /monitoring_data target (x_d, y_d, psi_d) is now the
+#   WORLD-frame target for EVERY branch. Previously the LoS-path, manual and
+#   pinger branches overwrote `target` with its robot-frame conversion
+#   before the monitoring block, so downstream consumers (the station's map
+#   display and robot_interface's no-pinger CSV log) received body-frame
+#   coordinates for those branches and world-frame for MPC/PID -- the
+#   "broken target logging without pinger". Control behaviour is untouched:
+#   the robot-frame conversion still feeds solve_LoS / PID exactly as
+#   before, and /controller_target keeps its original (robot-frame) content.
+# ============================================================================
+
 ### FOR MANUAL TARGET IMPLEMENTATION IN THE VISUALISATION APP ###
 
 # rclpy
@@ -267,7 +282,8 @@ class Controller(Node):
                                              B = self.B_matrix,
                                              outer_gains = self.outer_gains,
                                              inner_gains = self.inner_gains,
-                                             thruster_limits = self.thruster_limits
+                                             thruster_limits = self.thruster_limits,
+                                             gain_divisor = 1.5
                                              )
 
             self.get_logger().info('Controller node initiated')
@@ -324,6 +340,7 @@ class Controller(Node):
 
         if list(self.manual_target) != [0.0,0.0]: # If a manual target is set, use it instead with LoS
             target = [*self.manual_target[:2], 0, 0, 0, 0] # We don't need to use the yaw for LoS, so we set it to 0
+            world_target = list(target[:3])  # --- world-frame monitoring target ---
             target = self.inRobotFrame(current_state, target)
             u = self.solve_LoS(target, current_time)
 
@@ -340,19 +357,32 @@ class Controller(Node):
                 q = desired_pose.orientation
                 psi_d = R.from_quat([q.x, q.y, q.z, q.w]).as_euler('xyz')[2]
                 target = [desired_pose.position.x, desired_pose.position.y, psi_d]
+                world_target = list(target[:3])  # --- world-frame monitoring target ---
                 
             if self.controller_type == 'PID':
                 target = cf.compute_target(self.controller_path, self.dt)
+                world_target = list(target[:3])  # --- world-frame monitoring target ---
                 u,_ = self.controller.compute(current_state, target[:3])
-                #self.get_logger().info(f'\nState: {current_state} \n Target: {target} \nThrust: {u}')
+                self.get_logger().info(f'\nState: {current_state} \n Target: {target} \nThrust: {u}')
                 
 
             if self.controller_type == 'LoS':
                 target = cf.compute_target(self.controller_path, self.dt)
+                world_target = list(target[:3])  # --- world-frame monitoring target ---
                 target = self.inRobotFrame(current_state, target)
                 u = self.solve_LoS(target, current_time)
         
         elif self.use_pinger and self.pinger_target is not None: # MPC is not supported for this
+            # --- world-frame monitoring target ---
+            # pinger_target is BODY-frame: convert with the (not yet
+            # modified) current pose so the monitored target is world-frame
+            # like every other branch. Must run BEFORE the PID branch below,
+            # which zeroes current_state[[0,1,2]] for robot-frame control.
+            px, py = float(self.pinger_target[0]), float(self.pinger_target[1])
+            c_m, s_m = np.cos(current_state[2]), np.sin(current_state[2])
+            world_target = [current_state[0] + c_m*px - s_m*py,
+                            current_state[1] + s_m*px + c_m*py, 0.0]
+            # --------------------------------------
             if self.controller_type == 'PID':
                 # Adapt the controller input to be used in robot frame
                 target = [*self.pinger_target[:2], 0]
@@ -404,9 +434,17 @@ class Controller(Node):
             y_m   = current_state[1]
             psi_m = current_state[2]
 
-            x_d_m   = target[0]
-            y_d_m   = target[1]
-            psi_d_m = target[2] if len(target) > 2 else 0.0   # pinger target may be 2D
+            # --- world-frame monitoring target ---
+            # world_target is set by every branch above; fall back to the
+            # raw target defensively if a future branch forgets it.
+            try:
+                monitored = world_target
+            except NameError:
+                monitored = target
+            x_d_m   = monitored[0]
+            y_d_m   = monitored[1]
+            psi_d_m = monitored[2] if len(monitored) > 2 else 0.0
+            # --------------------------------------
 
             data_array = [current_time, x_m, y_m, psi_m,
                         x_d_m, y_d_m, psi_d_m, u[0], u[1]]

@@ -30,6 +30,11 @@ mosaic:
   densify: true          # SonarView-grade rasterization (rasterizer.py)
   bilinear_splat: true   # anti-aliased accumulation; false = legacy scatter
 
+alignment:                 # sea-trial pose alignment (see settings.py)
+  pose_source: auto        # auto | embedded | gcs
+  gps_fallback: true       # dead-reckon pose from GPS+compass if odom is dead
+  pinger_frame: robot      # robot (USBL-native, vehicle-relative) | world
+
 seabed:                    # AI seabed imaging (waterfall domain)
   rows: 256                # pings per image
   stride: 128              # new image every N pings (50 % overlap)

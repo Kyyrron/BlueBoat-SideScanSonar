@@ -1,5 +1,27 @@
 #!/usr/bin/env python3
 
+# ============================================================================
+# PATCHED for the Mission Control Station (logging update). Marked with
+# "# --- logging update ---". Changes:
+#   1. CSV columns reorganised with the important ones FIRST (names kept):
+#      date, robot pose, target, [pinger + GPS], thrusters, then raw sensors.
+#   2. All log rows are filled BY COLUMN NAME (df.loc with the column label)
+#      instead of positional iloc indices, so the order can never silently
+#      de-synchronise from the data again.
+#   3. Fixed swapped thruster columns: thruster_input is [right, left]
+#      (master_control convention), but index 0 was written into
+#      'left_thr_in' in both logging paths.
+#   4. Pinger-mode CSV: removed the duplicated 'target_x/y/psi' columns
+#      (they were /controller_target = the same pinger vector as
+#      'corrected_pinger_x/y', just in the robot frame); the world-frame
+#      corrected_pinger columns are kept.
+#   5. Fixed the no-pinger target logging: /monitoring_data x_d/y_d are now
+#      world-frame for every controller (patched master_control), the two
+#      debug spam logs are removed, and an empty monitoring buffer logs
+#      zeros without raising.
+# Everything else is byte-identical to the original.
+# ============================================================================
+
 # Common libraries import
 import os
 import time
@@ -153,78 +175,76 @@ class BlueBoatController(Node):
 
         ################## Initialize data collection ##################
 
+        # --- logging update: important columns first (names kept) ---
         if not self.use_UWgps:
-                self.data_columns = ['Year', 
-                                'Month', 
-                                'Day', 
-                                'Hour', 
-                                'Minute', 
-                                'Second', 
-                                'MicroSecond', 
-                                'quat_x', 
-                                'quat_y', 
-                                'quat_z', 
-                                'quat_w',
-                                'ang_vel_x',
-                                'ang_vel_y',
-                                'ang_vel_z',
-                                'lin_acc_x',
-                                'lin_acc_y',
-                                'lin_acc_z',
-                                'relative_x',
-                                'relative_y',
-                                'relative_psi',
-                                'gps_latitude',
-                                'gps_longitude',
-                                'left_thr_in',
-                                'right_thr_in',
-                                'target_x',
-                                'target_y']
-
-        else:     
-            self.data_columns = ['Year', 
-                                'Month', 
-                                'Day', 
-                                'Hour', 
-                                'Minute', 
-                                'Second', 
-                                'MicroSecond', 
-                                'aco_x', 
-                                'aco_y', 
-                                'aco_z', 
-                                'ant_x', 
-                                'ant_y', 
-                                'ant_z', 
-                                'lat', 
-                                'lon', 
-                                'dep', 
-                                'filaco_x', 
-                                'filaco_y', 
-                                'filaco_z',
-                                'quat_x', 
-                                'quat_y', 
-                                'quat_z', 
-                                'quat_w',
-                                'ang_vel_x',
-                                'ang_vel_y',
-                                'ang_vel_z',
-                                'lin_acc_x',
-                                'lin_acc_y',
-                                'lin_acc_z',
+                self.data_columns = ['Year',
+                                'Month',
+                                'Day',
+                                'Hour',
+                                'Minute',
+                                'Second',
+                                'MicroSecond',
                                 'relative_x',
                                 'relative_y',
                                 'relative_psi',
                                 'target_x',
                                 'target_y',
-                                'target_psi',
+                                'gps_latitude',
+                                'gps_longitude',
+                                'right_thr_in',
+                                'left_thr_in',
+                                'quat_x',
+                                'quat_y',
+                                'quat_z',
+                                'quat_w',
+                                'ang_vel_x',
+                                'ang_vel_y',
+                                'ang_vel_z',
+                                'lin_acc_x',
+                                'lin_acc_y',
+                                'lin_acc_z']
+
+        else:
+            self.data_columns = ['Year',
+                                'Month',
+                                'Day',
+                                'Hour',
+                                'Minute',
+                                'Second',
+                                'MicroSecond',
+                                'relative_x',
+                                'relative_y',
+                                'relative_psi',
                                 'corrected_pinger_x',
                                 'corrected_pinger_y',
                                 'gps_latitude',
                                 'gps_longitude',
                                 'pinger_latitude',
                                 'pinger_longitude',
+                                'right_thr_in',
                                 'left_thr_in',
-                                'right_thr_in']
+                                'aco_x',
+                                'aco_y',
+                                'aco_z',
+                                'ant_x',
+                                'ant_y',
+                                'ant_z',
+                                'lat',
+                                'lon',
+                                'dep',
+                                'filaco_x',
+                                'filaco_y',
+                                'filaco_z',
+                                'quat_x',
+                                'quat_y',
+                                'quat_z',
+                                'quat_w',
+                                'ang_vel_x',
+                                'ang_vel_y',
+                                'ang_vel_z',
+                                'lin_acc_x',
+                                'lin_acc_y',
+                                'lin_acc_z']
 
         self.data_size = len(self.data_columns)
 
@@ -568,46 +588,58 @@ class BlueBoatController(Node):
         ## Compile data from gps, imu, and others
         self.uw_gps_log = msg.data
 
+        # --- logging update: fill BY COLUMN NAME (order-independent) ------
+        # /uw_gps_data layout: [date(7), aco xyz, ant xyz, lat, lon, dep,
+        # filaco xyz] = 19 values.
         df_tmp = pd.DataFrame(np.zeros(self.data_size).reshape(1, self.data_size), columns=self.data_columns)
 
-        df_tmp.iloc[0, :19] = msg.data
+        raw_names = ['Year', 'Month', 'Day', 'Hour', 'Minute', 'Second',
+                     'MicroSecond', 'aco_x', 'aco_y', 'aco_z',
+                     'ant_x', 'ant_y', 'ant_z', 'lat', 'lon', 'dep',
+                     'filaco_x', 'filaco_y', 'filaco_z']
+        for name, value in zip(raw_names, msg.data):
+            df_tmp.loc[df_tmp.index[0], name] = value
 
-        t_x,t_y,t_z = df_tmp.iloc[0, 16:19]
+        t_x, t_y, t_z = msg.data[16], msg.data[17], msg.data[18]  # filaco
         self.pinger_coordinates = np.array([t_x,t_y,t_z])
 
-        df_tmp.iloc[0, 19] = self.orientation.x
-        df_tmp.iloc[0, 20] = self.orientation.y
-        df_tmp.iloc[0, 21] = self.orientation.z
-        df_tmp.iloc[0, 22] = self.orientation.w
+        row = df_tmp.index[0]
+        df_tmp.loc[row, 'quat_x'] = self.orientation.x
+        df_tmp.loc[row, 'quat_y'] = self.orientation.y
+        df_tmp.loc[row, 'quat_z'] = self.orientation.z
+        df_tmp.loc[row, 'quat_w'] = self.orientation.w
 
-        df_tmp.iloc[0, 23] = self.angular_velocity.x
-        df_tmp.iloc[0, 24] = self.angular_velocity.y
-        df_tmp.iloc[0, 25] = self.angular_velocity.z
+        df_tmp.loc[row, 'ang_vel_x'] = self.angular_velocity.x
+        df_tmp.loc[row, 'ang_vel_y'] = self.angular_velocity.y
+        df_tmp.loc[row, 'ang_vel_z'] = self.angular_velocity.z
 
-        df_tmp.iloc[0, 26] = self.linear_acceleration.x
-        df_tmp.iloc[0, 27] = self.linear_acceleration.y
-        df_tmp.iloc[0, 28] = self.linear_acceleration.z
+        df_tmp.loc[row, 'lin_acc_x'] = self.linear_acceleration.x
+        df_tmp.loc[row, 'lin_acc_y'] = self.linear_acceleration.y
+        df_tmp.loc[row, 'lin_acc_z'] = self.linear_acceleration.z
 
-        df_tmp.iloc[0, 29] = self.relative_coordinates[0]
-        df_tmp.iloc[0, 30] = self.relative_coordinates[1]
-        df_tmp.iloc[0, 31] = self.relative_coordinates[2]
+        df_tmp.loc[row, 'relative_x'] = self.relative_coordinates[0]
+        df_tmp.loc[row, 'relative_y'] = self.relative_coordinates[1]
+        df_tmp.loc[row, 'relative_psi'] = self.relative_coordinates[2]
 
-        df_tmp.iloc[0, 32] = self.target[0]
-        df_tmp.iloc[0, 33] = self.target[1]
-        df_tmp.iloc[0, 34] = self.target[2]
+        # --- logging update (2): target_x/y/psi removed from the pinger
+        # CSV — they were /controller_target, i.e. the SAME pinger vector as
+        # corrected_pinger_x/y but in the robot frame: duplicated
+        # information. corrected_pinger (world frame) is kept.
+        df_tmp.loc[row, 'corrected_pinger_x'] = self.corrected_pinger[0]
+        df_tmp.loc[row, 'corrected_pinger_y'] = self.corrected_pinger[1]
 
-        df_tmp.iloc[0, 35] = self.corrected_pinger[0]
-        df_tmp.iloc[0, 36] = self.corrected_pinger[1]
+        df_tmp.loc[row, 'gps_latitude'] = self.gps_data[0]
+        df_tmp.loc[row, 'gps_longitude'] = self.gps_data[1]
 
-        df_tmp.iloc[0, 37] = self.gps_data[0]
-        df_tmp.iloc[0, 38] = self.gps_data[1]
+        df_tmp.loc[row, 'pinger_latitude'] = self.pinger_gps[0]
+        df_tmp.loc[row, 'pinger_longitude'] = self.pinger_gps[1]
 
-        df_tmp.iloc[0, 39] = self.pinger_gps[0]
-        df_tmp.iloc[0, 40] = self.pinger_gps[1]
+        # thruster_input is [right, left] (master_control convention); the
+        # original wrote index 0 into 'left_thr_in' -> columns were swapped.
+        df_tmp.loc[row, 'right_thr_in'] = self.thruster_input[0]
+        df_tmp.loc[row, 'left_thr_in'] = self.thruster_input[1]
+        # ------------------------------------------------------------------
 
-        df_tmp.iloc[0, 41] = self.thruster_input[0]
-        df_tmp.iloc[0, 42] = self.thruster_input[1]
-        
         self.df_log = pd.concat([self.df_log, df_tmp])
 
         self.df_log.to_csv(self.path) # Rewrite the entire file every time for safety in case of unexpected shutdowns
@@ -629,60 +661,65 @@ class BlueBoatController(Node):
         # Log here if no uw gps callback
         if not self.use_UWgps: 
 
-            try:
+            # --- logging update -------------------------------------------
+            # /monitoring_data = [t, x, y, psi, x_d, y_d, psi_d, u1, u2];
+            # x_d/y_d are WORLD-frame for every controller with the patched
+            # master_control, so the logged path target is now correct also
+            # for LoS and manual-target sessions (it used to arrive in the
+            # robot frame for those). Empty buffer -> zeros, no spam logs.
+            if len(self.monitoring_data) >= 6:
                 target_x = self.monitoring_data[4]
                 target_y = self.monitoring_data[5]
-                self.get_logger().info(str(target_x))
-                self.get_logger().info(str(target_y))
-
-            except:
+            else:
                 target_x = 0.0
                 target_y = 0.0
-            
+
             try:
                 df_tmp = pd.DataFrame(np.zeros(self.data_size).reshape(1, self.data_size), columns=self.data_columns)
+                row = df_tmp.index[0]
 
                 now = datetime.today()
 
-                df_tmp.iloc[0, 0] = now.year
-                df_tmp.iloc[0, 1] = now.month
-                df_tmp.iloc[0, 2] = now.day
-                df_tmp.iloc[0, 3] = now.hour
-                df_tmp.iloc[0, 4] = now.minute
-                df_tmp.iloc[0, 5] = now.second
-                df_tmp.iloc[0, 6] = now.microsecond // 1000
-                
-                df_tmp.iloc[0, 7] = self.orientation.x
-                df_tmp.iloc[0, 8] = self.orientation.y
-                df_tmp.iloc[0, 9] = self.orientation.z
-                df_tmp.iloc[0, 10] = self.orientation.w
+                df_tmp.loc[row, 'Year'] = now.year
+                df_tmp.loc[row, 'Month'] = now.month
+                df_tmp.loc[row, 'Day'] = now.day
+                df_tmp.loc[row, 'Hour'] = now.hour
+                df_tmp.loc[row, 'Minute'] = now.minute
+                df_tmp.loc[row, 'Second'] = now.second
+                df_tmp.loc[row, 'MicroSecond'] = now.microsecond // 1000
 
-                df_tmp.iloc[0, 11] = self.angular_velocity.x
-                df_tmp.iloc[0, 12] = self.angular_velocity.y
-                df_tmp.iloc[0, 13] = self.angular_velocity.z
+                df_tmp.loc[row, 'quat_x'] = self.orientation.x
+                df_tmp.loc[row, 'quat_y'] = self.orientation.y
+                df_tmp.loc[row, 'quat_z'] = self.orientation.z
+                df_tmp.loc[row, 'quat_w'] = self.orientation.w
 
-                df_tmp.iloc[0, 14] = self.linear_acceleration.x
-                df_tmp.iloc[0, 15] = self.linear_acceleration.y
-                df_tmp.iloc[0, 16] = self.linear_acceleration.z
+                df_tmp.loc[row, 'ang_vel_x'] = self.angular_velocity.x
+                df_tmp.loc[row, 'ang_vel_y'] = self.angular_velocity.y
+                df_tmp.loc[row, 'ang_vel_z'] = self.angular_velocity.z
 
-                df_tmp.iloc[0, 17] = self.relative_coordinates[0]
-                df_tmp.iloc[0, 18] = self.relative_coordinates[1]
-                df_tmp.iloc[0, 19] = self.relative_coordinates[2]
+                df_tmp.loc[row, 'lin_acc_x'] = self.linear_acceleration.x
+                df_tmp.loc[row, 'lin_acc_y'] = self.linear_acceleration.y
+                df_tmp.loc[row, 'lin_acc_z'] = self.linear_acceleration.z
 
-                df_tmp.iloc[0, 20] = self.gps_data[0]
-                df_tmp.iloc[0, 21] = self.gps_data[1]
+                df_tmp.loc[row, 'relative_x'] = self.relative_coordinates[0]
+                df_tmp.loc[row, 'relative_y'] = self.relative_coordinates[1]
+                df_tmp.loc[row, 'relative_psi'] = self.relative_coordinates[2]
 
-                df_tmp.iloc[0, 22] = self.thruster_input[0]
-                df_tmp.iloc[0, 23] = self.thruster_input[1]
+                df_tmp.loc[row, 'gps_latitude'] = self.gps_data[0]
+                df_tmp.loc[row, 'gps_longitude'] = self.gps_data[1]
 
-                df_tmp.iloc[0, 24] = target_x
-                df_tmp.iloc[0, 25] = target_y
+                # [right, left] convention -> named columns (was swapped)
+                df_tmp.loc[row, 'right_thr_in'] = self.thruster_input[0]
+                df_tmp.loc[row, 'left_thr_in'] = self.thruster_input[1]
 
-                
+                df_tmp.loc[row, 'target_x'] = target_x
+                df_tmp.loc[row, 'target_y'] = target_y
+                # --------------------------------------------------------------
+
                 self.df_log = pd.concat([self.df_log, df_tmp])
 
                 self.df_log.to_csv(self.path)
-            except:
+            except Exception:
                 self.get_logger().warn(f" -- Not ready to log yet")
 
 

@@ -61,13 +61,10 @@ class MainWindow(QMainWindow):
         self.left_panel.setMaximumWidth(450)
 
         self.right_panel.setMinimumWidth(340)
-        self.right_panel.setMaximumWidth(500)
+        self.right_panel.setMaximumWidth(600)
         self.toolbar = BottomToolbar(cfg, self.bus, self.launcher, self.commands)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        splitter.setChildrenCollapsible(False)
-
         splitter.addWidget(self.left_panel)
         splitter.addWidget(self.map_view)
         splitter.addWidget(self.right_panel)
@@ -121,7 +118,7 @@ class MainWindow(QMainWindow):
             self.right_panel.setMaximumWidth(320)
         else:
             self.left_panel.setMaximumWidth(450)
-            self.right_panel.setMaximumWidth(500)
+            self.right_panel.setMaximumWidth(600)
 
     # ============================================================== signal wiring
     def _connect_signals(self) -> None:
@@ -130,6 +127,7 @@ class MainWindow(QMainWindow):
         # Telemetry → store (queued into the GUI thread by Qt)
         bus.odom_received.connect(store.on_odom)
         bus.gps_received.connect(store.on_gps)
+        bus.compass_received.connect(store.on_compass)
         bus.mavros_state_received.connect(store.on_mavros_state)
         bus.pinger_body_received.connect(store.on_pinger_body)
         bus.uw_gps_raw_received.connect(store.on_uw_gps_raw)
@@ -165,6 +163,7 @@ class MainWindow(QMainWindow):
         # Panels ↔ map
         self.left_panel.layer_toggled.connect(self.map_view.set_layer_visible)
         self.right_panel.time_window_changed.connect(self.map_view.set_time_window)
+        self.right_panel.clear_paths_requested.connect(self._on_clear_paths)
         self.right_panel.zoom_in_requested.connect(self.map_view.zoom_in)
         self.right_panel.zoom_out_requested.connect(self.map_view.zoom_out)
         self.right_panel.center_robot_requested.connect(self.map_view.center_on_robot)
@@ -187,6 +186,10 @@ class MainWindow(QMainWindow):
         self.left_panel.refresh()
         self.right_panel.refresh()
         self.map_view.refresh()
+        if (hasattr(self, "_pending_preview_trajectory") and self._pending_preview_trajectory is not None and self.store.world_frame_ready()):
+            trajectory = self._pending_preview_trajectory
+            self._pending_preview_trajectory = None
+            self._request_path_preview(trajectory)
 
         # Keep floating stats box glued to the top-right of the map view 
         # (which inherently puts it glued to the top-left of the right panel)
@@ -208,6 +211,9 @@ class MainWindow(QMainWindow):
                 f"georef: {quality} (rms {geo.fit.rms_m:.1f} m)")
             self._geo_label.setStyleSheet(f"color: {color};")
         self.left_panel.set_satellite_available(geo.is_valid)
+        # Map orientation is handled inside MapView (QGC-style: north-up
+        # fixed, only the glyph rotates once heading is aligned) — nothing to
+        # drive from here.
         # Mission readiness → launch state promotion. The FCU-connected check
         # only applies to the real-robot graph; Sim_launch.py has no MAVROS.
         if self.launcher.state == "starting":
@@ -232,9 +238,11 @@ class MainWindow(QMainWindow):
         # in simulation (path_publisher is only launched by Sim_launch.py).
         # Sim_launch.py always starts path_generation; the real launch only
         # does so with a controller and use_pinger:=False.
-        if params.simulation or (params.controller_type and not params.use_pinger):
-            QTimer.singleShot(
-                3000, lambda: self._request_path_preview(params.trajectory))
+
+        # if params.simulation or (params.controller_type and not params.use_pinger):
+        #     QTimer.singleShot(
+        #         3000, lambda: self._request_path_preview(params.trajectory))
+        self._pending_preview_trajectory = params.trajectory
         self._start_gps_deployment(params)
 
     # ======================================================== GPS deployment
@@ -372,6 +380,11 @@ class MainWindow(QMainWindow):
         self._status.showMessage(
             "Published [0.0, 0.0] — master_control resumes the original "
             "mission.", 6000)
+
+    def _on_clear_paths(self) -> None:
+        self.store.clear_tracks()
+        self.map_view.refresh()
+        self._status.showMessage("Robot and pinger trails cleared.", 4000)
 
     def _on_measure_mode(self, on: bool) -> None:
         if on and self.toolbar.manual_button.isChecked():

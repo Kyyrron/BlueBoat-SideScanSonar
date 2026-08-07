@@ -39,7 +39,14 @@ visible within one second.
 ## Mission map
 
 Drag to pan, mouse-wheel to zoom (anchored under the cursor). The grid's
-scale bar in the bottom-left corner shows the current cell size in metres. A simple click
+scale bar in the bottom-left corner shows the current cell size in metres.
+The map is always **north-up and fixed** — it never rotates. Once the
+georeference is heading-aligned the scene becomes geographic (an `N↑` badge
+appears) and the robot glyph points at its true heading; before that a
+"world-up" notice is shown and the glyph points at its raw launch-frame
+heading (which is why hardcoded paths draw horizontal until then). Only the
+vehicle icon rotates, exactly like QGroundControl. **Clear Paths** in MAP TOOLS wipes the robot
+and pinger trails without touching live data. A simple click
 anywhere shows, in the status bar: world coordinates, GPS coordinates (once
 georeferenced) and the live distance from the robot to that point; the point
 is marked on the map.
@@ -146,7 +153,16 @@ path-design application inside the station. Its map pans (middle-button
 drag), zooms (wheel), shows the metric grid — with a scale bar in the bottom-left corner whose
 length always equals one grid cell — and, when a georeference exists, the
 same satellite layer as the main map. **Center Pattern** (`F`) frames the
-current selection, or the whole mission, on screen. If the robot is
+current selection, or the whole mission, on screen; **Zoom + / Zoom −**
+toolbar buttons (`+` / `−`) zoom about the view centre. **Align to Start**
+rigid-transforms the whole mission so it begins at world (0,0) with its
+first tangent along +x: because every launch (simulation or real) zeroes
+the world frame at the boat — origin = boat position, +x = boat heading —
+an aligned mission always starts at the boat and its first motion is
+forward. Saving a non-GPS mission that doesn't already start that way
+offers this alignment automatically; GPS-anchored missions are
+geographically fixed and are never realigned (the boat turns toward them
+instead). If the robot is
 connected, its position sets the initial view and the live robot arrow and
 pinger overlays can be toggled from the toolbar; otherwise **Set GPS
 Origin…** accepts Google-Maps-format coordinates (`33.660196, 130.657780`)

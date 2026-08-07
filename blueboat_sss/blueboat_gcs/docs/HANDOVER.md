@@ -84,6 +84,13 @@ the operator controls. Panel base width is `PANEL_MIN_WIDTH` in
 
 ### 3.1 USBL pinger — `ros/pinger_listener.py` (now the real interface)
 * Topic: `topics.pinger` (default `/blueboat/pinger_coordinates`)
+* **Frame (`alignment.pinger_frame`, default `robot`):** a USBL reports positions
+  relative to its transducer, so `[x, y]` is interpreted as vehicle-frame
+  (x forward, y port) and rotated through the robot pose nearest the fix
+  (`utils/pose_alignment.robot_to_world`); set `world` if your USBL already publishes
+  odom-frame coordinates. The left panel shows the pinger's world **and** GPS position
+  plus its live distance to the robot, so the real-world alignment is checkable at a
+  glance. If it appears offset in the wrong direction, that is the frame setting.
 * Type: `std_msgs/Float32MultiArray`, `data = [x_world, y_world]` in the world/odom
   frame [m]; extra elements ignored, NaN/short messages dropped.
 * Any rate works (last fix displayed). The left panel shows live pinger world
@@ -157,6 +164,36 @@ processing in
 `core/svlog.py` is a port of the `sss_processor_node` pipeline with its constants
 copied verbatim — if those are ever retuned on the robot, mirror them there.
 
+### 3.1quater Sea-trial pose alignment — pings frozen at (0,0) with GPS on (new)
+
+**Symptom.** In real trials every ping locked to (0, 0) although GPS was on; the
+waterfall was fine and rosbag replays of SonarView `.svlog` files worked in the replay
+window. **Root cause is robot-side, not in this app.** `sss_processor_node` snaps each
+ping's pose from `/blueboat/odom` (tolerance-free nearest-stamp lookup). Live, that
+topic is either publishing zeros (EKF/robot_interface not yet fused) or stamping on a
+clock different from the sonar profiles, so the lookup latches a boot-time zero.
+Rosbag replays are immune because `svlog_to_rosbag` **synthesizes** `/blueboat/odom`
+on the same synthetic clock from real `LOCAL_POSITION_NED` — which is exactly why
+"bag works, live doesn't". **The real fix is on the robot: publish a valid
+`/blueboat/odom` (non-zero, correctly stamped on the sonar clock).**
+
+**GCS-side mitigations** (so trials are usable before that is fixed), all in the
+`alignment` config block and `utils/pose_alignment.py`:
+
+* `pose_source: auto` (default) — when embedded ping poses stay frozen at the origin
+  for `frozen_after_pings` while GCS telemetry shows the boat has moved,
+  `main_window._align_ping_pose` re-stamps each ping with the time-nearest
+  `RobotState` pose before it reaches the mosaic/imager. One console warning names the
+  root cause. `embedded` trusts the ping pose (legacy); `gcs` always re-stamps.
+* `gps_fallback: true` — if `/blueboat/odom` is silent (> 2 s) or zero-frozen while a
+  GPS fix moves, `telemetry_listener` synthesizes `RobotState` from NavSatFix +
+  compass heading (`GpsPoseSynthesizer`, first-fix ENU reference), so trajectory,
+  origin binding and the re-stamped pings all align on the satellite map. Normal odom
+  resumes automatically when it returns.
+
+These are safety nets, not a substitute for correct robot-side odom; the console
+warning is deliberately explicit so the operator knows to fix the source.
+
 ### 3.2 AI detections — `ros/detections_listener.py` (placeholder)
 * Expected topic: `topics.detections` (default `/sss_ai/detections`)
 * Expected type: `vision_msgs/Detection2DArray` with, per detection:
@@ -223,7 +260,11 @@ detections can be excluded from any accuracy statistic.
 panel) displays raw pings stacked in acquisition order — the domain from which future
 AI datasets will primarily be generated — and is now fully interactive (wheel zoom,
 drag pan, vertical scrolling through the whole ring buffer; it follows the newest
-ping while at the bottom and releases the moment you scroll into history). Its pixel
+ping while at the bottom and releases the moment you scroll into history). A small
+in-view control strip adds manual zoom −/+ buttons and an "AI detections" checkbox
+that toggles the detection markers (which are drawn on the exact ping line each object
+was seen on); the strip is part of the widget, so it is present in both the main and
+the SVLOG replay windows. Its pixel
 values go through the display pipeline for *viewing only*; for dataset generation use
 the data upstream of any rendering: the per-ping `intensity_db`/`y_local` arrays from
 `/sss_processor/processed`, or `waterfall/waterfall_raw.npz` in a recording session

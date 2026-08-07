@@ -86,6 +86,30 @@ class MosaicConfig:
 
 
 @dataclass
+class AlignmentConfig:
+    """Sea-trial pose alignment (utils/pose_alignment.py).
+
+    pose_source:
+      * "auto"     — use the pose embedded in ProcessedSSSPing unless it
+        is frozen at the origin while GCS telemetry shows the boat
+        elsewhere; then re-stamp pings from the GCS's own RobotState
+        (fixes the live '(0,0) pings with GPS on' pathology; rosbag
+        replays are unaffected because their synthesized odom is sane);
+      * "embedded" — always trust the ping's pose (legacy behaviour);
+      * "gcs"      — always re-stamp from GCS telemetry.
+    gps_fallback: synthesize RobotState from NavSatFix + compass when
+    /blueboat/odom is silent or zero-frozen (GPS dead reckoning).
+    pinger_frame: "robot" (USBL-native vehicle-relative [x fwd, y port],
+    rotated through the robot pose nearest the fix) or "world"."""
+
+    pose_source: str = "auto"          # auto | embedded | gcs
+    frozen_epsilon_m: float = 0.05
+    frozen_after_pings: int = 20
+    gps_fallback: bool = True
+    pinger_frame: str = "robot"        # robot | world
+
+
+@dataclass
 class SeabedConfig:
     """Waterfall-domain AI imaging (core/seabed_imager.py).
 
@@ -137,6 +161,7 @@ class AppConfig:
     mosaic: MosaicConfig = field(default_factory=MosaicConfig)
     interpolation: InterpolationConfig = field(default_factory=InterpolationConfig)
     seabed: SeabedConfig = field(default_factory=SeabedConfig)
+    alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
     map: MapConfig = field(default_factory=MapConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     data_root: str = "../../../data/SSS_data"   # same root as the existing pipeline

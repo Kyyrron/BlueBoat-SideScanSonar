@@ -97,6 +97,22 @@ class GeoFit:
     n_pairs: int
     heading_aligned: bool = False
 
+    def world_to_enu(self, x: float, y: float) -> tuple[float, float]:
+        """Rotate a world-frame point into the local east/north frame.
+
+        The scene the map draws in is ENU (north-up, fixed), so every
+        world-frame quantity (odom pose, trails, targets, mission paths) is
+        placed through this. Pure rotation about the georeference origin —
+        no lat/lon round-trip, so it is cheap enough for per-frame use.
+        ``EN = R(-theta) (world - t)``."""
+        c, s = math.cos(-self.theta), math.sin(-self.theta)
+        dx, dy = x - self.tx, y - self.ty
+        return c * dx - s * dy, s * dx + c * dy
+
+    def enu_to_world(self, east: float, north: float) -> tuple[float, float]:
+        c, s = math.cos(self.theta), math.sin(self.theta)
+        return c * east - s * north + self.tx, s * east + c * north + self.ty
+
     # world -> lat/lon
     def world_to_latlon(self, x: float, y: float) -> tuple[float, float]:
         c, s = math.cos(-self.theta), math.sin(-self.theta)

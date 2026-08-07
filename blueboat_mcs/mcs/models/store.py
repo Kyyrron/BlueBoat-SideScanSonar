@@ -53,6 +53,7 @@ class RobotState:
     speed: float = 0.0                      # sqrt(u^2 + v^2) from odom twist
     lat: float | None = None
     lon: float | None = None
+    compass_heading: float | None = None    # true heading, rad CCW-from-east
     fcu_connected: bool = False
     armed: bool = False
     fcu_mode: str = "—"
@@ -151,8 +152,21 @@ class DataStore:
         self.speed_hist.append(t, (r.speed,))
         if r.lat is not None and r.lon is not None:
             self.geo.add_pair(t, r.x, r.y, r.lat, r.lon)
-        self._update_pinger_world(t)
+        # NOTE: the pinger world position is deliberately NOT recomputed here.
+        # Re-anchoring a (possibly stale, dead-reckoned) body-frame pinger
+        # vector to every new robot pose made the pinger marker follow the
+        # robot's motion; it is now computed once per pinger message, with
+        # the pose concurrent with that message (see on_pinger_body).
         self._record_target_distance(t)
+
+    def on_compass(self, t: float, heading_deg: float) -> None:
+        """Absolute heading from /mavros/global_position/compass_hdg
+        (degrees, clockwise from north). Convert to the math convention used
+        everywhere else (radians, CCW from east): east=0, north=pi/2, so
+        heading_math = 90 - compass_deg."""
+        import math as _m
+        a = _m.radians(90.0 - float(heading_deg))
+        self.robot.compass_heading = _m.atan2(_m.sin(a), _m.cos(a))
 
     def on_gps(self, t: float, lat: float, lon: float) -> None:
         if lat == 0.0 and lon == 0.0:
@@ -165,35 +179,44 @@ class DataStore:
         self.robot.fcu_mode = mode
 
     def on_pinger_body(self, t: float, xyz) -> None:
+        """Pinger message received: THIS is the only place the pinger's world
+        position is computed, using the robot pose concurrent with the
+        message. Between messages the marker stays fixed in the world —
+        composing an older body-frame vector with newer robot poses (the
+        previous behaviour) dragged the pinger along with the robot.
+        Residual lag now comes only from the robot side (Waterlinked
+        'filaco' filtering + dead-reckoning drift, see 03_ros_integration)."""
         p = self.pinger
         p.t = t
         p.body = (float(xyz[0]), float(xyz[1]), float(xyz[2]) if len(xyz) > 2 else 0.0)
         if any(abs(c) > 1e-9 for c in p.body):
             p.seen = True
         p.distance_m = math.hypot(p.body[0], p.body[1]) if p.seen else None
-        self._update_pinger_world(t)
+        r = self.robot
+        if not (p.seen and r.has_odom):
+            return
+        c, s = math.cos(r.yaw), math.sin(r.yaw)
+        xw = r.x + c * p.body[0] - s * p.body[1]
+        yw = r.y + s * p.body[0] + c * p.body[1]
+        p.world = (xw, yw)
+        last = self.pinger_track.last()
+        if last is None or (t - last[0]) > 0.2:  # trail stored at <= 5 Hz
+            self.pinger_track.append(t, (xw, yw))
 
     def on_uw_gps_raw(self, t: float) -> None:
         self.pinger.last_raw_update_t = t
 
     def on_monitoring(self, t: float, data) -> None:
         # [t_ctrl, x, y, psi, x_d, y_d, psi_d, u1, u2]
+        # x_d/y_d/psi_d are WORLD-frame for every controller branch —
+        # guaranteed by the patched integration/master_control.py, which
+        # captures the world target before its inRobotFrame() conversion.
+        # (Do NOT re-add a robot->world fixup here: with the patched
+        # controller it would double-convert. If running an UNPATCHED
+        # master_control, LoS-path/manual/pinger targets arrive robot-frame
+        # and will display off-path — deploy the patched file instead.)
         if len(data) >= 7:
-            xd, yd = float(data[4]), float(data[5])
-            # master_control's LoS path branch overwrites its `target` with
-            # the ROBOT-FRAME conversion before the monitoring block runs,
-            # so x_d/y_d arrive in body coordinates for that controller.
-            # Rotate them back to world with the same message's own pose so
-            # the displayed target lies on the path. (Robot-side one-line
-            # fix documented in 03_ros_integration.md; harmless once
-            # applied, since this branch then simply won't be entered.)
-            if (self.mission.controller_type == "LoS"
-                    and not self.mission.use_pinger
-                    and self.mission.manual_target is None):
-                x, y, psi = float(data[1]), float(data[2]), float(data[3])
-                c, s = math.cos(psi), math.sin(psi)
-                xd, yd = x + c * xd - s * yd, y + s * xd + c * yd
-            self.mission.path_target = (xd, yd)
+            self.mission.path_target = (float(data[4]), float(data[5]))
         self._record_target_distance(t)
 
     def on_thruster(self, t: float, right: float, left: float) -> None:
@@ -210,18 +233,6 @@ class DataStore:
         self.mission_path = np.asarray(poses, dtype=np.float64) if len(poses) else None
 
     # -------------------------------------------------------------- derived
-    def _update_pinger_world(self, t: float) -> None:
-        p, r = self.pinger, self.robot
-        if not (p.seen and r.has_odom):
-            return
-        c, s = math.cos(r.yaw), math.sin(r.yaw)
-        xw = r.x + c * p.body[0] - s * p.body[1]
-        yw = r.y + s * p.body[0] + c * p.body[1]
-        p.world = (xw, yw)
-        last = self.pinger_track.last()
-        if last is None or (t - last[0]) > 0.2:  # store at <= 5 Hz
-            self.pinger_track.append(t, (xw, yw))
-
     def active_target_world(self) -> tuple[float, float] | None:
         """World position of whatever the boat is currently steering to."""
         mode = self.mission.target_mode
@@ -233,21 +244,35 @@ class DataStore:
             return self.mission.path_target
         return None
 
+    def clear_tracks(self) -> None:
+        """Operator 'Clear Paths': wipe the robot and pinger trails drawn on
+        the map. Live states (poses, targets, stats, histories used by the
+        plots) are untouched."""
+        self.robot_track.clear()
+        self.pinger_track.clear()
+
     def robot_true_heading(self) -> float | None:
         """Robot heading referenced to true north/east (CCW from east), or
-        None until the georeference is heading-aligned.
+        None if no absolute heading source is available yet.
 
-        The odometry ``yaw`` is expressed in the robot's world frame, which
-        is rotated from ENU by the georeference ``theta``; this applies that
-        offset so any map/view can align its heading with the real world.
-        Returns None while only a translation-only fit exists (rotation not
-        yet observable), so callers can fall back to raw ``yaw``."""
+        Prefers /mavros/global_position/compass_hdg, which is ABSOLUTE and
+        available immediately — unlike the odom yaw, whose world frame is
+        launch-zeroed (yaw 0 at launch, so the glyph would face east at the
+        start regardless of the real heading). Falls back to the georeference
+        offset (yaw + theta) only once heading-aligned."""
+        if self.robot.compass_heading is not None:
+            return self.robot.compass_heading
         if not self.robot.has_odom:
             return None
         fit = self.geo.fit
         if fit is None or not fit.heading_aligned:
             return None
         return fit.world_yaw_to_true(self.robot.yaw)
+
+    def world_frame_ready(self) -> bool:
+        """True once the odom->GPS heading alignment has been established."""
+        fit = self.geo.fit
+        return fit is not None and fit.heading_aligned
 
     def active_target_distance(self) -> float | None:
         tgt = self.active_target_world()

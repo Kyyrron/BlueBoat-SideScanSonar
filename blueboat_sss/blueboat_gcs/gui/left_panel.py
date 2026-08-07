@@ -48,7 +48,7 @@ class LeftPanel(QWidget):
             (LAYER_TRAJECTORY, "Robot trajectory", True),
             (LAYER_PLANNED_PATH, "Planned mission path", True),
             (LAYER_SWATH, "Sonar range line", False),
-            (LAYER_PINGER, "USBL pinger", True),
+            (LAYER_PINGER, "USBL pinger", False),
             (LAYER_DETECTIONS, "AI detections", False),
             (LAYER_INTERPOLATION, "Interpolation", False),
         ):
@@ -97,8 +97,10 @@ class LeftPanel(QWidget):
         pform = QFormLayout(pinger_box)
         pform.setLabelAlignment(Qt.AlignRight)
         self._pinger_world = self._value_label()
+        self._pinger_gps = self._value_label()
         self._pinger_dist = self._value_label()
         pform.addRow("World", self._pinger_world)
+        pform.addRow("GPS", self._pinger_gps)
         pform.addRow("Robot", self._pinger_dist)
         root.addWidget(pinger_box)
         self._pinger_xy: Optional[tuple] = None
@@ -136,10 +138,12 @@ class LeftPanel(QWidget):
         self._robot_xy = (state.x, state.y)
         self._refresh_pinger_distance()
 
-    def on_pinger(self, x: float, y: float) -> None:
-        """Live pinger information (world coordinates + robot distance)."""
+    def on_pinger(self, x: float, y: float, gps=None) -> None:
+        """Live pinger info: world coords (fixed world frame, after any
+        robot->world transform), GPS position, robot distance."""
         self._pinger_xy = (x, y)
         self._pinger_world.setText(f"x {x:+.2f} m   y {y:+.2f} m")
+        self._pinger_gps.setText(format_latlon(*gps) if gps else "—")
         self._refresh_pinger_distance()
 
     def _refresh_pinger_distance(self) -> None:

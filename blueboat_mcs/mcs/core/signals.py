@@ -19,6 +19,7 @@ class SignalBus(QObject):
     odom_received = Signal(float, object, object)
     #: t_mono, latitude, longitude
     gps_received = Signal(float, float, float)
+    compass_received = Signal(float, float)   # (t, heading_deg CW-from-north)
     #: t_mono, connected, armed, mode string
     mavros_state_received = Signal(float, bool, bool, str)
     #: t_mono, pinger position in robot/body frame [x, y, z]

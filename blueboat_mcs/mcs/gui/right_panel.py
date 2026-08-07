@@ -11,6 +11,8 @@ share the column without crowding each other:
     time window (map trajectories + plot). With the high handle at the end
     the display is *live*; moving it back freezes the display while
     recording continues underneath.
+  * **Mission statistics** — duration, travelled distance, average / max
+    speed and active controller over the selected window.
 * **Bottom part** — the **launch console** (:class:`~mcs.gui.console.
   LaunchConsole`), dedicated exclusively to the launched ROS2 processes'
   stdout/stderr, with severity coloring and its keyword filter toolbox.
@@ -28,18 +30,19 @@ from mcs.config.settings import AppConfig
 from mcs.gui import theme
 from mcs.gui.console import LaunchConsole
 from mcs.gui.plot.distance_plot import DistancePlot
-from mcs.gui.widgets import CollapsibleSection, RangeSlider
+from mcs.gui.widgets import CollapsibleSection, InfoGrid, RangeSlider
 from mcs.models.store import DataStore, TargetMode
 
 
 class RightPanel(QWidget):
-    """Monitoring sidebar: map tools, plot, timeline, console."""
+    """Monitoring sidebar: map tools, plot, timeline, statistics, console."""
 
     #: rel_t0, rel_t1, live
     time_window_changed = Signal(float, float, bool)
     zoom_in_requested = Signal()
     zoom_out_requested = Signal()
     center_robot_requested = Signal()
+    clear_paths_requested = Signal()
 
     def __init__(self, cfg: AppConfig, store: DataStore,
                  parent: QWidget | None = None) -> None:
@@ -78,7 +81,11 @@ class RightPanel(QWidget):
             "Recenter the view on the robot once; the camera then remains "
             "completely free (this is not a follow mode).")
         center.clicked.connect(self.center_robot_requested.emit)
-        for b in (zoom_in, zoom_out, center):
+        clear_paths = QPushButton("Clear Paths")
+        clear_paths.setToolTip("Clear the robot and pinger trails drawn on "
+                               "the map (live states are kept).")
+        clear_paths.clicked.connect(self.clear_paths_requested.emit)
+        for b in (zoom_in, zoom_out, center, clear_paths):
             tools_row.addWidget(b)
         tools_widget = QWidget()
         tools_widget.setLayout(tools_row)

@@ -30,6 +30,7 @@ class TopicsConfig:
     # --- Subscriptions (data produced by the existing stack) ---
     odom: str = "/blueboat/odom"
     gps: str = "/mavros/global_position/global"
+    compass_hdg: str = "/mavros/global_position/compass_hdg"
     mavros_state: str = "/mavros/state"
     pinger_body: str = "/blueboat/pinger_coordinates"
     uw_gps_raw: str = "/uw_gps_data"

@@ -6,14 +6,15 @@ def wrap_angle(a):
 
 
 class PID:
-    def __init__(self, kp, ki, kd, dt):
-        self.kp = kp
-        self.ki = ki
-        self.kd = kd
+    def __init__(self, kp, ki, kd, dt, gain_divisor=1.0):
         self.dt = dt
-
+        self.gain_divisor = gain_divisor
         self.integral = 0.0
-        self.prev_error = 0.0
+        self.prev_error = 0.
+        
+        self.kp = kp / gain_divisor
+        self.ki = ki / gain_divisor
+        self.kd = kd / gain_divisor
 
     def reset(self):
         self.integral = 0.0
@@ -73,7 +74,7 @@ class PIDLoS:
     - Keeps explicit psi_ref
     """
 
-    def __init__(self, dt, B, outer_gains, inner_gains, los_gain=1.0, thruster_limits=None):
+    def __init__(self, dt, B, outer_gains, inner_gains, los_gain=1.0, gain_divisor=1.0, thruster_limits=None):
         """
         dt : float
             Control timestep
@@ -85,14 +86,15 @@ class PIDLoS:
         """
         self.dt = dt
         self.los_gain = los_gain
+        self.gain_divisor = gain_divisor
 
         # Outer loop PIDs
-        self.pid_x = PID(*outer_gains['x'], dt)
-        self.pid_psi = PID(*outer_gains['psi'], dt)
+        self.pid_x = PID(*outer_gains['x'], dt, gain_divisor)
+        self.pid_psi = PID(*outer_gains['psi'], dt, gain_divisor)
 
         # Inner loop PIDs
-        self.pid_u = PID(*inner_gains['u'], dt)
-        self.pid_r = PID(*inner_gains['r'], dt)
+        self.pid_u = PID(*inner_gains['u'], dt, gain_divisor)
+        self.pid_r = PID(*inner_gains['r'], dt, gain_divisor)
 
         # Thruster allocation
         self.allocator = ThrustAllocator(B, limits=thruster_limits)

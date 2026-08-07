@@ -57,6 +57,58 @@ class WaterfallView(QGraphicsView):
         self._follow = True
         self._fitted_once = False
         self._detections: list = []      # {"row", "col", "label"} in px
+        self._show_detections = True
+        self._build_controls()
+
+    def _build_controls(self) -> None:
+        """Corner control strip: manual zoom −/+ and the AI-detections
+        toggle. Child widgets of the view, so both the main window's and
+        the replay window's waterfalls get them with zero extra wiring."""
+        from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QPushButton,
+                                       QWidget)
+        self._controls = QWidget(self)
+        lay = QHBoxLayout(self._controls)
+        lay.setContentsMargins(4, 2, 4, 2)
+        lay.setSpacing(4)
+        zoom_out = QPushButton("−")
+        zoom_in = QPushButton("+")
+        for b, tip in ((zoom_out, "Zoom out"), (zoom_in, "Zoom in")):
+            b.setFixedSize(26, 22)
+            b.setToolTip(tip)
+        zoom_in.clicked.connect(self.zoom_in)
+        zoom_out.clicked.connect(self.zoom_out)
+        self._det_check = QCheckBox("AI detections")
+        self._det_check.setChecked(True)
+        self._det_check.setToolTip(
+            "Show / hide AI detection markers on the waterfall.")
+        self._det_check.toggled.connect(self._set_show_detections)
+        lay.addWidget(zoom_out)
+        lay.addWidget(zoom_in)
+        lay.addWidget(self._det_check)
+        self._controls.setStyleSheet(
+            "QWidget{background: rgba(16,21,27,190); border-radius: 4px;}")
+        self._controls.adjustSize()
+        self._controls.move(8, 24)
+        self._controls.raise_()
+
+    # ---- manual zoom -----------------------------------------------------------
+    def _apply_zoom(self, step: float) -> None:
+        current = self.transform().m11()
+        target = max(_MIN_SCALE, min(_MAX_SCALE, current * step))
+        factor = target / current
+        if abs(factor - 1.0) > 1e-9:
+            self.scale(factor, factor)
+        self._update_follow_from_scrollbar()
+
+    def zoom_in(self) -> None:
+        self._apply_zoom(1.25)
+
+    def zoom_out(self) -> None:
+        self._apply_zoom(1 / 1.25)
+
+    def _set_show_detections(self, on: bool) -> None:
+        self._show_detections = on
+        self.viewport().update()
 
     def on_detections(self, dets: list) -> None:
         """Detection overlay from WaterfallService (buffer pixel coords)."""
@@ -89,13 +141,7 @@ class WaterfallView(QGraphicsView):
 
     # ---- interaction -----------------------------------------------------------
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
-        step = 1.25 if event.angleDelta().y() > 0 else 1 / 1.25
-        current = self.transform().m11()
-        target = max(_MIN_SCALE, min(_MAX_SCALE, current * step))
-        factor = target / current
-        if abs(factor - 1.0) > 1e-9:
-            self.scale(factor, factor)
-        self._update_follow_from_scrollbar()
+        self._apply_zoom(1.25 if event.angleDelta().y() > 0 else 1 / 1.25)
 
     def scrollContentsBy(self, dx: int, dy: int) -> None:  # noqa: N802
         super().scrollContentsBy(dx, dy)
@@ -142,7 +188,7 @@ class WaterfallView(QGraphicsView):
         # Detection markers: positioned in image (scene) coordinates,
         # drawn at fixed device size so they never scale with zoom —
         # same visual language as the map's DetectionLayer.
-        if self._detections:
+        if self._detections and self._show_detections:
             painter.save()
             painter.resetTransform()
             painter.setFont(QFont("DejaVu Sans", 8))

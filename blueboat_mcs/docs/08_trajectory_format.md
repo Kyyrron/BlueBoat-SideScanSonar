@@ -74,6 +74,13 @@ the remembered GPS origin restored when the mission is reopened.
 Segment metadata note: `seg_out` in the metadata file additionally carries
 `speed` (m/s, `0` = mission speed).
 
+Start-alignment note: a non-GPS runtime file is normally *start-aligned* —
+its first sample is `(0,0)` and the first tangent is `+x` — so that on
+launch (world frame zeroed at the boat) the robot starts at the mission and
+moves forward. GPS-anchored files are NOT start-aligned: their `points`
+stay in the design frame and are relocated to the boat's real GPS position
+at deploy time instead.
+
 ## 2. Editor metadata file — `<name>.meta.yaml`
 
 Everything needed to *re-edit* the mission, and nothing the runtime reads:

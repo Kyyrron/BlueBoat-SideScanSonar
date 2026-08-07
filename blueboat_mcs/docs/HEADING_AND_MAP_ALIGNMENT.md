@@ -54,8 +54,35 @@ In the state store (`mcs/models/store.py`):
   (`world_yaw_to_true(yaw)`) once `heading_aligned`, else `None` so callers
   fall back to raw `yaw`.
 
-Any map/view then aligns by rotating its rendering (or just the glyph) by
-`theta`, using `robot_true_heading()` when available. The rule of thumb:
+In the map (`mcs/gui/map/map_view.py`) — QGroundControl model,
+implemented:
+
+- **The view is always north-up and never rotates.** This is the key point:
+  rotating the whole view (an earlier approach) spins the tiles and the
+  world with it — the wrong behaviour. Like QGC, the map stays fixed and
+  only the **vehicle glyph rotates**.
+- Two scene regimes, switched once by `heading_aligned`:
+  - **Before alignment** — the scene is the raw robot world frame
+    (world-up). The glyph is at raw `/blueboat/odom`, pointing at raw yaw.
+    A "world-up (north unknown)" notice is shown.
+  - **After alignment** — the scene is **local east/north (ENU)**. Every
+    world-frame quantity (glyph position, trails, pinger, targets, mission
+    paths, and the satellite tiles) is converted with
+    `GeoFit.world_to_enu()` at placement, so north points up with no view
+    rotation. The glyph is rotated to its **true heading**
+    (`GeoFit.world_yaw_to_true(yaw) = yaw + theta`); an `N↑` badge appears.
+- The glyph ignores view transforms (constant pixel size); its device-space
+  rotation is `-degrees(heading)` where `heading` is already the scene-frame
+  heading (true heading in ENU, raw yaw before). There is **no separate
+  view-rotation term** — a single conversion at the source keeps the glyph
+  and everything under it consistent, which is what fixes the "arrow always
+  faces right / points nowhere" symptom.
+- "Hardcoded paths always draw horizontal" is the same story: those paths
+  are world-frame, whose `+x` **is** the robot's launch heading, so before
+  alignment horizontal is *correct*; after alignment the ENU conversion
+  renders them at their true geographic bearing.
+
+The rule of thumb:
 
 > Compute heading **after** you have both robot world info (odom `yaw`) **and**
 > the odom↔GPS georeference — never from `yaw` alone.
@@ -73,8 +100,10 @@ Any map/view then aligns by rotating its rendering (or just the glyph) by
 
 Keep two fit stages. Turn tiles on as soon as you have any GPS fix
 (translation-only). Keep a boolean that says whether rotation has been
-solved yet. Only rotate/interpret heading once that boolean is true; until
-then draw the glyph from raw yaw and label the heading as "north not yet
-aligned". Solve rotation by fitting odom-vs-GPS tracks after the vehicle has
-moved a few metres. The offset you get is the single number that aligns
-heading *and* coordinates *and* tiles at once.
+solved yet. Keep the map north-up and fixed at all times. Before rotation is
+solved, draw the glyph from raw yaw in the raw world frame and label it
+"north not yet aligned". After, convert every point to east/north with the
+one offset `theta` and rotate ONLY the vehicle icon to `yaw + theta` — never
+rotate the view, or the satellite tiles rotate with it (the exact bug this
+note exists to prevent). Solve `theta` by fitting odom-vs-GPS tracks after a
+few metres of motion.

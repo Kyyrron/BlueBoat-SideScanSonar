@@ -81,18 +81,22 @@ class RobotItem(QGraphicsItemGroup):
         self.addToGroup(self._arrow)
         self._arrow_visible = False
 
-    def set_pose(self, x: float, y: float, yaw: float, yaw_offset: float = 0.0) -> None:
+    def set_pose(self, x: float, y: float, heading: float) -> None:
+        """Place the glyph at scene (x, y) pointing at scene ``heading``.
+
+        The hosting view is always north-up and never rotates, so the scene
+        is axis-aligned: the caller passes coordinates and heading already in
+        scene axes (ENU true heading once georeferenced, raw world yaw
+        before). The glyph ignores view transforms and is rotated in
+        **device** space (y-down, CW-positive), hence ``-degrees(heading)``;
+        the arrow is a plain scene line and picks up the view's y-flip for
+        free. This is the whole orientation contract — there is no separate
+        view-rotation term any more."""
         self._glyph.setPos(x, y)
-        
-        # Apply the offset to correct the misalignment between frames
-        corrected_yaw = yaw + yaw_offset
-        
-        # Device-space (y-down, CW-positive) rotation for the untransformed
-        # glyph — see class docstring.
-        self._glyph.setRotation(-math.degrees(corrected_yaw))
+        self._glyph.setRotation(-math.degrees(heading))
         length = 4.0  # metres of look-ahead
         self._arrow.setLine(QLineF(
-            x, y, x + length * math.cos(corrected_yaw), y + length * math.sin(corrected_yaw)))
+            x, y, x + length * math.cos(heading), y + length * math.sin(heading)))
         self._arrow.setVisible(self._arrow_visible)
 
     def set_heading_visible(self, visible: bool) -> None:
@@ -163,6 +167,29 @@ class MissionPathItem(PolylineItem):
     def __init__(self) -> None:
         super().__init__(theme.C_MISSION_PATH, 2.0, Qt.PenStyle.SolidLine, z=10)
         self.setOpacity(0.9)
+
+
+def draw_north_indicator(painter, viewport_w: int, north_up: bool) -> None:
+    """Small compass hint: 'N ^' when the view is north-up, else a world-up
+    notice so the operator knows geographic orientation is not yet known."""
+    painter.save()
+    painter.resetTransform()
+    painter.setFont(QFont("DejaVu Sans", 9, QFont.Weight.Bold))
+    if north_up:
+        painter.setPen(QColor(230, 235, 240))
+        painter.drawText(QPointF(viewport_w - 34.0, 20.0), "N")
+        painter.setPen(_cosmetic_pen(QColor(230, 235, 240), 2.0))
+        painter.drawLine(QLineF(viewport_w - 22.0, 22.0,
+                                viewport_w - 22.0, 8.0))
+        painter.drawLine(QLineF(viewport_w - 26.0, 12.0,
+                                viewport_w - 22.0, 8.0))
+        painter.drawLine(QLineF(viewport_w - 18.0, 12.0,
+                                viewport_w - 22.0, 8.0))
+    else:
+        painter.setPen(QColor(150, 158, 168))
+        painter.drawText(QPointF(viewport_w - 150.0, 20.0),
+                         "world-up (north unknown)")
+    painter.restore()
 
 
 def draw_scale_bar(painter, viewport_w: int, viewport_h: int,

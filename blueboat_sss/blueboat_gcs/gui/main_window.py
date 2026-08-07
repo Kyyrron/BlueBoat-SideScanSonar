@@ -10,6 +10,7 @@ in ``_connect_signals`` — nothing else changes.
 from __future__ import annotations
 
 import time
+from dataclasses import replace as dc_replace
 from pathlib import Path
 from typing import Optional
 
@@ -31,6 +32,7 @@ from ..models.detection import Detection, PingerFix
 from ..models.path import PlannedPath
 from ..models.robot_state import RobotState
 from ..models.sonar import SonarPing
+from ..utils.pose_alignment import FrozenPoseDetector, robot_to_world
 from . import left_panel as lp
 from . import right_panel as rp
 from .left_panel import LeftPanel
@@ -84,6 +86,9 @@ class MainWindow(QMainWindow):
         # to <session>/seabed_images while a recording session is active.
         from ..core.seabed_imager import SeabedImager
         self.seabed_imager = SeabedImager(config)
+        self._frozen_detector = FrozenPoseDetector(
+            eps_m=config.alignment.frozen_epsilon_m,
+            after=config.alignment.frozen_after_pings)
         self._replay_windows: list = []      # keep references alive
 
         # Telemetry staleness watchdog (robot synchronization): if no
@@ -240,6 +245,7 @@ class MainWindow(QMainWindow):
         """
         if not self._viz_enabled:
             return
+        ping = self._align_ping_pose(ping)
         self._mosaic_service.on_sonar_ping(ping)
         self.waterfall_service.on_sonar_ping(ping)
         self.seabed_imager.on_sonar_ping(ping)
@@ -285,9 +291,59 @@ class MainWindow(QMainWindow):
         self.waterfall_service.add_detection(det.t, det.x, det.y,
                                              det.class_name)
 
+    # ---- sea-trial pose alignment ------------------------------------------------
+    def _align_ping_pose(self, ping: SonarPing) -> SonarPing:
+        """Re-stamp the ping's pose from GCS telemetry when required.
+
+        pose_source "embedded": trust the ping. "gcs": always re-stamp.
+        "auto" (default): re-stamp only while the embedded poses are
+        frozen at the origin although GCS telemetry shows the boat
+        elsewhere — the live '(0,0) pings with GPS on' pathology (the
+        processor's /blueboat/odom is zeroed or clock-mismatched; rosbag
+        replays are sane because their odom is synthesized). A console
+        warning identifies the robot-side root cause once.
+        """
+        mode = self._config.alignment.pose_source
+        if mode == "embedded":
+            return ping
+        state = self._last_robot_state
+        if mode == "auto":
+            engaged_before = self._frozen_detector.engaged
+            engaged = self._frozen_detector.update(
+                ping.robot_x, ping.robot_y,
+                None if state is None else state.x,
+                None if state is None else state.y)
+            if engaged and not engaged_before:
+                self._signals.log_line.emit(
+                    "app",
+                    "ALIGNMENT: ProcessedSSSPing poses are frozen at (0,0) "
+                    "while the boat moves — re-stamping pings from GCS "
+                    "telemetry. Root cause is robot-side: /blueboat/odom "
+                    "seen by sss_processor_node is zeroed or its stamps "
+                    "are on a different clock than the sonar profiles "
+                    "(see HANDOVER 'Sea-trial pose alignment').")
+            if not engaged:
+                return ping
+        if state is None:
+            return ping                        # nothing better available
+        return dc_replace(ping, robot_x=state.x, robot_y=state.y,
+                          yaw=state.yaw)
+
     def _on_pinger(self, fix: PingerFix) -> None:
+        # Frame handling (alignment.pinger_frame): a USBL natively
+        # reports vehicle-relative coordinates, so "robot" (default)
+        # rotates [x fwd, y port] through the robot pose nearest the
+        # fix; "world" passes coordinates through unchanged.
+        if self._config.alignment.pinger_frame == "robot":
+            state = self._last_robot_state
+            if state is None:
+                return                      # cannot place it yet
+            wx, wy = robot_to_world(fix.x, fix.y, state.x, state.y,
+                                    state.yaw)
+            fix = dc_replace(fix, x=wx, y=wy)
         self.pinger_layer.update(fix)
-        self.left_panel.on_pinger(fix.x, fix.y)   # live info + distance
+        self.left_panel.on_pinger(fix.x, fix.y,
+                                  self.converter.local_to_gps(fix.x, fix.y))
 
     # ---- AI seabed imaging (live) -----------------------------------------------
     def _on_seabed_image(self, image) -> None:

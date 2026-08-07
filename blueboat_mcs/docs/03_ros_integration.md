@@ -106,13 +106,29 @@ Node termination is never initiated before steps 1–4 complete.
 
 ## Observations on the existing stack (flagged, not silently patched)
 
-0. **LoS target monitored in the wrong frame; LoS crawls in path mode** —
-   in `master_control`'s LoS branches, `target` is overwritten by
-   `self.inRobotFrame(...)` before the monitoring block, so
-   `/monitoring_data` carries a ROBOT-FRAME target for LoS; the station now
-   rotates it back to world for display (path mode). Robot-side fix:
-   capture `world_target = target` before the `inRobotFrame` call and
-   monitor that. Separately, the LoS speed law `v = 2·ln(0.15·d+1)` yields
+0. **Monitoring target frame — now uniform WORLD (patched
+   `integration/master_control.py`)** — the original overwrote `target`
+   with its `inRobotFrame(...)` conversion before the monitoring block in
+   the LoS-path, manual and pinger branches, so `/monitoring_data`'s
+   `x_d/y_d` mixed frames per branch (world for MPC/PID-path, robot
+   otherwise). The patched controller captures the world target before the
+   conversion and monitors it for EVERY branch; control behaviour and
+   `/controller_target` are untouched. **The station's display and
+   `robot_interface`'s no-pinger CSV both rely on this patch** — the app no
+   longer applies any frame fixup of its own, so deploy the patched file
+   (an unpatched controller will show LoS/manual targets off-path).
+   Frame answer for the record: the manual target is WORLD-frame on the
+   wire (converted by `inRobotFrame` before `solve_LoS`); the pinger target
+   is ROBOT-frame on the wire (passed directly) — both reach `solve_LoS`
+   in the robot frame, so LoS is consistent.
+   **Symptom — "the robot→target line points to nowhere in simulation":**
+   the line draws `store.active_target_world()`, which in path mode is
+   `/monitoring_data[4:5]`. With an UNPATCHED `master_control` those are
+   robot-frame for LoS, so the world-interpreted endpoint is meaningless
+   even though the boat still tracks the path correctly (control uses the
+   robot-frame value directly). Deploying the patched
+   `integration/master_control.py` makes the monitored target world-frame
+   and the line correct — no app change needed. Separately, the LoS speed law `v = 2·ln(0.15·d+1)` yields
    *Newtons of thrust* and, in path mode, `d` is only the tracking error to
    the pose `dt = 0.05 s` ahead — hence near-zero thrust and a crawling
    boat. Recommended robot-side tuning: request the path with a look-ahead
@@ -157,6 +173,36 @@ Node termination is never initiated before steps 1–4 complete.
 MAVROS sensor topics are subscribed BEST_EFFORT (matching the stack); all
 custom topics use default RELIABLE depth 10, matching their publishers.
 
+
+## CSV logging layout (patched `integration/robot_interface.py`)
+
+Columns are reorganised **important-first, names unchanged**: date fields,
+`relative_x/y/psi`, `target_x/y[/psi]`, [`corrected_pinger_x/y`, GPS,
+pinger GPS,] `right_thr_in`,`left_thr_in`, then raw sensors (and raw USBL
+fields in pinger mode). Rows are filled **by column name**, the swapped
+thruster columns are fixed (`thruster_input` is `[right, left]`), and the
+no-pinger target now logs the world-frame `/monitoring_data` target for
+every controller (empty buffer → zeros, no debug spam). In **pinger mode**
+the duplicated `target_x/y/psi` columns were removed: they held
+`/controller_target`, i.e. the same pinger vector as `corrected_pinger_x/y`
+but in the robot frame — redundant. The world-frame `corrected_pinger_x/y`
+columns are kept; the no-pinger CSV still logs `target_x/y` (its only
+target source). Note the current
+`master_control` loop runs at `dt = 1.0 s`, so `/monitoring_data` (and the
+target column refresh) is 1 Hz — adjust `diagnostics.expected_hz` in the
+station config if the warning triggers.
+
+## Pinger latency (field observation explained)
+
+The marker used to trail the robot because the station re-anchored the
+latest body-frame pinger vector to *every new robot pose*; it now computes
+the world position once per `/blueboat/pinger_coordinates` message, with
+the pose concurrent with that message, and holds it fixed in between.
+Residual sluggishness is robot-side and inherent: with
+`fixed_pinger=False` the published vector is seeded from the Waterlinked
+*filtered* acoustic position (seconds of smoothing) and dead-reckoned with
+odom twist between USBL updates — drift there shows up as slow marker
+convergence, not as robot-following.
 
 ## Designer trajectories — integrating with `path_generation.py`
 

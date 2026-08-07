@@ -349,6 +349,28 @@ class MissionModel(QObject):
             w.y = a.y + u * (b.y - a.y)
         self.changed.emit()
 
+    def align_to_start(self, origin: tuple[float, float],
+                       angle: float) -> None:
+        """Rigid-transform the WHOLE mission so that *origin* (the first
+        sampled point) lands on world (0, 0) and the initial tangent
+        *angle* lands on +x.
+
+        Rationale: the robot's world frame is zeroed at launch (origin =
+        boat position, +x = boat heading), so an aligned mission always
+        starts at the boat and begins by moving forward — identically in
+        simulation and on the real robot. Locked waypoints are transformed
+        too: locks protect against editing mistakes, and a whole-mission
+        rigid transform is not one. Segment interpolation parameters are
+        chord-relative and therefore invariant under this transform."""
+        import math as _math
+        c, s = _math.cos(-angle), _math.sin(-angle)
+        ox, oy = origin
+        for wp in self.flatten():
+            dx, dy = wp.x - ox, wp.y - oy
+            wp.x = c * dx - s * dy
+            wp.y = s * dx + c * dy
+        self.changed.emit()
+
     # --------------------------------------------------------- serialization
     def to_dict(self) -> dict:
         return {"name": self.name, "comment": self.comment,

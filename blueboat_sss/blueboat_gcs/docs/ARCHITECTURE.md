@@ -242,6 +242,32 @@ Detections are stamped with their pixel row's ping time, which is what lets
 `WaterfallService` place markers on the exact ping line in the waterfall view (exact
 inversion of the pixel→world formula for the column).
 
+### 2.17 Sea-trial pose alignment (update)
+Live trials showed every ping pinned at (0, 0) with GPS on, while waterfall and
+rosbag-replay were fine. Root cause is robot-side: `sss_processor_node` snaps its pose
+from `/blueboat/odom`, and the live publisher of that topic either emits zeros or
+stamps on a clock different from the sonar profiles (the processor's tolerance-free
+nearest-stamp lookup then latches a boot-time zero). Rosbag replays are immune because
+`svlog_to_rosbag` synthesizes odom on the sonar clock from real LOCAL_POSITION_NED —
+hence "bag works, live doesn't". Two GCS-side defenses live in
+`utils/pose_alignment.py` (pure, unit-tested) and the `alignment` config block:
+(1) `FrozenPoseDetector` + `main_window._align_ping_pose` re-stamp pings from the
+GCS's own `RobotState` when embedded poses stay frozen at the origin though telemetry
+shows motion (`pose_source: auto|embedded|gcs`), emitting one console warning naming
+the robot-side cause; (2) `GpsPoseSynthesizer` in `telemetry_listener` dead-reckons a
+pose from NavSatFix + compass when `/blueboat/odom` is silent or zero-frozen, so
+trajectory, origin binding and re-stamped pings all align on the satellite map even
+with a broken live odom.
+
+### 2.18 Pinger frame & waterfall controls (update)
+A USBL reports vehicle-relative coordinates, so the old world-frame assumption placed
+the pinger wrongly. `alignment.pinger_frame` (default `robot`) rotates the fix through
+the robot pose nearest it (`robot_to_world`); the left panel also shows the pinger's
+GPS position for direct real-world checking. `WaterfallView` gained an in-view control
+strip — manual zoom −/+ (sharing the wheel-zoom math) and an "AI detections" checkbox
+gating the marker overlay — which, being children of the view, appear in both the main
+and replay windows with no extra wiring.
+
 ## 3. Module map
 
 | Path | Responsibility |
@@ -259,7 +285,8 @@ inversion of the pixel→world formula for the column).
 | `models/` | ROS-free dataclasses: `SonarPing`, `RobotState`, `Detection`, `PingerFix`, `PlannedPath` |
 | `ros/ros_manager.py` | rclpy lifecycle in a background thread; enable-topic publishers; graceful no-ROS degradation |
 | `ros/sonar_listener.py` | `/sss_processor/processed` → `SonarPing` |
-| `ros/telemetry_listener.py` | odom + NavSatFix + compass + VfrHud → `RobotState` (5 Hz) |
+| `ros/telemetry_listener.py` | odom + NavSatFix + compass + VfrHud → `RobotState` (5 Hz); GPS dead-reckoning fallback |
+| `utils/pose_alignment.py` | frozen-pose detector, GPS pose synthesizer, robot→world (sea-trial fix) |
 | `ros/detections_listener.py` | **placeholder** — AI detections integration point |
 | `ros/pinger_listener.py` | USBL pinger (Float32MultiArray [x, y] on /blueboat/pinger_coordinates) |
 | `ros/path_listener.py` | planned mission path (`nav_msgs/Path` from path_publisher.py) |
@@ -273,7 +300,7 @@ inversion of the pixel→world formula for the column).
 | `gui/main_window.py` | composition root; all wiring |
 | `gui/map_view.py` | pan/zoom/click/measure; adaptive grid |
 | `gui/map_layers.py` | tile/mosaic/planned-path/swath/trajectory/detection/pinger/measure layers |
-| `gui/waterfall_view.py` | interactive waterfall (zoom / scroll / pin-to-newest) |
+| `gui/waterfall_view.py` | interactive waterfall (zoom +/- buttons, AI-detection toggle, detection markers) |
 | `gui/log_console.py` | embedded application console (bottom dock) |
 | `gui/live_plot.py` | reusable real-time scrolling plot ("Robot Altitude", …) |
 | `gui/replay_window.py` | SVLOG replay app-in-the-app (range render / x1-x8 replay) |

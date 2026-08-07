@@ -30,7 +30,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from scipy.spatial.transform import Rotation as R  # same dependency as the stack
 from sensor_msgs.msg import NavSatFix
-from std_msgs.msg import Bool, Float32MultiArray, String
+from std_msgs.msg import Bool, Float32MultiArray, Float64, String
 
 from mcs.config.settings import AppConfig
 from mcs.core.signals import SignalBus
@@ -118,6 +118,7 @@ class BridgeNode(Node):
         best_effort = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.create_subscription(Odometry, t.odom, self._on_odom, 10)
         self.create_subscription(NavSatFix, t.gps, self._on_gps, best_effort)
+        self.create_subscription(Float64, t.compass_hdg, self._on_compass, best_effort)
         self.create_subscription(Float32MultiArray, t.pinger_body, self._on_pinger, 10)
         self.create_subscription(Float32MultiArray, t.uw_gps_raw, self._on_uw_gps, 10)
         self.create_subscription(Float32MultiArray, t.monitoring, self._on_monitoring, 10)
@@ -170,6 +171,13 @@ class BridgeNode(Node):
         twist = [tw.linear.x, tw.linear.y, tw.linear.z,
                  tw.angular.x, tw.angular.y, tw.angular.z]
         self._bus.odom_received.emit(t, pose, twist)
+
+    def _on_compass(self, msg: Float64) -> None:
+        # /mavros/global_position/compass_hdg: absolute heading in DEGREES,
+        # clockwise from north (0=N, 90=E). Available immediately, unlike the
+        # launch-zeroed odom yaw — used to orient the glyph from the start.
+        t = self._mark(self._cfg.topics.compass_hdg)
+        self._bus.compass_received.emit(t, float(msg.data))
 
     def _on_gps(self, msg: NavSatFix) -> None:
         t = self._mark(self._cfg.topics.gps)

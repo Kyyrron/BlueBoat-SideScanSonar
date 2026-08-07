@@ -317,6 +317,23 @@ class DesignerMapView(QGraphicsView):
         self.centerOn(cx, cy)
         self._update_tiles()
 
+    def zoom_in(self) -> None:
+        self._zoom_button(1.25)
+
+    def zoom_out(self) -> None:
+        self._zoom_button(1 / 1.25)
+
+    def _zoom_button(self, factor: float) -> None:
+        """Toolbar zoom: anchored on the view centre (wheel zoom stays
+        anchored under the cursor)."""
+        px = abs(self.transform().m11()) * factor
+        if not (0.05 <= px <= 2000.0):
+            return
+        centre = self.mapToScene(self.viewport().rect().center())
+        self.scale(factor, factor)
+        self.centerOn(centre)
+        self._update_tiles()
+
     # ================================================================== input
     def wheelEvent(self, event) -> None:
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15

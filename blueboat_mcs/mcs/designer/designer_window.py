@@ -213,6 +213,63 @@ class DesignerWindow(QMainWindow):
         act(edit, "Redo", self._redo_op, "Ctrl+Y")
         edit.addSeparator()
         act(edit, "Center Pattern", self._center_pattern, "F")
+        act(edit, "Zoom +", lambda: self.map.zoom_in(), "+")
+        act(edit, "Zoom −", lambda: self.map.zoom_out(), "-")
+        edit.addSeparator()
+        align_act = act(edit, "Align to Start", self._align_to_start)
+        align_act.setToolTip(
+            "Rigid-transform the mission so it starts at world (0,0) with "
+            "its first tangent along +x — i.e. at the boat, moving forward, "
+            "every launch (the world frame is zeroed at launch).")
+
+    # ---------------------------------------------------- start alignment
+    def _start_misalignment(self) -> tuple[tuple[float, float], float] | None:
+        """(origin, initial tangent angle) if the mission does not start at
+        (0,0) heading +x within tolerance, else None."""
+        samples = sample_mission(self.model, self._cfg.designer.sample_ds_m)
+        if samples.empty or len(samples.xy) < 2:
+            return None
+        import math as _math
+        p0 = (float(samples.xy[0][0]), float(samples.xy[0][1]))
+        d = samples.xy[1] - samples.xy[0]
+        angle = _math.atan2(float(d[1]), float(d[0]))
+        if _math.hypot(*p0) <= 0.05 and abs(angle) <= _math.radians(2.0):
+            return None
+        return p0, angle
+
+    def _align_to_start(self) -> None:
+        mis = self._start_misalignment()
+        if mis is None:
+            self.statusBar().showMessage(
+                "Mission already starts at (0,0) along +x.", 4000)
+            return
+        self._push_undo()
+        self.model.align_to_start(*mis)
+        self.map.sync_positions()
+        self.statusBar().showMessage(
+            "Mission aligned: starts at the boat, first motion forward.", 5000)
+
+    def _maybe_offer_alignment(self) -> None:
+        """Before saving a NON-GPS mission that does not start at the boat,
+        offer the alignment. GPS-anchored missions are geographically fixed
+        and are never realigned (the boat turns toward them instead)."""
+        if self._active_fit() is not None:
+            return
+        mis = self._start_misalignment()
+        if mis is None:
+            return
+        answer = QMessageBox.question(
+            self, "Align mission to robot start?",
+            "Every launch zeroes the world frame at the boat (origin = boat "
+            "position, +x = boat heading). This mission does not start at "
+            "(0,0) along +x, so the robot would first cut across to it.\n\n"
+            "Align the mission so it starts at the boat and begins by "
+            "moving forward?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if answer == QMessageBox.StandardButton.Yes:
+            self._push_undo()
+            self.model.align_to_start(*mis)
+            self.map.sync_positions()
 
     def _center_pattern(self) -> None:
         """Frame the selection (or, without one, the whole mission) on screen."""
@@ -522,6 +579,7 @@ class DesignerWindow(QMainWindow):
         if not self.model.name:
             self._file_save_as()
             return
+        self._maybe_offer_alignment()
         self._write(self.model.name)
 
     def _file_save_as(self) -> None:
@@ -538,6 +596,7 @@ class DesignerWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if answer != QMessageBox.StandardButton.Yes:
                 return
+        self._maybe_offer_alignment()
         self._write(name)
 
     def _write(self, name: str) -> None:

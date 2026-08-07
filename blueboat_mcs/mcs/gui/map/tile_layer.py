@@ -22,7 +22,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequ
 from PySide6.QtWidgets import QGraphicsItemGroup, QGraphicsPixmapItem, QGraphicsScene
 
 from mcs.config.settings import MapConfig
-from mcs.core.geo import GeoFit, latlon_to_tile_xy, metres_per_pixel, tile_xy_to_latlon
+from mcs.core.geo import GeoFit, latlon_to_local_en, local_en_to_latlon, latlon_to_tile_xy, metres_per_pixel, tile_xy_to_latlon
 
 _LOG = logging.getLogger(__name__)
 _TILE_PX = 256
@@ -55,13 +55,27 @@ class TileLayer:
         self._enabled = enabled
         self._group.setVisible(enabled)
 
-    def update_view(self, fit: GeoFit | None, view_rect_world, px_per_m: float) -> None:
-        """Ensure tiles covering the visible world rect exist at a fitting zoom."""
+    def update_view(self, fit: GeoFit | None, view_rect_world, px_per_m: float,
+                    enu_scene: bool = False) -> None:
+        """Ensure tiles covering the visible scene rect exist at a fitting zoom.
+
+        ``enu_scene`` selects how a scene point maps to lat/lon: in ENU mode
+        the scene axes ARE local east/north, so scene coords convert via the
+        projection origin directly; otherwise the scene is the robot world
+        frame and conversion goes through the georeference rotation."""
         if not self._enabled or fit is None:
             return
+        self._enu_scene = enu_scene
+
+        def scene_to_latlon(sx: float, sy: float) -> tuple[float, float]:
+            if enu_scene:
+                return local_en_to_latlon(sx, sy, fit.lat0, fit.lon0)
+            return fit.world_to_latlon(sx, sy)
+
+        self._scene_to_latlon = scene_to_latlon
         # Pick zoom so one tile pixel ~ one screen pixel.
-        lat_c, _ = fit.world_to_latlon(view_rect_world.center().x(),
-                                       view_rect_world.center().y())
+        lat_c, _ = scene_to_latlon(view_rect_world.center().x(),
+                                   view_rect_world.center().y())
         zoom = self._cfg.tile_max_zoom
         for z in range(3, self._cfg.tile_max_zoom + 1):
             if metres_per_pixel(lat_c, z) * px_per_m <= 1.2:
@@ -85,7 +99,7 @@ class TileLayer:
         ]
         txs, tys = [], []
         for wx, wy in corners:
-            lat, lon = fit.world_to_latlon(wx, wy)
+            lat, lon = scene_to_latlon(wx, wy)
             tx, ty = latlon_to_tile_xy(lat, lon, zoom)
             txs.append(tx)
             tys.append(ty)
@@ -168,11 +182,19 @@ class TileLayer:
         """
         lat_nw, lon_nw = tile_xy_to_latlon(x, y, z)
         lat_c, _ = tile_xy_to_latlon(x + 0.5, y + 0.5, z)
-        wx, wy = fit.latlon_to_world(lat_nw, lon_nw)
         m_per_px = metres_per_pixel(lat_c, z)
-        # Pixel axes: +u east, +v south. World = R(theta) @ EN + t.
         transform = QTransform()
-        transform.translate(wx, wy)
-        transform.rotateRadians(fit.theta)
-        transform.scale(m_per_px, -m_per_px)  # v axis points south => -north
+        if getattr(self, "_enu_scene", False):
+            # ENU scene (north-up fixed): the tile is axis-aligned, NW corner
+            # at its east/north metres, no rotation — this is the QGC look.
+            en, nn = latlon_to_local_en(lat_nw, lon_nw, fit.lat0, fit.lon0)
+            transform.translate(en, nn)
+            transform.scale(m_per_px, -m_per_px)  # +v south => -north
+        else:
+            # World-frame scene (before heading alignment): NW corner mapped
+            # into world metres, tile rotated by the georef theta.
+            wx, wy = fit.latlon_to_world(lat_nw, lon_nw)
+            transform.translate(wx, wy)
+            transform.rotateRadians(fit.theta)
+            transform.scale(m_per_px, -m_per_px)
         item.setTransform(transform)

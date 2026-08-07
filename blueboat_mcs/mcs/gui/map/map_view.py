@@ -23,7 +23,7 @@ from enum import Enum, auto
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QTransform
 from PySide6.QtWidgets import (
     QGraphicsLineItem, QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView,
     QLabel,
@@ -34,7 +34,7 @@ from mcs.core.los_predictor import predict_los_path
 from mcs.gui import theme
 from mcs.gui.map.map_items import (
     CrosshairItem, MarkerItem, MissionPathItem, PolylineItem, RobotItem,
-    TargetLineItem, draw_grid, draw_scale_bar,
+    TargetLineItem, draw_grid, draw_north_indicator, draw_scale_bar,
 )
 from mcs.gui.map.tile_layer import TileLayer
 from mcs.models.store import DataStore
@@ -75,7 +75,15 @@ class MapView(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setBackgroundBrush(QColor(theme.BG_DARK))
-        self.scale(20.0, -20.0)  # ~20 px/m initially, y-up
+        self.scale(20.0, -20.0)  # ~20 px/m initially, y-up (north-up)
+        # QGroundControl-style rendering: the map is ALWAYS north-up and
+        # never rotates. Once the georeference is heading-aligned the scene
+        # is the local east/north (ENU) frame — every world-frame quantity
+        # is converted with GeoFit.world_to_enu() at placement, tiles are
+        # placed north-up, and only the robot glyph rotates (to its TRUE
+        # heading). Before alignment the scene is the raw robot world frame
+        # (world-up); the switch happens once, preserving the framing.
+        self._enu_scene = False
 
         # ---- Layers --------------------------------------------------------
         self.tiles = TileLayer(self._scene, cfg.map)
@@ -197,6 +205,65 @@ class MapView(QGraphicsView):
         self._grid_visible = visible
         self.viewport().update()
 
+    def _to_scene(self, wx: float, wy: float) -> tuple[float, float]:
+        """World-frame point -> current scene coordinates (ENU when the
+        georeference is heading-aligned, else the raw world frame)."""
+        fit = self._store.geo.fit
+        if self._enu_scene and fit is not None:
+            return fit.world_to_enu(wx, wy)
+        return wx, wy
+
+    def _scene_points(self, xy) -> "np.ndarray":
+        if not (self._enu_scene and self._store.geo.fit is not None) or len(xy) == 0:
+            return xy
+        fit = self._store.geo.fit
+        c, s = math.cos(-fit.theta), math.sin(-fit.theta)
+        dx = xy[:, 0] - fit.tx
+        dy = xy[:, 1] - fit.ty
+        out = np.empty_like(xy[:, 0:2])
+        out[:, 0] = c * dx - s * dy
+        out[:, 1] = s * dx + c * dy
+        return out
+
+    def _scene_heading(self, world_yaw: float) -> float:
+        """Glyph heading in scene axes.
+
+        Priority: the absolute true heading from the store
+        (``robot_true_heading()`` — compass first, georef offset otherwise).
+        In the ENU scene that true heading (CCW from east) is already the
+        scene heading. In the world-up scene (before georeferencing) the
+        scene axes are the launch-zeroed world frame, so a TRUE heading is
+        rotated back by the georef ``theta`` when a fit exists; without any
+        fit there is no absolute reference and we fall back to the raw yaw."""
+        true_h = self._store.robot_true_heading()
+        fit = self._store.geo.fit
+        if self._enu_scene and fit is not None:
+            if true_h is not None:
+                return true_h
+            return fit.world_yaw_to_true(world_yaw)
+        # world-up scene
+        if true_h is not None and fit is not None:
+            a = true_h - fit.theta
+            return math.atan2(math.sin(a), math.cos(a))
+        return true_h if true_h is not None else world_yaw
+
+    def _update_scene_mode(self) -> None:
+        """Enable the ENU scene once heading is aligned; keep the current
+        framing (recentre on the robot / view centre) across the switch."""
+        geo = self._store.geo
+        want = geo.fit is not None and geo.heading_aligned
+        if want == self._enu_scene:
+            return
+        centre_world = None
+        r = self._store.robot
+        if r.has_odom:
+            centre_world = (r.x, r.y)
+        self._enu_scene = want
+        if centre_world is not None:
+            sx, sy = self._to_scene(*centre_world)
+            self.centerOn(sx, sy)
+        self.viewport().update()
+
     # ================================================================ refresh
     def refresh(self) -> None:
         """Called at the UI tick (10 Hz): pull the store, update items."""
@@ -210,34 +277,37 @@ class MapView(QGraphicsView):
             t0 = store.t0 + self._window[0]
             t1 = store.t0 + self._window[1]
 
+        self._update_scene_mode()
+
         max_pts = self._cfg.map.trajectory_max_points_drawn
         _, xy = store.robot_track.decimated_window(t0, t1, max_pts)
-        self.robot_track.set_points(xy[:, 0:2] if len(xy) else np.empty((0, 2)))
+        self.robot_track.set_points(self._scene_points(xy[:, 0:2])
+                                    if len(xy) else np.empty((0, 2)))
         _, pxy = store.pinger_track.decimated_window(t0, t1, max_pts)
-        self.pinger_track.set_points(pxy if len(pxy) else np.empty((0, 2)))
+        self.pinger_track.set_points(self._scene_points(pxy)
+                                     if len(pxy) else np.empty((0, 2)))
 
         if robot.has_odom:
-            # Retrieve the yaw offset from the data store (default to 0.0 if undefined)
-            yaw_offset = getattr(robot, 'yaw_offset', 0.0)
-            
-            # Pass the yaw_offset to the RobotItem
-            self.robot_item.set_pose(robot.x, robot.y, robot.yaw, yaw_offset)
-            
+            sx, sy = self._to_scene(robot.x, robot.y)
+            # Map never rotates; the glyph rotates to its true heading.
+            self.robot_item.set_pose(sx, sy, self._scene_heading(robot.yaw))
             if not self._did_initial_center:
-                self.centerOn(robot.x, robot.y)
+                self.centerOn(sx, sy)
                 self._did_initial_center = True
 
         has_pinger = self._store.pinger.world is not None
         self.pinger_marker.setVisible(self._pinger_layer_enabled and has_pinger)
         if has_pinger:
-            self.pinger_marker.set_world_pos(*self._store.pinger.world)
+            self.pinger_marker.set_world_pos(*self._to_scene(*self._store.pinger.world))
 
-        if store.mission_path is not None:
-            self.mission_path.set_points(store.mission_path[:, 0:2])
+        if store.mission_path is not None and store.world_frame_ready():
+            self.mission_path.set_points(self._scene_points(store.mission_path[:, 0:2]))
 
         target = store.active_target_world()
         if target is not None and robot.has_odom:
-            self.target_line.set_endpoints(robot.x, robot.y, *target)
+            rsx, rsy = self._to_scene(robot.x, robot.y)
+            tsx, tsy = self._to_scene(*target)
+            self.target_line.set_endpoints(rsx, rsy, tsx, tsy)
         else:
             self.target_line.setLine(0, 0, 0, 0)
 
@@ -246,6 +316,7 @@ class MapView(QGraphicsView):
             store.geo.fit if store.geo.is_valid else None,
             self.mapToScene(self.viewport().rect()).boundingRect(),
             self._px_per_m(),
+            enu_scene=self._enu_scene,
         )
         if self._grid_visible:
             self.viewport().update()
@@ -258,7 +329,8 @@ class MapView(QGraphicsView):
             return
         pts = predict_los_path(
             (store.robot.x, store.robot.y, store.robot.yaw), mt, self._cfg.los)
-        self.predicted_path.set_points(pts)
+        self.predicted_path.set_points(self._scene_points(np.asarray(pts))
+                                       if len(pts) else np.empty((0, 2)))
         d = math.hypot(mt[0] - store.robot.x, mt[1] - store.robot.y)
         if d <= self._cfg.los.reached_distance_m and not self._reached_announced:
             self._reached_announced = True
@@ -274,9 +346,12 @@ class MapView(QGraphicsView):
     # ============================================================== painting
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         super().drawBackground(painter, rect)
-        if self._grid_visible:
-            self._grid_spacing = draw_grid(painter, rect, self._px_per_m(),
-                                           high_contrast=self.tiles.enabled)
+        if not self._grid_visible:
+            return
+        # The scene is axis-aligned (world-up before alignment, ENU/north-up
+        # after), so a normal scene-space grid is already screen-aligned.
+        self._grid_spacing = draw_grid(painter, rect, self._px_per_m(),
+                                       high_contrast=self.tiles.enabled)
 
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
         super().drawForeground(painter, rect)
@@ -284,9 +359,18 @@ class MapView(QGraphicsView):
             draw_scale_bar(painter, self.viewport().width(),
                            self.viewport().height(), self._px_per_m(),
                            getattr(self, "_grid_spacing", 0.0))
+        draw_north_indicator(painter, self.viewport().width(), self._enu_scene)
 
     def _px_per_m(self) -> float:
+        # The view is never rotated (north-up fixed), so the horizontal
+        # scale magnitude is the pixels-per-metre.
         return abs(self.transform().m11())
+
+    @property
+    def north_up(self) -> bool:
+        """True when the scene is ENU (map north-up and geographically
+        oriented). Before heading alignment the map is world-up."""
+        return self._enu_scene
 
     # ============================================================= map tools
     def zoom_in(self) -> None:
