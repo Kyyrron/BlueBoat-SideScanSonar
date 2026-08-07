@@ -6,7 +6,10 @@ def wrap_angle(a):
 
 
 class PID:
-    def __init__(self, kp, ki, kd, dt, gain_divisor=1.0):
+    def __init__(self, kp, ki, kd, dt):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
         self.dt = dt
         self.gain_divisor = gain_divisor
         self.integral = 0.0

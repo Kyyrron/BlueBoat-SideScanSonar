@@ -81,7 +81,7 @@ class Controller(Node):
 
         self.time_set = False
         self.initial_time = None
-        self.dt = 1.0
+        self.dt = 0.05                     # 20 Hz control loop (was 1.0 Hz)
         self.timer = self.create_timer(self.dt, self.timer_callback)
 
         self.current_pose = None
@@ -138,10 +138,11 @@ class Controller(Node):
 
             # Real gains
             self.outer_gains = {'x': (3., 0.01, 0.),
-                                'psi': (1.2, 0.01, 0.)}
+                                'psi': (3.0, 0.01, 0.)}
+                                # 'psi': (1.2, 0.01, 0.)}
 
             self.inner_gains = {'u': (1., 0., 0.),
-                                'r': (1., 0., 0.)}
+                                'r': (1.5, 0., 0.)}
             
             self.thruster_limits = {"min": np.array([-20.0, -20.0]),   
                                     "max": np.array([ 20.0,  20.0])}
