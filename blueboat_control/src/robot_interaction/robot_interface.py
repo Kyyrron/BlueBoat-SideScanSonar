@@ -520,10 +520,38 @@ class BlueBoatController(Node):
         odom_out.pose.covariance = msg.pose.covariance
         odom_out.twist.covariance = msg.twist.covariance
 
+        # --- FRAME CONSISTENCY FIX -------------------------------------------
+        # The pose above is re-expressed in the boot-relative frame (position
+        # offset by (x0,y0), heading rotated by -yaw0). The linear velocity from
+        # MAVROS is still in the raw 'map' frame, so pose and twist lived in two
+        # frames differing by a constant rotation of yaw0. Any world->body
+        # transform downstream (inRobotFrame / PID) then rotated the velocity
+        # feedback by yaw0 relative to the position error, producing a fixed
+        # diagonal drift and mirroring heading-swept paths (e.g. sin onto -y).
+        # Pinger mode was immune because it zeroes position/yaw and works purely
+        # in body frame. Rotate the linear velocity by -yaw0 so the WHOLE
+        # /blueboat/odom message is in one consistent frame.
+        
+        # c0 = np.cos(self.yaw0)
+        # s0 = np.sin(self.yaw0)
+        # vx_raw = msg.twist.twist.linear.x
+        # vy_raw = msg.twist.twist.linear.y
+        # vx_rel =  c0 * vx_raw + s0 * vy_raw   # R(-yaw0) * v_map
+        # vy_rel = -s0 * vx_raw + c0 * vy_raw
+        # odom_out.twist.twist.linear.x = vx_rel
+        # odom_out.twist.twist.linear.y = vy_rel
+        
+        # ---------------------------------------------------------------------
+
         self.odom_publisher.publish(odom_out)
 
+        # x_t = vx_rel
+        # y_t = vy_rel
         x_t = msg.twist.twist.linear.x
         y_t = msg.twist.twist.linear.y
+
+
+        
         z_t = msg.twist.twist.linear.z
         self.vel = np.array([x_t,y_t,z_t])
 

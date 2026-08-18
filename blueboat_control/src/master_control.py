@@ -1,18 +1,35 @@
 #!/usr/bin/env python3
 
 # ============================================================================
-# PATCHED for the Mission Control Station (logging update).
-# The ONLY changes relative to the original file are marked with
-# "# --- world-frame monitoring target ---":
-#   the monitored /monitoring_data target (x_d, y_d, psi_d) is now the
-#   WORLD-frame target for EVERY branch. Previously the LoS-path, manual and
-#   pinger branches overwrote `target` with its robot-frame conversion
-#   before the monitoring block, so downstream consumers (the station's map
-#   display and robot_interface's no-pinger CSV log) received body-frame
-#   coordinates for those branches and world-frame for MPC/PID -- the
-#   "broken target logging without pinger". Control behaviour is untouched:
-#   the robot-frame conversion still feeds solve_LoS / PID exactly as
-#   before, and /controller_target keeps its original (robot-frame) content.
+# PATH-FOLLOWING REWORK.
+#
+# The reference used to be played on a WALL CLOCK:
+#   request.path_request.data = linspace(time.time()-t0, ..., steps)
+# so the desired pose advanced with real time regardless of where the boat
+# actually was. Combined with a 1 Hz control loop (self.dt = 1.0), the boat
+# received a target that ran away along the path and updated only once per
+# second, producing smooth path-blind arcs with no resemblance to the path.
+#
+# This version:
+#   * runs the control loop at 20 Hz (self.dt = 0.05);
+#   * advances a PATH PARAMETER tau with a GOVERNOR that moves the virtual
+#     target at the path's authored speed when the boat keeps up, and slows
+#     or pauses tau when the boat falls behind, so the reference can never
+#     outrun the boat. The authored speed can vary along the path (it is the
+#     spatial rate of the parameterization), so a spatially varying speed
+#     profile is followed for free. A global self.path_speed_scale scales it.
+#   * uses canonical Fossen lookahead LoS for the 'LoS' controller type and
+#     adds path-speed feedforward to the 'PID' controller.
+#
+# INTERFACES ARE UNCHANGED: same node name/namespace, same topics, same
+# /path_request service (an array of parameter values in, a Path out -- so
+# path_generation.py needs no change), same message types, same
+# controller_type options, same monitoring format, same pinger and manual
+# behavior. Only the internals of how the reference is generated and how LoS
+# is computed have changed.
+#
+# Retains the world-frame monitoring target fix ("# --- world-frame
+# monitoring target ---").
 # ============================================================================
 
 ### FOR MANUAL TARGET IMPLEMENTATION IN THE VISUALISATION APP ###
@@ -43,6 +60,11 @@ import PID
 from blueboat_control import ROV
 from blueboat_interfaces.srv import RequestPath
 import custom_functions as cf
+
+
+def _wrap(a):
+    return (a + np.pi) % (2 * np.pi) - np.pi
+
 
 class Controller(Node):
     def __init__(self):
@@ -95,6 +117,16 @@ class Controller(Node):
         # Initialize controller 
         self.controller_path = Path()
 
+        # ---- Path-parameter governor state ----------------------------------
+        # tau is the path parameter of the virtual target (same units as the
+        # path_generation time argument). It advances by the governor, NOT by
+        # the wall clock.
+        self.tau = 0.0
+        self.path_speed_scale = 1.0   # global multiplier on the authored speed
+        self.gov_Lmin = 0.5           # gap (m) below which tau runs at full authored speed
+        self.gov_Lmax = 3.0           # gap (m) above which tau pauses (boat too far behind)
+        # ---------------------------------------------------------------------
+
         # MPC Parameters
         if self.controller_type == 'MPC':
             self.mpc_horizon = 15
@@ -129,13 +161,6 @@ class Controller(Node):
             self.path_time = self.dt
             self.path_steps = 2
             
-            # Simulation gains
-            # self.outer_gains = {'x': (25., 5., 0.),
-            #                     'psi': (15., 2., 0.)}
-
-            # self.inner_gains = {'u': (1., 0., 0.),
-            #                     'r': (1., 0., 0.)}
-
             # Real gains
             self.outer_gains = {'x': (3., 0.01, 0.),
                                 'psi': (3.0, 0.01, 0.)}
@@ -152,10 +177,26 @@ class Controller(Node):
                                           [0.        ,0.],
                                           [radius,-radius]])
 
+            self.pid_lookahead = 2.5   # LoS lookahead distance Delta (m) for PID guidance
+
         # LoS Parameters
         if self.controller_type ==  'LoS':
             self.path_time = self.dt
             self.path_steps = 2
+
+            radius = 0.59/2
+            self.B_matrix = np.array([[1.        ,1.],
+                                      [0.        ,0.],
+                                      [radius,-radius]])
+            self.thruster_limits = {"min": np.array([-20.0, -20.0]),
+                                    "max": np.array([ 20.0,  20.0])}
+            # Kinematic Fossen-LoS gains
+            self.los_lookahead = 2.5   # lookahead distance Delta (m)
+            self.los_ku = 8.0          # surge speed error -> force
+            self.los_kpsi = 10.0        # heading error -> yaw moment
+            self.los_kd = 1.0          # yaw-rate damping
+            self.los_speed_scale = 1.0 # multiplier on authored speed for LoS
+            self.los_allocator = PID.ThrustAllocator(self.B_matrix, limits=self.thruster_limits)
 
         if self.isSimulation:
             self.k_v = 2.0
@@ -203,18 +244,89 @@ class Controller(Node):
     def manual_target_callback(self, msg: Float32MultiArray):
         self.manual_target = msg.data # [x,y] in world frame
 
+    # ------------------------------------------------------------------ #
+    #  Path parameter governor                                           #
+    # ------------------------------------------------------------------ #
+    def path_progress_errors(self, path, state):
+        """
+        From the current path window (poses[0] = virtual target at tau,
+        poses[1] = a step further along), return:
+          e_along : signed along-track gap boat->target  (target ahead > 0)
+          e_y     : signed cross-track error of the boat
+          gamma_p : path-tangent heading at the target
+          U_d     : authored path speed at the target (m/s)
+        """
+        p0 = path.poses[0].pose
+        p1 = path.poses[1].pose if len(path.poses) > 1 else path.poses[0].pose
+
+        x0, y0 = p0.position.x, p0.position.y
+        gamma_p = cf.quaternion_to_yaw(p0.orientation)
+
+        dtau = self.path_time / max(1, (self.path_steps - 1))
+        U_d = math.hypot(p1.position.x - x0, p1.position.y - y0) / dtau if dtau > 0 else 0.0
+
+        xb, yb = state[0], state[1]
+        c, s = math.cos(gamma_p), math.sin(gamma_p)
+        e_along =  (x0 - xb) * c + (y0 - yb) * s
+        e_y     = -(xb - x0) * s + (yb - y0) * c
+        return e_along, e_y, gamma_p, U_d
+
+    def advance_governor(self, e_along):
+        """
+        Advance the path parameter tau. When the along-track gap is small the
+        target moves at the authored speed (tau_dot = speed_scale); as the gap
+        approaches gov_Lmax the target slows and finally pauses, so the boat
+        can always catch up. Never moves backward.
+        """
+        span = max(1e-6, (self.gov_Lmax - self.gov_Lmin))
+        factor = np.clip((self.gov_Lmax - e_along) / span, 0.0, 1.0)
+        tau_dot = self.path_speed_scale * factor
+        self.tau += tau_dot * self.dt
+
+    # ------------------------------------------------------------------ #
+    #  Perfected line-of-sight guidance (kinematic, 'LoS' controller)    #
+    # ------------------------------------------------------------------ #
+    def los_guidance(self, target6, state):
+        """
+        Canonical Fossen lookahead LoS to the path point described by
+        target6 = [x_ref, y_ref, gamma_p, U_d, *_]:
+            psi_d = gamma_p + atan2(-e_y, Delta)
+        Surge command is the authored speed, reduced while turning hard.
+        Returns differential thrust [f_right, f_left].
+        """
+        x, y, psi = state[0], state[1], state[2]
+        u = state[3]
+        r = state[5]
+
+        x_ref, y_ref, gamma_p = target6[0], target6[1], target6[2]
+        U_d = target6[3]
+
+        c, s = math.cos(gamma_p), math.sin(gamma_p)
+        e_y = -(x - x_ref) * s + (y - y_ref) * c
+
+        psi_d = gamma_p + math.atan2(-e_y, self.los_lookahead)
+        psi_err = _wrap(psi_d - psi)
+
+        u_cmd = self.los_speed_scale * U_d * max(0.0, math.cos(psi_err))
+
+        X = self.los_ku * (u_cmd - u)
+        N = self.los_kpsi * psi_err - self.los_kd * r
+
+        thrusts = self.los_allocator.allocate(np.array([X, 0.0, N]))
+        return thrusts
+
     def solve_LoS(self, target, current_time):
+        # POINT line-of-sight (used for pinger / manual targets, body frame).
+        # Unchanged from the working version.
         x,y,z = target
 
         yaw_rate = self.k_psi * np.arctan2(y,x)
         d = np.sqrt(x**2+y**2)
         v = self.k_v * d
         v = 5*np.log(v+1)
-        # v = 2*np.log(v+1)
 
         if list(self.manual_target) != [0.0,0.0]:
-            v = 10*np.log(v+1) # If manual  target, go faster. Don't need to be that precise here.
-            
+            v = 10*np.log(v+1) # If manual target, go faster. Don't need to be that precise here.
 
         thruster_input = [0,0]
 
@@ -228,15 +340,12 @@ class Controller(Node):
                 self.stopping_sequence = True
                 self.stopping_time = current_time
 
-        # As a safety, if the target is close enough, briefly move back (otherwise te robot will still glide to position) then stop
+        # As a safety, if the target is close enough, briefly move back then stop
         else: 
             if current_time - self.stopping_time < 1.0:
                 thruster_input = [-1.,-1.]
             else:
                 thruster_input = [0.,0.]
-
-        # self.get_logger().info(f"Pinger coordinates (robot frame): \n{x}, {y}")
-        # self.get_logger().info(f"Computed thrust: \n{thruster_input[0]}, {thruster_input[1]}")
 
         return thruster_input
 
@@ -283,8 +392,8 @@ class Controller(Node):
                                              B = self.B_matrix,
                                              outer_gains = self.outer_gains,
                                              inner_gains = self.inner_gains,
-                                             thruster_limits = self.thruster_limits,
-                                             gain_divisor = 1.5
+                                             lookahead = self.pid_lookahead,
+                                             thruster_limits = self.thruster_limits
                                              )
 
             self.get_logger().info('Controller node initiated')
@@ -292,17 +401,28 @@ class Controller(Node):
 
         if not self.time_set:
             self.initial_time = time.time()
+            self.tau = 0.0
             self.time_set = True
         
         current_time = time.time() - self.initial_time
 
-        ## Update path
-        # IMPORTANT CHANGE: the loop no longer returns while a path request is
-        # pending. Previously, a slow /path_request service froze the whole
-        # control loop (no thrust update at all for that time). Now the last
-        # received path keeps being tracked, and a new request is only issued
-        # once the previous one has completed.
+        ## Boat state (needed by the governor, so compute it up front)
+        if self.current_pose is None or self.current_twist is None:
+            return
+
+        current_state = np.array([self.current_pose[0], # x
+                                self.current_pose[1], # y
+                                self.current_pose[5], # yaw
+                                self.current_twist[0], # u (body surge)
+                                self.current_twist[1], # v (body sway)
+                                self.current_twist[5]]) # r
+        current_state = np.array(current_state).reshape(-1)
+
+        manual_active = (list(self.manual_target) != [0.0, 0.0])
+
+        ## Update path (parameter-governed, NOT wall-clock)
         if not self.use_pinger:
+            # Collect a completed request
             if self.future is not None and self.future.done():
                 try:
                     result = self.future.result()
@@ -315,37 +435,31 @@ class Controller(Node):
                 finally:
                     self.future = None
 
-            if self.future is None:
-                # Send new request
-                request = RequestPath.Request()
-                request.path_request.data = np.linspace(current_time, current_time + self.path_time, int(self.path_steps), dtype=float)
+            # Advance the governor using the boat's progress along the current
+            # window (frozen while a manual target overrides path following).
+            if self.controller_path.poses and not manual_active:
+                e_along, _, _, _ = self.path_progress_errors(self.controller_path, current_state)
+                self.advance_governor(e_along)
 
+            # Issue the next request at the (governed) parameter tau
+            if self.future is None:
+                request = RequestPath.Request()
+                request.path_request.data = np.linspace(self.tau,
+                                                         self.tau + self.path_time,
+                                                         int(self.path_steps), dtype=float)
                 self.future = self.client.call_async(request)
             # else: previous request still pending - keep controlling on the last path
 
         ## Compute thrust
-        # Thruster input
         u = [0]*2
 
-        if self.current_pose is None or self.current_twist is None:
-            return
-        
-        current_state = np.array([self.current_pose[0], # x
-                                self.current_pose[1], # y
-                                self.current_pose[5], # yaw
-                                self.current_twist[0], # u
-                                self.current_twist[1], # v
-                                self.current_twist[5]]) # r
-
-        current_state = np.array(current_state).reshape(-1)
-
-        if list(self.manual_target) != [0.0,0.0]: # If a manual target is set, use it instead with LoS
-            target = [*self.manual_target[:2], 0, 0, 0, 0] # We don't need to use the yaw for LoS, so we set it to 0
+        if manual_active: # Manual target overrides: point LoS (unchanged)
+            target = [*self.manual_target[:2], 0, 0, 0, 0] # yaw unused for LoS
             world_target = list(target[:3])  # --- world-frame monitoring target ---
             target = self.inRobotFrame(current_state, target)
             u = self.solve_LoS(target, current_time)
 
-        elif self.controller_path.poses: # Make sure the path is not empty
+        elif self.controller_path.poses: # Path following
             # Display the current desired pose if using gazebo
             if self.isSimulation:
                 desired_pose = self.controller_path.poses[0].pose
@@ -363,22 +477,18 @@ class Controller(Node):
             if self.controller_type == 'PID':
                 target = cf.compute_target(self.controller_path, self.dt)
                 world_target = list(target[:3])  # --- world-frame monitoring target ---
-                u,_ = self.controller.compute(current_state, target[:3])
-                self.get_logger().info(f'\nState: {current_state} \n Target: {target} \nThrust: {u}')
-                
+                # Feed path tangent (target[2]) and authored speed (target[3])
+                # so LoS steering and speed feedforward use the real path.
+                u,_ = self.controller.compute(current_state, target[:3],
+                                              u_ff=target[3], psi_path=target[2])
 
             if self.controller_type == 'LoS':
                 target = cf.compute_target(self.controller_path, self.dt)
                 world_target = list(target[:3])  # --- world-frame monitoring target ---
-                target = self.inRobotFrame(current_state, target)
-                u = self.solve_LoS(target, current_time)
+                u = self.los_guidance(target, current_state)
         
         elif self.use_pinger and self.pinger_target is not None: # MPC is not supported for this
             # --- world-frame monitoring target ---
-            # pinger_target is BODY-frame: convert with the (not yet
-            # modified) current pose so the monitored target is world-frame
-            # like every other branch. Must run BEFORE the PID branch below,
-            # which zeroes current_state[[0,1,2]] for robot-frame control.
             px, py = float(self.pinger_target[0]), float(self.pinger_target[1])
             c_m, s_m = np.cos(current_state[2]), np.sin(current_state[2])
             world_target = [current_state[0] + c_m*px - s_m*py,
@@ -396,7 +506,7 @@ class Controller(Node):
 
             # Publish controller target (for data recording)
             msg = Float32MultiArray()
-            msg.data = target
+            msg.data = [float(v) for v in target]
             self.target_publisher.publish(msg)
 
         else:
@@ -419,25 +529,22 @@ class Controller(Node):
 
         # Publish thruster input
         msg = Float32MultiArray()
-        msg.data = u
+        msg.data = [float(v) for v in u]
         self.thruster_input_publisher.publish(msg)
 
         if self.pinger_target is not None and self.use_pinger:
             self.get_logger().info(f'\nPinger coordinates robot frame: \n{self.pinger_target}')
-        if list(self.manual_target)[:2] != [0.0,0.0]:
+        if manual_active:
             target_str = ", ".join(f"{float(x):.2f}" for x in list(self.manual_target))
             self.get_logger().info(f'\nManual target coordinates: \n{target_str}')
-        # self.get_logger().info(f'Pose: {self.current_pose} \nTwist: {self.current_twist} \nComputed thrust: {u}')
 
         # Update and save monitoring metrics to be graphed later
-        if self.controller_path.poses or (self.use_pinger and self.pinger_target is not None):
+        if self.controller_path.poses or (self.use_pinger and self.pinger_target is not None) or manual_active:
             x_m   = current_state[0]
             y_m   = current_state[1]
             psi_m = current_state[2]
 
             # --- world-frame monitoring target ---
-            # world_target is set by every branch above; fall back to the
-            # raw target defensively if a future branch forgets it.
             try:
                 monitored = world_target
             except NameError:
@@ -453,10 +560,10 @@ class Controller(Node):
             self.monitoring.append(data_array)
 
             publisher_msg = Float32MultiArray()
-            publisher_msg.data = data_array
+            publisher_msg.data = [float(v) for v in data_array]
             self.data_publisher.publish(publisher_msg)
 
-            if (current_time - self.t_record) > 0.1: # Update the saved file at set interval as doing so every step may corrupt the file if the callback is too frequent
+            if (current_time - self.t_record) > 0.1: # Update the saved file at set interval
                 self.t_record = current_time
                 np.save(self.title, self.monitoring)
         
