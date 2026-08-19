@@ -1,0 +1,15 @@
+[submodule "BlueBoat-Control"]
+	path = BlueBoat-Control
+	url = https://github.com/Kyyrron/BlueBoat-Control.git
+[submodule "BlueBoat-SSS-Sim"]
+	path = BlueBoat-SSS-Sim
+	url = https://github.com/Kyyrron/BlueBoat-SSS-Sim.git
+[submodule "BlueBoat-SSS"]
+	path = BlueBoat-SSS
+	url = https://github.com/Kyyrron/BlueBoat-SSS.git
+[submodule "BlueBoat-MCS"]
+	path = BlueBoat-MCS
+	url = https://github.com/Kyyrron/BlueBoat-MCS.git
+[submodule "SSS-Dataset-Aug-Studio"]
+	path = SSS-Dataset-Aug-Studio
+	url = https://github.com/Kyyrron/SSS-Dataset-Aug-Studio.git
