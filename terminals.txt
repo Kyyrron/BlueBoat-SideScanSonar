@@ -34,6 +34,8 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: move 3 3 2"
 
 ----- App Simu SSS
 
+    cd ~/ros2_ws/
+    source env.sh
     cd src/BlueBoat-SideScanSonar/BlueBoat-SSS-Sim/blueboat_sss_sim
     ros2 run blueboat_sss_sim generate_mission \
         --config $(ros2 pkg prefix blueboat_sss_sim)/share/blueboat_sss_sim/config/default_mission.yaml \

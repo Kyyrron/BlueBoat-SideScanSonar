@@ -126,6 +126,12 @@ needs copying onto the boat beyond a normal `colcon build` of `BlueBoat-Control`
 
 ---
 
+## 2.1 Git operations — session boundary
+
+**Sessions never run `git commit` or `git push`, in the superproject or in any submodule.**
+Make the requested file changes and stop there; the user handles staging, committing and
+pushing themselves, everywhere in this tree.
+
 ## 3. Git architecture
 
 The top-level repository is a **superproject**. The five module directories are git
@@ -278,7 +284,7 @@ so a torn row is signalled by the gap *changing*, never by it being non-zero.
 | `/mavros/state` | `mavros_msgs/State` | in | `robot_interface`; MCS (only when `mavros_msgs` imports — absent in simulation) |
 | `/mavros/imu/data` | `sensor_msgs/Imu` | in | `robot_interface` |
 | `/mavros/local_position/odom` | `nav_msgs/Odometry` | in | `robot_interface` |
-| `/mavros/global_position/global` | `sensor_msgs/NavSatFix` | in | `robot_interface`, GCS, MCS — **BEST_EFFORT**; `lat==0 and lon==0` means no fix and is discarded |
+| `/mavros/global_position/global` | `sensor_msgs/NavSatFix` | in | `robot_interface`, GCS, MCS — **BEST_EFFORT**; `lat==0 and lon==0` means no fix and is discarded. In a Gazebo run of a GPS-anchored mission, **MCS is the only publisher** (its bridge synthesises the fixes from sim odom, ~5 Hz, and leaves `status` at the ROS 2 Iron+ message default **-2 / STATUS_UNKNOWN**) — so a consumer must not treat every negative status as "no fix"; only `-1` (STATUS_NO_FIX) means that. The GCS gate (`utils/geodesy.navsat_fix_ok`) rejecting all `status < 0` was the "GCS sees no GPS while MCS anchors" bug (fixed 2026-09-01) |
 | `/mavros/global_position/compass_hdg` | `std_msgs/Float64` | in | MCS, GCS. Degrees **clockwise from north**; MCS converts as `radians(90 - hdg)`. Preferred heading source; odom yaw (absolute ENU since 2026-08-31) is the fallback |
 | `/mavros/rc/override` | `mavros_msgs/OverrideRCIn` | out | `robot_interface` at ~20 Hz, latest-wins |
 
@@ -525,11 +531,12 @@ type-checker and CI. The test gates are per-module:
 smoke_test.py` (MCS, 14 checkpoints, passing), `pytest` (Aug Studio, 64 tests at v0.4.0,
 10 marked `gui`, all passing; a no-PySide6 environment skips the Qt suite and stays green),
 `QT_QPA_PLATFORM=offscreen python3 -m pytest` from `BlueBoat-SSS/blueboat_sss/`
-(110 tests: an 85-test GCS regression suite needing no ROS, plus 25 robot-side tests that
+(214 tests: a 185-test GCS regression suite needing no ROS, one rclpy-gated MCS
+sim-GPS compatibility test, plus 28 robot-side tests that
 run only when `blueboat_interfaces` is on the path; also wired as a pre-commit hook). Every
 test that reproduces a MEASURED field number is gated on a `.svlog` corpus at a hard-coded
 external mount and skips when it is absent — with neither the corpus nor
-`blueboat_interfaces`, 50 pass and 60 skip. Like the other modules' harnesses, **this gate
+`blueboat_interfaces`, 151 pass and 63 skip (globally-sourced Jazzy machine). Like the other modules' harnesses, **this gate
 is not in a fresh clone either:** `BlueBoat-SSS/.gitignore` excludes `.githooks/`,
 `requirements-dev.txt` and `.claude/specs`, and `blueboat_sss/tests/`,
 `blueboat_sss/pytest.ini`, `blueboat_gcs/analysis/` and `.claude/skills/` are untracked.
