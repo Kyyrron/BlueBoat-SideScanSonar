@@ -33,21 +33,22 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: move 3 3 2"
     ros2 launch blueboat_sss SSS_simple_launch.py
 
 ----- App Simu SSS
-
+    
+    Create or edit worlds
+    
     cd ~/ros2_ws/
     source env.sh
-    cd src/BlueBoat-SideScanSonar/BlueBoat-SSS-Sim/blueboat_sss_sim
-    ros2 run blueboat_sss_sim generate_mission \
-        --config $(ros2 pkg prefix blueboat_sss_sim)/share/blueboat_sss_sim/config/default_mission.yaml \
-        --out ~/sim_runs/r2 --seed 7 --speed 0.5
+    ros2 run blueboat_sss_sim world_builder
 
-        # in ros2_ws/
-    cd ../../../../..
-    ros2 launch blueboat_sss_sim full_mission_launch.py mission_dir:=$HOME/sim_runs/r2
+    Visualisation in Gazebo
 
-    ros2 run blueboat_sss_sim export_scene_maps --bundle ~/sim_runs/r2
+    ros2 launch blueboat_sss_sim sim_world_launch.py world_dir:=$HOME/worlds/<p>/<w>
+    ros2 launch blueboat_sss_sim full_mission_launch.py world_dir:=$HOME/worlds/<p>/<w> 
+    ros2 launch blueboat_sss_sim full_mission_launch.py world_dir:=$HOME/worlds/<p>/<w> with_control:=true trajectory_file:=$HOME/.config/blueboat_mcs/trajectories/.deployed/testGPS.yaml
 
------ Live 
+
+
+----- Legacy
 
     1. Launch file
     ros2 launch blueboat_sss SSS_launch.py
@@ -67,23 +68,3 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: move 3 3 2"
     ros2 topic pub --once /sss_processor/log/enable std_msgs/msg/Bool 'data: false'
 
 
------ Offline
-
-    1. Python files
-    After an experiment: build the map (from /ros2_ws)
-
-    python3 src/BlueBoat-SideScanSonar/BlueBoat-SSS/blueboat_sss/custom_scripts/processed_sss_printer.py 
-
-    Svlog_to_rosbag (from /ros2_ws)
-
-    python3 src/BlueBoat-SideScanSonar/BlueBoat-SSS/blueboat_sss/custom_scripts/svlog_to_rosbag.py 
-
-    2. Launch file
-
-    ros2 launch blueboat_sss SSS_launch.py will_use_rosbag:=True
-
-    3. Start logging again if necessary (see Live section)
-
-    4. Start rosbag playing (in the rosbag's folder folder)
-
-    ros2 bag play output_bag

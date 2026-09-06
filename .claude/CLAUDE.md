@@ -53,7 +53,7 @@ Boundary of each module's responsibility:
 | **BlueBoat-SSS** — `blueboat_sss` | boat | Sonar acquisition, slant-range correction, bottom tracking, `.svlog` |
 | **BlueBoat-SSS** — `blueboat_gcs` | basestation | Live mosaic, overlays, recording sessions, seabed images |
 | **BlueBoat-MCS** | basestation | Mission launch/supervision, pattern designer, safe shutdown |
-| **BlueBoat-SSS-Sim** | either | Synthetic worlds + a drop-in replacement for the real sonar interface |
+| **BlueBoat-SSS-Sim** | either | GPS-anchored Gazebo worlds (World Builder GUI over MCS anchored paths) + a drop-in replacement for the real sonar interface + the **sea state** (current/waves into Gazebo, `sea_state_node`) |
 | **SSS-Dataset-Aug-Studio** | basestation | Physics-informed augmentation of YOLO datasets (offline, file-level only) |
 
 The **belief layer is the only object the replanner reads**; detector, sensor and planner
@@ -105,11 +105,13 @@ a GUI-only mode when it is absent. The Aug Studio has no ROS dependency in any m
 
 **Package naming in the simulator (VERIFIED, current state).** The name is
 `blueboat_sss_sim` everywhere — `package.xml` `<name>`, `setup.py` `package_name`, the ament
-resource marker, `setup.cfg`'s `script_dir`, the Python module directory, and all nine
+resource marker, `setup.cfg`'s `script_dir`, the Python module directory, and all eight
 `console_scripts`. Both `ros2 launch blueboat_sss_sim …` and `ros2 run blueboat_sss_sim …`
 resolve; the installed `lib/blueboat_sss_sim/` carries `sss_sim_node`,
-`dataset_recorder_node`, `sss_path_generation`, `mavros_shim_node`, `generate_world`,
-`generate_mission`, `export_scene_maps`, `mission_metrics` and `sss_calibration_report`.
+`mavros_shim_node`, `world_builder`, `generate_world`, `export_scene_maps`,
+`mission_metrics`, `sss_calibration_report` and `sss_svlog_compare` (the 2026-09 rework deleted
+`dataset_recorder_node`, `sss_path_generation` and `generate_mission`; a stale
+install may still carry them until the next `colcon build`).
 Offline tools also run as `python3 -m blueboat_sss_sim.<module>` from the package source
 root. The rename is done; `simTODO.md` no longer carries a [P0].
 
@@ -177,25 +179,29 @@ as written (`ctrlCLAUDE.md` §2).
 |---|---|---|---|---|---|
 | `/blueboat/odom` | `nav_msgs/Odometry` | `robot_interface` (real) · Gazebo bridge (sim, `odom_topic` param) | `master_control`, `sss_processor_node`, `sss_sim_node`, GCS, MCS | default 10 | **Disagreement resolved (2026-08-31): both publish local ENU.** Real: position translated at `robot_interface`'s first callback (world origin = boat at launch), axes East/North, yaw **absolute ENU** — no longer re-zeroed. Sim: bridged from Gazebo in ENU with no re-zeroing (`simCLAUDE.md` §8). Only the origin differs. The previous real frame was a *hybrid* (ENU axes, launch-relative yaw), the root cause of the East-only trajectory-following field symptom — see `mcsCLAUDE.md` §2 and `BlueBoat-MCS/docs/03_ros_integration.md` item 00. `sssTODO.md` holds a separate item that this topic reads zero on the real boat. |
 | `/blueboat/pinger_coordinates` | `std_msgs/Float32MultiArray` `[x, y, z]` | `robot_interface` | `master_control`, GCS, MCS | default | **Body/vehicle frame, three values.** Seeded from the Water Linked *filtered* (`filaco`) x/y/z and dead-reckoned at odom rate between USBL fixes, so the published array is the full 3-vector; `master_control` reads `[:2]` in its `PID` branch and passes all three to `solve_LoS` in its `LoS` branch. A consumer that assumes length 2 is reading a length-3 array. The 2-element **world-frame** `corrected_pinger` goes out on this same topic only under `robot_interface`'s `fixed_pinger`, hard-coded `False` and settable from no parameter or topic. GCS default `alignment.pinger_frame: robot`. |
-| `/blueboat/controller_ready` | `std_msgs/Bool` | `robot_interface` (real, `:94`) · `simulation_interface` (sim, `:41`) | `master_control` (`:94`), MCS | **Producer-dependent:** real = default depth 10, VOLATILE; sim = latched (TRANSIENT_LOCAL) | Both consumers subscribe volatile depth 10, which is compatible with either producer (a volatile subscriber does receive from a TRANSIENT_LOCAL publisher), so neither end may be "fixed" to match the other (CM-4). On the real robot, late subscribers are covered by `robot_interface`'s periodic re-publish (`ready_republish_period = 1.0` s) rather than by durability, because one-shot handshakes race DDS discovery. |
+| `/blueboat/controller_ready` | `std_msgs/Bool` | `robot_interface` (real, `:94`) · `simulation_interface` (sim, `:41`) | `master_control` (`:94`), MCS — also the **E-STOP acknowledgement** (`False` on latch, 2026-09-04) | **Producer-dependent:** real = default depth 10, VOLATILE; sim = latched (TRANSIENT_LOCAL) | Both consumers subscribe volatile depth 10, which is compatible with either producer (a volatile subscriber does receive from a TRANSIENT_LOCAL publisher), so neither end may be "fixed" to match the other (CM-4). On the real robot, late subscribers are covered by `robot_interface`'s periodic re-publish (`ready_republish_period = 1.0` s) rather than by durability, because one-shot handshakes race DDS discovery. |
 | `/thruster_input` | `std_msgs/Float32MultiArray` | `master_control` | `robot_interface`, `simulation_interface`, MCS | default | Order is **`[right, left]`** in Newtons. No longer provisional: `ctrlCLAUDE.md` §5 traces the convention statically end to end (allocation matrix ↔ URDF geometry ↔ `ROV` alphabetical ordering ↔ `simulation_interface` ↔ `solve_LoS` ↔ `manualMove` ↔ CLI), and `ctrlTODO.md` §2 narrows the open question to one link only — whether ArduPilot's `SERVO1` is physically the right thruster. **Never silent while `master_control` runs**: every early return publishes `[0, 0]`, and both interface nodes zero the thrust if it goes quiet for `thruster_input_timeout` (0.5 s). |
 | `/controller_target` | `std_msgs/Float32MultiArray` | `master_control` | `robot_interface` | default | Deliberately **body-frame** for the pinger case. Not to be unified with `/monitoring_data` — different signals (`ctrlCLAUDE.md` N9). |
 | `/monitoring_data` | `std_msgs/Float32MultiArray` | `master_control` | `robot_interface`, MCS | default | `[t, x, y, psi, x_d, y_d, psi_d, u1, u2]`. `x_d/y_d/psi_d` are **world-frame in every controller branch** — the capture is committed in `BlueBoat-Control` (`master_control.py`, the `--- world-frame monitoring target ---` markers, **five capture sites**: manual, the MPC / PID / LoS path branches, and the pinger branch) and installed by its `CMakeLists.txt`, so the residual risk is a stale boat build, not a missing patch (`mcsTODO.md` A3). **Rate: 20 Hz.** ⚠ How that rate is set differs between `BlueBoat-Control`'s committed SHA (`self.dt = 0.05`, hardcoded, `master_control.py:106`) and its current working tree (`self.dt = dbl('control_dt', 0.05)`, `:263`, a declared ROS parameter, therefore launch-settable). Which the boat runs cannot be told from this repository. MCS `DiagnosticsConfig.expected_hz` and `BlueBoat-MCS/docs/03_ros_integration.md` both assume 20. |
-| `/blueboat/input_str` | `std_msgs/String` | MCS `command_center`, operator CLI | **`robot_interface` only** | default | Values: `enable`, `stop`, `override`, `default`, `arm`, `disarm`, `move <l> <r> <s>`. Neither `param_set` nor `master_control` subscribes it — `robot_interface` translates `override`/`default` onto `/blueboat/param_str`, which is what `param_set` reads. An unrecognised first token falls through to the move handler, which still requires exactly four whitespace-separated fields. |
+| `/blueboat/input_str` | `std_msgs/String` | MCS `command_center`, operator CLI | **`robot_interface` only** | default | Values: `enable`, `disable`, `stop`, `override`, `default`, `arm`, `disarm`, `move <l> <r> <s>`. Neither `param_set` nor `master_control` subscribes it — `robot_interface` translates `override`/`default` onto `/blueboat/param_str`, which is what `param_set` reads. An unrecognised first token falls through to the move handler, which still requires exactly four whitespace-separated fields; an **empty** message is ignored (it used to raise `IndexError` inside the callback). `stop` **latches** (CM-15 corollary) and `enable` is the only thing that clears it. |
 | `/blueboat/manual_target` | `std_msgs/Float32MultiArray` `[x, y]` | MCS, GCS visualisation app | `master_control` | default | **World frame on the wire.** `[0.0, 0.0]` is the resume-original-mission sentinel, not a coordinate; a genuine origin click is nudged by `1e-3`. |
 | `/blueboat/param_str` | `std_msgs/String` | `robot_interface` | `param_set` | default | |
 | `/blueboat/param_ready` | `std_msgs/Bool` | `param_set` | `robot_interface` | default | Republished periodically. |
-| `/blueboat/param_mode` | `std_msgs/String` | `param_set` | `robot_interface`, MCS | default | `'default'` / `'override'`. This echo is what proves an E-STOP landed. |
+| `/blueboat/param_mode` | `std_msgs/String` | `param_set` | `robot_interface`, MCS | default | `'default'` / `'override'`, or `''` = "alive, no mode locked". **Heartbeated at 1 Hz** since 2026-09-04, and published unconditionally rather than only after the first successful apply — previously the topic was silent until then, which is why `robot_interface` logged `current: ''` while `param_set` sat on a latched `busy`. Consumers must treat a repeat as *state*, not as an acknowledgement of a new command: MCS's safe-shutdown requires a **transition** into `default`, and `robot_interface`'s `mode_callback` / `param_callback` are edge-triggered. |
 | `/uw_gps_data` | `std_msgs/Float32MultiArray` | `uwgps_log` | `robot_interface`, MCS | default | 19 values: date(7), aco xyz, ant xyz, lat/lon/dep, filaco xyz. |
 | `/pose_arrow` | `visualization_msgs/Marker` | `master_control` | RViz / Gazebo | default | Debug only. |
+| `/current` | `geometry_msgs/Vector3` | `sea_state_node` (sim, 2026-09-03) — previously nobody | ros_gz bridge → gz `/ocean_current` → the boat's `Hydrodynamics` plugin | default | World-frame water velocity: mean current + Gauss-Markov fluctuation + wave orbital velocity; exact zeros under the null preset. Bridged by both `world_launch.py` and `full_mission_launch.py` |
+| `/world/<w>/wrench`, `/world/<w>/wrench/clear` | `ros_gz_interfaces/EntityWrench`, `/Entity` | `sea_state_node` | ros_gz bridge → gz `ApplyLinkWrench` (injected at run time when the world lacks it) | default | One-shot wave wrench per physics step on model `blueboat` (torque about the link origin); nothing published while calm |
+| `/sim/sea_state` | `std_msgs/String` (JSON) | `sea_state_node` | MCS (SEA STATE box) | **TRANSIENT_LOCAL, depth 1**, 2 Hz | Presets, bearings, Hs/Tp, η, wrench, schedule, summary — `BlueBoat-SSS-Sim/docs/topics.md` |
+| `/sim/sea_state/command` | `std_msgs/String` (JSON) | MCS ("Modify situation…") | `sea_state_node` | default | `{current, waves, ramp_s}` or `{schedule, t0}`; the node ramps, never steps |
 | `/set_path` | `nav_msgs/Path` | `path_publisher` (`blueboat_control`) | GCS, RViz | default | **Ownership settled:** `blueboat_control/src/_custom_libraries/path_publisher.py`, installed by its `CMakeLists.txt` and listed in `ctrlCLAUDE.md` §2.1. Node name `path_publisher`, publishing the *relative* name `set_path` in the root namespace. It re-requests the whole path every `refresh_period` (5 s) rather than once, so a `from_yaml` mission deployed after launch appears. Started by `Sim_launch.py` and by the simulator's `full_mission_launch.py`; `BlueBoat_launch.py` does **not** start it, so there is no `/set_path` on the real boat. |
 
 ### 4.2 Path service
 
 | Name | Type | Servers | Clients | Notes |
 |---|---|---|---|---|
-| `/path_request` | `blueboat_interfaces/srv/RequestPath` | `path_generation` (`blueboat_control`) **XOR** `sss_path_generation` (`blueboat_sss_sim`) | `master_control`, `path_publisher`, the two standalone `mpc_control` nodes, MCS | **Exactly one server may run.** Request is `Float32MultiArray path_request` — an array of path-parameter values, deliberately parameter-agnostic; response is `nav_msgs/Path`, `frame_id: "world"`, one pose per value. **VERIFIED against `blueboat_interfaces/srv/RequestPath.srv`**, which is exactly `std_msgs/Float32MultiArray path_request` / `---` / `nav_msgs/Path path` and nothing else. `master_control` requests `linspace(tau, tau + path_time, path_steps)`; `path_publisher` requests a *time window* `[0, total_time]` with its own defaults of 1000 s at 0.1 s (10 001 poses), re-requested every `refresh_period` (5 s), so `full_mission_launch` sets `total_time` from the bundle's stored `duration_s`. |
-| `/mission/full_path` | `nav_msgs/Path` | `sss_path_generation` | RViz | **TRANSIENT_LOCAL latched**, published once at startup. Simulation-only, additive. |
+| `/path_request` | `blueboat_interfaces/srv/RequestPath` | `path_generation` (`blueboat_control`) — **the only server** since the 2026-09 sim rework deleted `sss_path_generation` (simulated missions ride the same `from_yaml` branch as real ones) | `master_control`, `path_publisher`, the two standalone `mpc_control` nodes, MCS | **Exactly one server may run.** Request is `Float32MultiArray path_request` — an array of path-parameter values, deliberately parameter-agnostic; response is `nav_msgs/Path`, `frame_id: "world"`, one pose per value. **VERIFIED against `blueboat_interfaces/srv/RequestPath.srv`**, which is exactly `std_msgs/Float32MultiArray path_request` / `---` / `nav_msgs/Path path` and nothing else. `master_control` requests `linspace(tau, tau + path_time, path_steps)`; `path_publisher` requests a *time window* `[0, total_time]` with its own defaults of 1000 s at 0.1 s (10 001 poses), re-requested every `refresh_period` (5 s), so `full_mission_launch` sets `total_time` from the bundle's stored `duration_s`. |
+| `/mission/full_path` | `nav_msgs/Path` | *(none — retired with `sss_path_generation`, 2026-09)* | RViz | The full-mission RViz view now comes from `path_publisher`'s `/set_path` alone. |
 
 ### 4.3 Sonar acquisition
 
@@ -205,10 +211,10 @@ against either. **VERIFIED** in both modules.
 
 | Name | Type | Producer | Consumers | QoS | Notes |
 |---|---|---|---|---|---|
-| `/side_scan_sonar/{port,starboard}/profile` | `blueboat_interfaces/OmniscanProfile` | `sss_node` (real) · `sss_sim_node` (sim) | `sss_processor_node`, `dataset_recorder_node` (sim) | BEST_EFFORT, KEEP_LAST, **10** | Decoded header including `channel_number`, `transducer_heading_deg`, `ping_number`, `pwr_results`. Marked VERIFIED in `sssCLAUDE.md`, against both `sss_node.py` and the `.msg`. **`pwr_results` is `uint16[]` — settled**, read from the definition itself, `BlueBoat-Control/blueboat_interfaces/msg/OmniscanProfile.msg`, which is the only place the type exists (CM-1). The simulator's reconstructed reference copy, `BlueBoat-SSS-Sim/blueboat_sss_sim/msg_reference/OmniscanProfile.msg`, matches that definition field for field and in order — VERIFIED by direct comparison; it defines no message and is documentation only. Its trailing comment on `pwr_results` still reads "linear echo power", which the per-ping normalisation below contradicts. The full field list is snapshotted in `BlueBoat-Control/.claude/tools/interface_baseline.json`, and its guard fails on any field change. **`pwr_results` is normalised per ping, not absolute counts** — the device rescales every ping onto its own dB axis and reports the endpoints in `min_pwr_db` / `max_pwr_db`, so consumers invert it with `db = min + raw/65535·(max − min)` (`sss_helper.scale_to_db`, applied by `sss_processor_node` and the GCS alike). Measured on **68 948 / 68 948** pings of the Shiraishi-jima corpus: exactly one bin at 65535, minimum exactly 0, span clamped at 90 dB. `blueboat_sss_sim` emits the same three invariants; stacking raw arrays from different pings into a waterfall without converting to dB first is wrong at either end. |
-| `/side_scan_sonar/{port,starboard}/raw` | `std_msgs/UInt8MultiArray` | `sss_node` · `sss_sim_node` | `sss_processor_node` only — **the GCS does not subscribe** (VERIFIED) | BEST_EFFORT, KEEP_LAST, 10 | Already-framed Cerulean Ping Protocol packet, republished verbatim. Layout: `'B''R' \| u16 payload_len \| u16 msg_id=2198 \| u8 src \| u8 dst \| 52-byte payload \| u16[num_results] \| u16 checksum`. Frame length `8 + 52 + 2·num_results + 2` (1262 B at 600 bins). The processor rebuilds `.svlog` from this; disabling it produces empty logs. |
+| `/side_scan_sonar/{port,starboard}/profile` | `blueboat_interfaces/OmniscanProfile` | `sss_node` (real) · `sss_sim_node` (sim) | `sss_processor_node`; **GCS since 2026-09-05** (BEST_EFFORT subscriber, depth 200: the raw bins are cached by `ping_number` and attached to the matching `/sss_processor/processed` row so the live waterfall/AI pictures draw the same native row replay decodes from the `.svlog`) | BEST_EFFORT, KEEP_LAST, **10** | Decoded header including `channel_number`, `transducer_heading_deg`, `ping_number`, `pwr_results`. Marked VERIFIED in `sssCLAUDE.md`, against both `sss_node.py` and the `.msg`. **`pwr_results` is `uint16[]` — settled**, read from the definition itself, `BlueBoat-Control/blueboat_interfaces/msg/OmniscanProfile.msg`, which is the only place the type exists (CM-1). The simulator's reconstructed reference copy, `BlueBoat-SSS-Sim/blueboat_sss_sim/msg_reference/OmniscanProfile.msg`, matches that definition field for field and in order — VERIFIED by direct comparison; it defines no message and is documentation only. Its trailing comment on `pwr_results` still reads "linear echo power", which the per-ping normalisation below contradicts. The full field list is snapshotted in `BlueBoat-Control/.claude/tools/interface_baseline.json`, and its guard fails on any field change. **`pwr_results` is normalised per ping, not absolute counts** — the device rescales every ping onto its own dB axis and reports the endpoints in `min_pwr_db` / `max_pwr_db`, so consumers invert it with `db = min + raw/65535·(max − min)` (`sss_helper.scale_to_db`, applied by `sss_processor_node` and the GCS alike). Measured on **68 948 / 68 948** pings of the Shiraishi-jima corpus: exactly one bin at 65535, minimum exactly 0, span clamped at 90 dB. `blueboat_sss_sim` emits the same three invariants; stacking raw arrays from different pings into a waterfall without converting to dB first is wrong at either end. |
+| `/side_scan_sonar/{port,starboard}/raw` | `std_msgs/UInt8MultiArray` | `sss_node` · `sss_sim_node` | `sss_processor_node` only — **the GCS does not subscribe** (VERIFIED; it subscribes to `~/profile` instead) | BEST_EFFORT, KEEP_LAST, 10 | Already-framed Cerulean Ping Protocol packet, republished verbatim. Layout: `'B''R' \| u16 payload_len \| u16 msg_id=2198 \| u8 src \| u8 dst \| 52-byte payload \| u16[num_results] \| u16 checksum`. Frame length `8 + 52 + 2·num_results + 2` (1262 B at 600 bins). The processor rebuilds `.svlog` from this; disabling it produces empty logs. |
 | `/side_scan_sonar/ping/enable` | `std_msgs/Bool` | GCS (name VERIFIED in `blueboat_gcs/config/default.yaml`), operator, launch one-shot | `sss_node`, `sss_sim_node` | default 10 | Pinging is **off at startup in both**. The simulator re-reads run-dependent parameters on every enable. |
-| `/side_scan_sonar/ground_truth/contacts` | `std_msgs/String` (JSON) | `sss_sim_node` | `dataset_recorder_node` | default 10 | **Simulation-only, additive.** Per ping cycle: `{"t_sim", "contacts":[{"side","object_id","type","slant_range_m","extent_bins","shadow_bins","visible","ping_number","ghost","via"}]}`. `ghost`/`via` mark a multipath image — the same `object_id` down a folded path off the named reflector (`via: "wall:<name>"` for a wall, `via: "surface"` for the optional z = 0 mirror, `""` direct); consumers aggregate on `(object_id, via)`, and both keys default to direct when absent. |
+| `/side_scan_sonar/ground_truth/contacts` | `std_msgs/String` (JSON) | `sss_sim_node` | offline analysis (`mission_metrics --source jsonl` on a dump; the recorder node is deleted) | default 10 | **Simulation-only, additive.** Per ping cycle: `{"t_sim", "contacts":[{"side","object_id","type","slant_range_m","extent_bins","shadow_bins","visible","ping_number","ghost","via"}]}`. `ghost`/`via` mark a multipath image — the same `object_id` down a folded path off the named reflector (`via: "wall:<name>"` for a wall, `via: "surface"` for the optional z = 0 mirror, `""` direct); consumers aggregate on `(object_id, via)`, and both keys default to direct when absent. |
 | `/sss_processor/processed` | `blueboat_interfaces/ProcessedSSSPing` | `sss_processor_node` | GCS | BEST_EFFORT, depth **200** at the GCS | Slant-range corrected, water column already removed. Sign of `*_y` encodes side: **+y = port, −y = starboard**. Topic name VERIFIED at both ends (`sss_processor_node.py` publishes `~/processed` under node name `sss_processor`; `blueboat_gcs/config/default.yaml` subscribes the absolute name). |
 | `/sss_processor/log/enable` | `std_msgs/Bool` | GCS (Record ON/OFF) | `sss_processor_node` | default | Name VERIFIED at both ends (`~/log/enable` under node name `sss_processor`; `blueboat_gcs/config/default.yaml`). |
 | `/sss_ai/seabed_analysis` | `std_msgs/String` (JSON, schema 1) | GCS | *(no consumer in the current tree)* | default | Image metadata + detections, **never pixels**. |
@@ -236,8 +242,10 @@ anywhere in that module.
 Aligning them would move the simulator's default off its power-calibration anchor (the 15 m
 capture, `simCLAUDE.md` NC #6) onto a value (20000) that matches neither §8.5 pass. Instead,
 `blueboat_sss_sim`'s launch files pass all six acquisition parameters to `sss_sim_node` from
-the mission bundle's frozen `sonar.yaml`, each overridable per run as a launch argument, and
-the node warns when the acquisition in force differs from what the bundle records; §8.5's
+the resolved sonar profile (explicit `sonar_config:=` > a legacy bundle's frozen
+`sonar.yaml` > the package `config/default_sonar.yaml` — world folders freeze no sonar
+copy), each overridable per run as a launch argument, and the node warns when the
+acquisition in force differs from what the named profile records; §8.5's
 coverage pass ships as `config/coverage_pass_sonar.yaml` (30000). `gain_index: -1` is a
 command-only sentinel — `OmniscanProfile.gain_index` is `uint16`, so the device resolves
 auto-gain internally and reports a concrete index; the simulator, having no AGC, resolves it
@@ -251,15 +259,24 @@ cover.
 `mount_y_abs_m: 0.20` in the simulator, `TRANSDUCER_Y_OFFSET_PORT_M / _STBD_M = 0.0` in
 `sss_processor_node.py`. `simTODO.md` [P1] holds it.
 
-**Ping-rate cap** — `max_ping_rate_hz` defaults to 20 in the simulator (`0` disables) to match
-the Omniscan 450 spec sheet and `project_synthesis.md` §1; the decoded field capture gives
-22 ms per channel at 15 m (≈45 Hz). Both are reproducible through the knob. `simTODO.md`
-holds it under "Blocked — not verifiable on this machine": settling it needs the Omniscan 450
-hardware.
+**Ping-rate cap — settled (2026-09-02, VERIFIED on the corpus).** The device period is
+`max(50 ms, 2R/c + ~3 ms)` on all seven field recordings (50 ms at 18.4 m and 20 m, 54 ms at
+38 m, 131 ms at 95.6 m, 170 ms at 125.6 m), i.e. the spec sheet's "20 pings/s up to 30 m,
+thereafter limited by range and speed of sound". The simulator's `ping_period_s` implements
+exactly that (`max_ping_rate_hz` 20, `DEVICE_PROCESSING_MS` 3); the earlier "22 ms at 15 m"
+figure was wrong. Consequence for sim-vs-real ping counts: a 30 m coverage pass pings at
+20 Hz, a 95.6 m survey at 7.6 Hz — compare runs at the same `range_length_mm`.
 
 **Ping assembly** — both stacks now key rows on `ping_number` and emit one-sided rows;
 neither pairs by arrival time, and neither withholds a ping while the bottom tracker
-bootstraps (`sssCLAUDE.md` NC #2). `ProcessedSSSPing.msg`'s own header comment in
+bootstraps (`sssCLAUDE.md` NC #2). **Since 2026-09-03 the processor re-bases on a
+counter restart** (a key ≥ 128 behind the newest seen = the device or the simulator was
+relaunched under a running processor) and judges "stream stopped" on the wall clock
+against the last arrival only, never wall time against a message stamp — sonar stamps
+are sim time under Gazebo. Before that, relaunching `sss_sim_node` under a running
+processor published every ping as two half-rows for the rest of the run (measured:
+7464 one-sided rows in one session; the GCS waterfall's "one black row in two per side").
+Both the processor and the GCS now warn when > 25 % of recent rows are one-sided. `ProcessedSSSPing.msg`'s own header comment in
 `BlueBoat-Control/blueboat_interfaces/` still describes a "10-ping bootstrap before first
 publish"; no such gate exists in `sss_processor_node.py`, so the comment is stale and the
 message contract is unaffected. The simulator's same-tick rule (`simCLAUDE.md` NC #3)
@@ -294,8 +311,11 @@ running QGroundControl**, which surfaces as intermittent launch failures (`mavro
 `link[1000] open failed: DeviceError:udp:bind: Address already in use`). Close QGC, or pass
 `fcu_url:=` with another port.
 
-The simulator's optional `mavros_shim_node` republishes `/blueboat/odom` as
-`/mavros/global_position/compass_hdg`, `/mavros/imu/data` and `/mavros/local_position/pose`.
+The simulator's `mavros_shim_node` (on by default in its launches) republishes
+`/blueboat/odom` as `/mavros/global_position/compass_hdg`, `/mavros/imu/data`,
+`/mavros/local_position/pose` and `/mavros/global_position/global` (NavSatFix
+about the world's own GPS anchor — `sss_sim_launch.py` reads it from the world
+folder's manifest; the odom subscription lost in f489a21 is restored).
 It exists for tooling written against MAVROS names — note that it publishes
 `local_position/pose` (`PoseStamped`) while `robot_interface` consumes
 `local_position/odom` (`Odometry`), and `robot_interface` does not run in simulation anyway.
@@ -309,14 +329,16 @@ only. Several other handoffs are also file-mediated.
 | Artifact | Producer | Consumer(s) | Contract |
 |---|---|---|---|
 | `.svlog` | `sss_processor_node` (from `~/raw`) | GCS replay window, SonarView | Framed Cerulean Ping Protocol stream; packet ids 10, 12, 150, 2194, 2198; device ids port 1, starboard 2, platform 3. Files roll at 500 MB. Recorded files are **primary field data**. |
-| Recording session `data_root/sessions/<stamp>/` | GCS | analysis, dataset build | `mosaic/`, `waterfall/` (`waterfall_raw.npz` = the dataset source), `detections/`, `seabed_images/`, `metadata.json`, and the adopted `*.svlog` at the session root. Created when Record turns ON; nothing is exported if no session was active. |
-| Seabed images `seabed_XXXXX.png` + `_world.npz` | GCS | detector training, Aug Studio | Waterfall domain, boat-relative. 256 rows, stride 128. The `.npz` carries per-pixel `world_x`/`world_y` and the **raw float `intensity_db`**; the PNG is display-normalized for annotation tools. **Train on the `.npz`, not the PNG.** The Aug Studio cannot yet act on that: `SonarImage.load` reads 8-bit rasters through `cv2.imread` only and has no `.npz` reader (`augTODO.md` holds it). |
-| Mission bundle (`world.sdf`, `seabed.stl`, `scene.npz`, `scene_manifest.yaml`, `trajectory.yaml`, `sonar.yaml`, `mission_snapshot.yaml`, plus the intermediate `_world_config.yaml`) | `generate_mission` (sim) | Gazebo, `sss_sim_node`, `sss_path_generation`, labeler | One directory, one seed, **immutable**. `scene.npz` + manifest are the ground truth for every simulation-derived metric the thesis reports. Bundles freeze their own `sonar.yaml` and `trajectory.yaml`, so editing package config does not affect an existing bundle. |
-| YOLO dataset (Ultralytics layout) | `dataset_recorder_node` (sim, opt-in via `with_recorder:=true`) · beach labelling pipeline (real) | Aug Studio, detector training | The Aug Studio treats the input directory as **read-only** and writes to a new output directory. |
+| Recording session `data_root/sessions/<stamp>/` | GCS | analysis, dataset build | `mosaic/`, `waterfall/` (`waterfall_raw.npz` = archival raw record; the AI feed is the seabed **pictures**), `detections/`, `seabed_images/`, `metadata.json`, and the adopted `*.svlog` at the session root. Created when Record turns ON; nothing is exported if no session was active. |
+| Seabed images `seabed_XXXXX.png` + `metadata/` | GCS | detector training, Aug Studio | **Raw waterfall in the native slant-bin domain** (SonarView convention): one column per device range bin, verbatim values; width adapts to the acquisition, and the dark centre band is the physical water column, darkened by the display model (`core/display_model.py`, one model per window shared with the waterfall and the mosaic; stored in every JSON as `display_model` — losslessly invertible). **Rows are speed-corrected to square pixels since 2026-09-05** (`seabed.row_geometry: square`, PROVISIONAL; each row copies exactly one ping's bins verbatim, `ping_index` per row; revert with `ping`): 256 rows, stride 128, in picture rows. **The AI is fed the pictures plus their JSON metadata** (per-row pose/time/altitude/bottom/source ping, `bin_pitch_m`, the closed-form pixel→world formula) — decided 2026-09-01; the companion `_world.npz` (per-pixel world grids + float dB + model curves) is an auxiliary georeferencing/analysis record, not the training input. |
+| World folder `~/worlds/<path_name>/<world_name>/` (`world.sdf`, `seabed.stl`, `scene.npz`, `scene_manifest.yaml` with an additive `geo:` block, `depth.npz`, `preview_objects.png`, `metadata.yaml`, `builder_state.yaml`, optional `depth_source.*`) | `world_builder` GUI / `generate_world` (sim) | Gazebo, `sss_sim_node`, MCS overlays (via `metadata.yaml`'s GPS ground truth) | One directory, **immutable** — every save (Edit-mode re-saves included) takes a fresh silent `_i` suffix. World (0,0) ≡ the source MCS path's `geo_anchor`; the frame is the path's design frame, conversions via the shared equirectangular pair. `scene.npz` + manifest are the ground truth for every simulation-derived metric the thesis reports. (The former mission bundles are retired; existing ones still load everywhere — their frozen `sonar.yaml`/`trajectory.yaml` are the resolver fallbacks.) |
+| YOLO dataset (Ultralytics layout) | beach labelling pipeline (real); the sim's `dataset_recorder_node` was **deleted 2026-09** (dataset generation left the simulator's scope) | Aug Studio, detector training | The Aug Studio treats the input directory as **read-only** and writes to a new output directory. |
 | `sss_aug_dataset.yaml` | dataset author | Aug Studio | Declares **any `AcquisitionMeta` field** — not just `layout`, `intensity_mapping` and `shadow_included` — each honoured at the top level or inside `meta:`, equivalent positions with the top level winning on conflict, and an unrecognised key at either position warning by name; the reader never raises. **`intensity_mapping` must be declared explicitly.** When absent the Aug Studio assumes `log` (dB waterfall export) and inverts on that basis, which mis-inverts a linear dataset. **Neither in-project producer writes this file**: `dataset_recorder_node` emits only `dataset.yaml`, and the GCS seabed imager emits PNG + JSON + `_world.npz`. **The sim half declares the fields anyway, in the file it does write**: `dataset_recorder_node`'s `dataset.yaml` states `layout: waterfall`, `intensity_mapping: db` and `shadow_included: true` at the top level, and repeats `intensity_mapping: db` inside `meta:` alongside `range_equalised`, `normalisation` and `percentiles`, so the one field whose default is wrong is declared at both positions the reader honours and never falls to that default — its tiles are absolute dB (converted per ping from the endpoints), range-equalised, then stretched per tile at percentiles 1.0 / 99.5, and no log is applied on top. The GCS half still falls to the `log` default while writing dB, and remains wrong in scale because the Aug Studio's `log` inverse uses one fixed `log_range_db` against the GCS's per-image 2.0 / 98.0 stretch. Emitting the file is those modules' call (CM-3). No real (non-synthetic) dataset exists on this machine to audit. |
 | Augmented dataset + `generation_manifest.json` + `statistics.md` | `sss-aug-generate` | detector training | Byte-reproducible for a given config + `master_seed`, independent of worker count. |
+| Sea-state presets `share/blueboat_sss_sim/config/sea_states.yaml` (`blueboat_sea_state_presets/1`) and timelines `~/.config/blueboat_mcs/sea_states/*.yaml` (`blueboat_sea_schedule/1`) | presets: the simulator; timelines: the MCS sea-state dialog | `sea_state_node` (`sea_schedule:=`, `/sim/sea_state/command`), the MCS launch dialog (reads the presets as a file, never imports — CM-3) | Presets: `current`/`waves` name → strength + `label`/`description`/`reference`; directions are per run. Timeline: `keyframes: [{t_s, current: {preset\|speed_mps…, from\|from_deg}, waves: {…}}]`, `interpolation: linear\|hold`, `seed` |
 | Trajectory `<name>.yaml` (`blueboat_trajectory/1`) | MCS Pattern Designer | `path_generation` on the boat (stock — the branch is committed, not patched in) | Dense `[t, x, y, yaw]` samples + `speed`, `loop`, `length_m`, `duration_s`. Selected through the existing launch argument as `trajectory:=from_yaml:/abs/path.yaml` — no launch-file change. The file is **watched**: the robot holds a station-keeping pose at the origin until it appears, which is what makes deferred GPS-anchored deployment possible. `<name>.meta.yaml` is editor-only and the robot never reads it; `.deployed/<name>.yaml` is regenerated every launch and is not hand-edited. |
-| Position/pinger CSV `<root>/data/Robot_data/{date}-{note}-poslog.csv` | `robot_interface` | offline analysis, `BlueBoat-Control/…/docs/controllers/replay.py` | **Raw field record.** Two layouts, selected by `use_UWgps`; `target_*` columns exist only in the no-pinger layout and read `/monitoring_data[4:6]`, world-frame in every branch. **Path is no longer relative to the launch working directory** — see the `<root>` note below. |
+| Position/pinger CSV `<root>/data/Robot_data/{date}-{note}-poslog.csv` | `robot_interface` | offline analysis, `poslog_report.py`, `BlueBoat-Control/…/docs/controllers/replay.py` | **Raw field record.** Two layouts, selected by `use_UWgps`; `target_*` columns exist only in the no-pinger layout and read `/monitoring_data[4:6]`, world-frame in every branch. **Path is no longer relative to the launch working directory** — see the `<root>` note below. Note `replay.py` cannot actually read it (it looks for columns no revision ever had); `poslog_report.py` is the reader that can. |
+| Mission report folder `<root>/data/Robot_data/<csv stem>/` | `robot_interface`'s shutdown hook, via the ROS-free `poslog_report.py` (also a CLI: `ros2 run blueboat_control poslog_report.py <csv\|dir --all>`) | the operator, offline analysis | Created when the run ends; the poslog CSV, its `-origin.yaml` sidecar and a `<csv stem>.png` report are **moved** into it. Moving a field record is allowed, rewriting one is not (CM-7): an existing folder is never touched and re-running is a no-op. The PNG carries the GPS track (robot vs target, no tiles, true metric aspect), robot→target distance, ground speed, per-side commanded thrust with the `actuation_state` strip beneath it, and a summary table. matplotlib is imported lazily, so a boat without it still gets the folder and the files. |
 | Controller `.npy` `<root>/data/{ctrl}_data/{date}-{ctrl}_{sim}_data.npy` | `master_control` | offline analysis, `replay.py` | Schema `['t','x','y','psi','x_d','y_d','psi_d','u1','u2']`, target columns world-frame. The header row is appended as strings, so `np.save` coerces the whole array to strings — cast back on load. `robot_interface` does not write this file. |
 
 **`<root>` for the two `BlueBoat-Control` run artifacts** is resolved at node start by
@@ -426,11 +448,30 @@ field session to test a change means the replay tooling has a gap. Converged:
 `/blueboat/input_str`, confirm a matched subscriber, wait for the `/blueboat/param_mode` echo,
 flush, then terminate. Killing the launch first can leave the motors in override.
 `mcsCLAUDE.md` N1; `ctrlCLAUDE.md` N5 states the robot-side half — the default servo mapping
-is restored before shutdown, and a SERVO function is never set to `0`.
+is restored before shutdown, and a SERVO function is never set to `0`. Since 2026-09-04 both
+robot-side nodes also attempt that restore themselves, in independent bounded `try/finally`
+blocks; those are best effort (a launch teardown SIGINTs the whole process group, mavros
+included) and do not replace the station's sequence.
 
-**CM-16 — `enable_motors` gates all thruster output.** No PWM reaches the motors unless
-`enable_motors:=True`, and no code path writes to `/mavros/rc/override` around that gate.
-`ctrlCLAUDE.md` N4.
+**Corollary, added 2026-09-04: stopping the motors, releasing the servo mapping and ending
+the mission are three separate operator actions and are never re-nested.** The station's
+E-STOP publishes `stop` — which robot-side zeroes thrust, closes the `enable_motors` gate,
+disarms and **latches** until an explicit `enable` — and touches neither the parameter mode
+nor the launch. Leaving override is a *transfer* of authority (the RC channels go back to
+whatever else is transmitting), so it can never be part of a panic button. `mcsCLAUDE.md`
+N1b carries the table; `ctrlCLAUDE.md` N4b carries the latch.
+
+**CM-16 — `enable_motors` gates all thruster output, and a closed gate holds neutral.**
+No **thrust-bearing** PWM reaches the motors unless `enable_motors:=True`. Every write to
+`/mavros/rc/override` outside the gate carries neutral 1500/1500 or channel release.
+**Reworded 2026-09-04** — it previously read "no code path writes to `/mavros/rc/override`
+around that gate", and writing *nothing* turned out to be the unsafe option: `robot_interface`
+requests `override` unconditionally at init, so `SERVO1/3_FUNCTION` are on RCIN passthrough
+and the ESCs follow RC channels 1 and 3 from any transmitter, with nothing feeding ArduPilot's
+`RC_OVERRIDE_TIME` to keep those channels ours. A silent gate therefore left the motors
+drivable by a hand transmitter, a QGC joystick or an RC failsafe. The gate now streams true
+neutral (0 N is an exact knot of the calibration table) while in override, which pins the
+channels and feeds the watchdog. `ctrlCLAUDE.md` N4.
 
 ---
 
@@ -461,10 +502,9 @@ sketch. The synthesis's *derived* content in the same section — the three-step
 transform and the slant-range correction `r_ground = sqrt(r_slant² − h²)` — is unaffected and
 holds.
 
-**D3 — Maximum ping rate.** §5.1 gives 20 Hz for the Omniscan 450. The decoded field capture
-gives 22 ms per channel at 15 m. Unresolved in both directions; reproducible either way
-through `max_ping_rate_hz`. `simTODO.md` holds it under "Blocked — not verifiable on this
-machine".
+**D3 — Maximum ping rate — resolved.** §5.1's 20 Hz is right: the corpus shows exactly 50 ms
+at ≤30 m and the range-limited `2R/c + 3 ms` beyond (§4.3). The "22 ms per channel at 15 m"
+capture figure was a misreading and is retired from the simulator's documentation.
 
 **D4 — Continuous world-frame mosaic.** §5.3 ⚠ says the world-frame mosaic is generated on
 demand or post-mission, not continuously, because it is wasteful and off the critical path.
@@ -527,16 +567,22 @@ ruff's own default rule set with an enumerated baseline of ignores, `ruff>=0.6` 
 its `[dev]` extra. No module has a type-checker configured — MCS records a reasoned decline
 in its `CLAUDE.md` §7, and the Aug Studio's `CLAUDE.md` records the same for both a
 type-checker and CI. The test gates are per-module:
-`python3 -m test.smoke_test` (simulator, 84 checks, ~36 s, passing), `QT_QPA_PLATFORM=offscreen python3
-smoke_test.py` (MCS, 14 checkpoints, passing), `pytest` (Aug Studio, 64 tests at v0.4.0,
+`python3 -m test.smoke_test` (simulator, ~290 checks incl. the 2026-09-03
+sections [10] sea state / [11] schema help / objects v3 / walls+pontoons,
+~90 s, passing; plus an optional `QT_QPA_PLATFORM=offscreen python3 -m
+test.gui_smoke` for its World Builder GUI, not part of the gate),
+`QT_QPA_PLATFORM=offscreen python3 smoke_test.py` (MCS, 22 checkpoints incl.
+`sea state ok` and `sea box ok`, passing), `pytest` (Aug Studio, 64 tests at v0.4.0,
 10 marked `gui`, all passing; a no-PySide6 environment skips the Qt suite and stays green),
 `QT_QPA_PLATFORM=offscreen python3 -m pytest` from `BlueBoat-SSS/blueboat_sss/`
-(214 tests: a 185-test GCS regression suite needing no ROS, one rclpy-gated MCS
-sim-GPS compatibility test, plus 28 robot-side tests that
-run only when `blueboat_interfaces` is on the path; also wired as a pre-commit hook). Every
+(291 tests collected on 2026-09-05: the GCS regression suite needing no ROS — now
+including the display-model, live-native and seabed-picture suites — one rclpy-gated
+MCS sim-GPS compatibility test, plus the robot-side tests that run only when
+`blueboat_interfaces` is on the path — including the 2026-09-03 counter-restart
+re-base and wall-vs-stream clock tests; also wired as a pre-commit hook). Every
 test that reproduces a MEASURED field number is gated on a `.svlog` corpus at a hard-coded
 external mount and skips when it is absent — with neither the corpus nor
-`blueboat_interfaces`, 151 pass and 63 skip (globally-sourced Jazzy machine). Like the other modules' harnesses, **this gate
+`blueboat_interfaces`, 225 pass and 66 skip (globally-sourced Jazzy machine). Like the other modules' harnesses, **this gate
 is not in a fresh clone either:** `BlueBoat-SSS/.gitignore` excludes `.githooks/`,
 `requirements-dev.txt` and `.claude/specs`, and `blueboat_sss/tests/`,
 `blueboat_sss/pytest.ini`, `blueboat_gcs/analysis/` and `.claude/skills/` are untracked.
@@ -560,10 +606,12 @@ ROS, no colcon, no Gazebo). **The wiring does not survive a fresh clone:** that 
 `.gitignore` excludes `.claude/tools/`, `.claude/settings.json` and `.claude/specs/`, so a
 clone gets `test/smoke_test.py` but neither hook. Its section `[2f]` is gated on a `.svlog`
 corpus at `$BLUEBOAT_SSS_CORPUS` (default `~/ros2_ws/data/SSS_data`) and skips when absent, so
-a clone still reaches `ALL CHECKS PASSED`. Separately, most of that module's current
-implementation — `blueboat_sss_sim/analysis/`, `sonar/multipath.py`, `test/__init__.py` and
-five of the ten `config/*.yaml` — is present in the working tree but **not yet committed**, so
-the tracked tree is well behind what everything above describes.
+a clone still reaches `ALL CHECKS PASSED`. Separately, that module's entire 2026-09
+rework — the World Builder (`builder/`), `core/geo.py`, `core/trajectory.py`,
+`worldgen/depth/`, `worldgen/world_folder.py`, the catalog/launch/analysis changes and
+the deletions of `dataset/`, `mission/`, `sss_path_generation` and the three mission
+YAMLs — is present in the working tree but **not yet committed**, so the tracked tree
+is well behind what everything above describes.
 
 `SSS-Dataset-Aug-Studio` carries two further gates beyond `pytest` and `ruff`:
 `python tools/repro_gate.py` (the CM-7 / non-negotiable #2 byte-reproducibility release
