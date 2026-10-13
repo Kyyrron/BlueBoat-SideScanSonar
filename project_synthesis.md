@@ -29,8 +29,9 @@ calibrated simulation environment and demonstrated in real water at reduced scal
   resolution, 50° vertical aperture, 20 Hz max ping rate
 - Water Linked USBL (pinger + receiver) — ground-truth instrumentation
 - ArduPilot / ArduRover autopilot, ROS 2 middleware
-- All computation on the basestation (operator laptop). No on-board compute constraint.
-  Constraint is wireless link bandwidth and latency.
+- All computation on the operator laptop, linked to the boat through the BlueBoat Base
+  Station WiFi; the boat carries only its hardware and firmware. No on-board compute
+  constraint. Constraint is wireless link bandwidth and latency.
 
 **Test environments.**
 - Enclosed beach, wall-bounded, shallow (~1–3 m), accessible on demand. Primary real-water
@@ -158,7 +159,7 @@ BOAT (BlueBoat)
 ├── Water Linked USBL receiver ────► pinger position
 └── ArduPilot ◄──────────────────── waypoint missions (MAVLink)
 
-BASESTATION (laptop)
+OPERATOR LAPTOP (via the BlueBoat Base Station WiFi)
 ├── SSS preprocessing ── slant-range correction, FBR altitude, geocoding, normalization
 ├── Waterfall buffer ─── rolling boat-relative image, fixed-size patch extraction
 ├── Detector ─────────── classical proposer + CNN classifier

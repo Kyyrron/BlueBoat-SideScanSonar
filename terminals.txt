@@ -1,5 +1,5 @@
 1.
-cd /blueboat_ws && . .venv/bin/activate && . install/setup.bash
+cd ~/ros2_ws && source env.sh
 ros2 launch blueboat_control BlueBoat_launch.py enable_motors:=True controller_type:='LoS' use_pinger:=True
 ros2 launch blueboat_control BlueBoat_launch.py enable_motors:=True
 
@@ -18,6 +18,8 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: move 3 3 2"
     source env.sh
     cd src/BlueBoat-SideScanSonar/BlueBoat-MCS
     python3 run.py
+
+    python3 log_reviewer/run.py 
 
 -- SSS
 
