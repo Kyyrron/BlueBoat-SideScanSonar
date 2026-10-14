@@ -100,6 +100,7 @@ The list of available [value] is as follows:
  - 'move': typical instruction follows the shape 'move [float_left] [float_right] [float_time]', it will set the float_left and float_right inputs to the thrusters and apply it for the float_time duration (seconds)
  - 'arm': arms the robot's thrusters (used when interacting with the xbox controller)
  - 'disarm': disarms the robot's thrusters
+ - 'rearm': run session only - re-arms the autopilot (briefly back to the default mapping, arm, then override again); used by the MCS GUARDIAN box after an E-STOP
 
 # License
 blueboat package is open-sourced under the MIT License. See the LICENSE file for details.

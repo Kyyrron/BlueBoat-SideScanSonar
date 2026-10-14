@@ -56,13 +56,24 @@ this project** — a months-old artifact never to be expected, suggested or docu
 stale deployment is a stale `~/ros2_ws/install` (rebuild with `colcon build`), never a "boat
 build". In documents "robot-side" / "on the boat" never locate software: name the node, or say
 "in a real-robot run".
+**One owner-ordered exception (2026-10-14):** the connection-loss guardian
+`link_guardian/autopilot/link_guardian.lua` (superproject, not a submodule) is an ArduPilot
+Lua script copied onto the autopilot — autopilot configuration, not a ROS node. While its
+session flag `LGRD_ON` is set (by the laptop for every real-robot session; reset at every
+autopilot boot) and MAVROS's heartbeat (ROS 2 MAVROS: **sys 1 / comp 191**) has been silent
+for `LGRD_TIMEOUT` s, it switches `SERVO1/3_FUNCTION` from passthrough to 74/73, **arms the
+autopilot itself** if needed (ArduPilot refuses to arm on passthrough), and enters RTL. Its
+laptop companion `link_guardian/laptop/guardian.py` (plain script, not a colcon package) is
+started by MCS with every real-robot launch: sets the flag, moves HOME to each run start,
+serves MCS's GUARDIAN box over `/link_guardian/status` / `/link_guardian/command`. Design,
+setup and test ladder: `link_guardian/README.md`.
 
 | Module | Produces |
 |---|---|
 | **BlueBoat-Control** | Vehicle motion, pose, thrust, trajectories; per-run ros2bag + kinematic Gazebo replay of a run (v1.1); owns `blueboat_interfaces` — **frozen at tag `v1.0`** (§3) |
 | **BlueBoat-SSS** — `blueboat_sss` | Sonar acquisition, slant-range correction, bottom tracking, `.svlog` |
 | **BlueBoat-SSS** — `blueboat_gcs` | Live mosaic, overlays, recording sessions, seabed images |
-| **BlueBoat-MCS** | Mission launch/supervision (incl. "From a ros2bag" replay launches, v1.1), pattern designer, safe shutdown — **frozen at tag `v1.0`** (§3) |
+| **BlueBoat-MCS** | Mission launch/supervision (incl. "From a ros2bag" replay launches and the link guardian's GUARDIAN box, v1.1), pattern designer, safe shutdown — **frozen at tag `v1.0`** (§3) |
 | **BlueBoat-SSS-Sim** | GPS-anchored Gazebo worlds (World Builder GUI over MCS anchored paths) + a drop-in replacement for the real sonar interface + the **sea state** (current/waves into Gazebo, `sea_state_node`) |
 | **SSS-Dataset-Aug-Studio** | Physics-informed augmentation of YOLO datasets (offline, file-level only) |
 
@@ -148,7 +159,15 @@ in the empty world or a GPS-anchored built world (read-only: `world.sdf` + `meta
 Additive interface only (§4.1): `/replay/state`, `/replay/command`, the `/replay/<name>`
 namespace, `robot_interface` parameters `record_bag` / `trajectory`, launch argument
 `record_bag` (default `True`, session runs only) and three additive `/blueboat/run_log` fields.
-Nothing renamed or retyped; BlueBoat-SSS-Sim untouched.
+Nothing renamed or retyped; BlueBoat-SSS-Sim untouched. **On 2026-10-14 the user ordered the
+link guardian in both modules (MCS v1.1):** Control's `robot_interface` arms the autopilot at
+session connection *before* going to override (MANUAL → `default` → arm → `override`; a failed
+arm never blocks the session) and gains the `input_str` token `rearm` and parameters
+`arm_on_connect` / `arm_timeout` / `arm_default_timeout` (interface baseline re-taken); MCS
+gains the GUARDIAN box (top of the left column), starts `guardian.py watch` with every
+real-robot launch, asks at Turn Off Connection / exit whether to turn the guardian off and
+disarm, moves LAYERS to the right column above MAP TOOLS and drops the robot heading arrow.
+Additive interface only: `/link_guardian/status`, `/link_guardian/command`, the `rearm` token.
 
 ---
 
@@ -171,7 +190,7 @@ QoS is `default` for every row unless the notes say otherwise (`/blueboat/odom`:
 | `/thruster_input` | `std_msgs/Float32MultiArray` | `master_control` → `robot_interface`, `simulation_interface`, MCS | **`[right, left]`**, Newtons — traced end to end in `ctrlCLAUDE.md` §5; the only open link (`git -C BlueBoat-Control show d64ac71^:.claude/TODO.md` §2) is whether ArduPilot's `SERVO1` is physically the right thruster. **Never silent while `master_control` runs**: every early return publishes `[0, 0]`; both interface nodes zero thrust after `thruster_input_timeout` (0.5 s) of silence. |
 | `/controller_target` | `std_msgs/Float32MultiArray` | `master_control` → `robot_interface` | Deliberately **body-frame** for the pinger case; not to be unified with `/monitoring_data` — different signals (`ctrlCLAUDE.md` N9). |
 | `/monitoring_data` | `std_msgs/Float32MultiArray` | `master_control` → `robot_interface`, MCS | `[t, x, y, psi, x_d, y_d, psi_d, u1, u2]`; `x_d/y_d/psi_d` **world-frame in every branch** (`--- world-frame monitoring target ---` markers, five capture sites in `master_control.py`), so the residual risk is a stale `~/ros2_ws/install`. **20 Hz** (MCS `DiagnosticsConfig.expected_hz` assumes it). ⚠ `self.dt` is hardcoded `0.05` in Control's committed SHA but the launch parameter `control_dt` (default 0.05) in its working tree; which one a real-robot run used depends on the last build into `~/ros2_ws/install` — the repository cannot tell. |
-| `/blueboat/input_str` | `std_msgs/String` | MCS `command_center`, operator CLI → **`robot_interface` only** | `enable`, `disable`, `stop`, `override`, `default`, `arm`, `disarm`, `move <l> <r> <s>`. Neither `param_set` nor `master_control` subscribes; `robot_interface` translates `override`/`default` onto `/blueboat/param_str`. An unrecognised first token falls through to the move handler (needs exactly four fields); an empty message is ignored. `stop` **latches** (CM-15 corollary); only `enable` clears it (MCS **Release E-STOP**, run session with motors enabled). |
+| `/blueboat/input_str` | `std_msgs/String` | MCS `command_center`, operator CLI → **`robot_interface` only** | `enable`, `disable`, `stop`, `override`, `default`, `arm`, `disarm`, `rearm` (session only, 2026-10-14: `default` → arm → `override`), `move <l> <r> <s>`. `arm` works only in `default` (ArduPilot refuses on passthrough). MCS publishes `rearm` (GUARDIAN box) and `disarm` (Turn Off choice). Neither `param_set` nor `master_control` subscribes; `robot_interface` translates `override`/`default` onto `/blueboat/param_str`. An unrecognised first token falls through to the move handler (needs exactly four fields); an empty message is ignored. `stop` **latches** (CM-15 corollary); only `enable` clears it (MCS **Release E-STOP**, run session with motors enabled). |
 | `/blueboat/manual_target` | `std_msgs/Float32MultiArray` `[x, y]` | MCS, GCS visualisation app → `master_control` | **World frame.** `[0.0, 0.0]` = resume-original-mission sentinel, not a coordinate; a genuine origin click is nudged by `1e-3`. Any manual target also releases arrow control (the MCS "hold where released" publishes the boat's own position). |
 | `/blueboat/arrow_thrust` | `std_msgs/Float32MultiArray` `[right, left]` N, or `[]` | MCS (ARROW CONTROL box) → `master_control` | 20 Hz while on, `[]` releases. Highest-priority branch in **every** mode (sim included): goes out through `publish_thrust`, freezes τ like a manual target, logs the last registered target; a gap > `arrow_timeout` (0.5 s) commands zero and **stays** in arrow control. Since 2026-10-09. |
 | `/blueboat/run_command` | `std_msgs/String` (JSON) | MCS → `master_control` | **Real-robot run session only** (`session_mode:=true`, every station launch since 2026-10-09). `configure` {controller_type, use_pinger, note, mission} / `start` / `stop`, each with a `seq`. Schema: `BlueBoat-Control/.claude/CLAUDE.md` §2.3. |
@@ -180,6 +199,8 @@ QoS is `default` for every row unless the notes say otherwise (`/blueboat/odom`:
 | `/replay/state` | `std_msgs/String` (JSON) | `bag_replay` → MCS (REPLAY box) | **Bag replay only, TRANSIENT_LOCAL depth 1**, 2 Hz: `{bag, t, duration, rate, paused, finished, frame: empty\|anchored, world, world_offset, pose_source, gazebo}`. |
 | `/replay/command` | `std_msgs/String` (JSON) | MCS → `bag_replay` | **Bag replay only.** `{"cmd": "pause"\|"resume"}` / `{"cmd": "rate", "rate": x}` (0.01–50). |
 | `/replay/<recorded name>` | as recorded | `bag_replay` → offline analysis | **Bag replay only.** Every recorded topic that is a command or session plumbing (`input_str`, `manual_target`, `arrow_thrust`, `run_*`, `param_*`, `controller_ready`, `/mavros/rc/override`, the raw `/blueboat/odom`) is republished under this prefix — never on its live name, so no consumer acts on it. Telemetry keeps its live name: every other `/mavros/*`, `/thruster_input`, `/controller_target`, `/blueboat/pinger_coordinates`, `/uw_gps_data`; `/monitoring_data` shifted into the replay world frame. Every `header.stamp` is rewritten to the replay's time; the bag's receive times are the timing truth (on the real launch simple_launch gives mavros `use_sim_time:=True` with no `/clock`, so recorded mavros stamps may read 0). |
+| `/link_guardian/status` | `std_msgs/String` (JSON) | `guardian.py watch` (superproject `link_guardian/`, started by MCS for every real-robot launch) → MCS (GUARDIAN box) | **Real-robot session only**, 1 Hz: `{connected, armed, mode, want_on, guardian_on, check, home, run_running, messages, busy, ack}`. Since 2026-10-14. |
+| `/link_guardian/command` | `std_msgs/String` (JSON) | MCS → `guardian.py watch` | `{cmd: on\|off\|check\|setup\|reclaim, seq}`, answered in the status's `ack`. `on`/`off` set the autopilot's `LGRD_ON`; `reclaim` = HOLD → `param_set`'s servo mapping → MANUAL. |
 | `/blueboat/param_str` | `std_msgs/String` | `robot_interface` → `param_set` | |
 | `/blueboat/param_ready` | `std_msgs/Bool` | `param_set` → `robot_interface` | Republished periodically. |
 | `/blueboat/param_mode` | `std_msgs/String` | `param_set` → `robot_interface`, MCS | `'default'` / `'override'`, or `''` = "alive, no mode locked"; heartbeated at 1 Hz, unconditionally. A repeat is *state*, not an acknowledgement: MCS safe-shutdown requires a **transition** into `default`; `robot_interface`'s `mode_callback` / `param_callback` are edge-triggered. |
