@@ -1,6 +1,6 @@
 # CLAUDE.md — BlueBoat Aspect-Aware SSS Survey (superproject)
 
-Root guidance for the superproject carrying five git submodules: **how the modules relate** —
+Root guidance for the superproject carrying six git submodules: **how the modules relate** —
 merged interface contract, cross-module rules, workspace and git architecture. Not a backlog:
 open work lives only in each submodule's own `TODO.md`, never restated here.
 
@@ -37,7 +37,8 @@ BOAT — hardware + its own firmware only    THIS COMPUTER (operator laptop, ~/r
 ├─ GPS / compass                           ├─ Mission Control Station  (supervise, command, E-STOP)
 └─ Water Linked USBL (.94)                 ├─ BlueBoat GCS             (mosaic, overlays, recording)
         ▲                                  ├─ SSS-Dataset-Aug-Studio   (offline, no ROS)
-        └── BlueBoat Base Station (WiFi) ──┤  [detector · belief layer · replanner]  not implemented
+        │                                  ├─ BlueBoat-Perception      (detector — dummy today — + image records)
+        └── BlueBoat Base Station (WiFi) ──┤  [belief layer · replanner]  not implemented
             192.168.2.0/24                 └─ SIMULATION: blueboat_sss_sim serves the identical sonar
                                               interface, Gazebo owns hull dynamics
 ```
@@ -46,7 +47,7 @@ BOAT — hardware + its own firmware only    THIS COMPUTER (operator laptop, ~/r
 
 **All** code runs on **this computer** (`~/ros2_ws`): every ROS node (MAVROS,
 `robot_interface`, `master_control`, `path_generation`, `uwgps_log`, `sss_node.py`,
-`sss_processor_node`, the simulator), the Mission Control Station and the GCS. It reaches the
+`sss_processor_node`, `perception_node`, the simulator), the Mission Control Station and the GCS. It reaches the
 boat through the **BlueBoat Base Station** — Blue Robotics' WiFi radio link, never a name for
 the laptop. The boat carries only hardware and its own firmware: ArduPilot/BlueOS autopilot
 (MAVROS at `192.168.2.2`), two Omniscan 450 SS (`192.168.2.92` / `.93`, TCP 51200, driven by
@@ -76,21 +77,26 @@ setup and test ladder: `link_guardian/README.md`.
 | **BlueBoat-MCS** | Mission launch/supervision (incl. "From a ros2bag" replay launches and the link guardian's GUARDIAN box, v1.1), pattern designer, safe shutdown — **frozen at tag `v1.0`** (§3) |
 | **BlueBoat-SSS-Sim** | GPS-anchored Gazebo worlds (World Builder GUI over MCS anchored paths) + a drop-in replacement for the real sonar interface + the **sea state** (current/waves into Gazebo, `sea_state_node`) |
 | **SSS-Dataset-Aug-Studio** | Physics-informed augmentation of YOLO datasets (offline, file-level only) |
+| **BlueBoat-Perception** — `blueboat_perception` | **The station's one detection source** (since 2026-10-16): the GCS's seabed images → detector input (`fixed_gray`, a fixed mapping of the raw dB) → detector (the station's former dummy; YOLO an interface stub) → calibration (identity) → `/sss_ai/detections` for the GCS map + one record per image (`/sss_ai/image_records`) for the future belief layer. ROS-free deterministic core, thin node, offline CLI (offline = live, byte-equal records); dataset mode: a YOLO dataset per world run, labelled from the simulator's ground truth (highlight + shadow boxes, the 29 World Builder classes), plus the archival ground-truth bag |
 
 ---
 
 ## 2. Workspace layout and build order
 
 **VERIFIED.** Each submodule's `.gitmodules` `path` equals its repository name, directly under
-the root; the one surprise is that the simulator's ROS package sits one level below its git
-root, at `BlueBoat-SSS-Sim/blueboat_sss_sim/`. A `.../BlueBoat-SideScanSonar/blueboat_mcs/`
+the root; the surprise is that two ROS packages sit one level below their git roots: the
+simulator's at `BlueBoat-SSS-Sim/blueboat_sss_sim/` and Perception's at
+`BlueBoat-Perception/blueboat_perception/`. A `.../BlueBoat-SideScanSonar/blueboat_mcs/`
 path in an older document is history.
 
 `~/ros2_ws` is the project's **only** ROS workspace (§1.1). The superproject is checked out at
 `~/ros2_ws/src/BlueBoat-SideScanSonar/` and is not itself the colcon workspace; `colcon build`
 runs from `~/ros2_ws`. Build `blueboat_interfaces` first — every ROS module's types resolve
 there (`OmniscanProfile`, `ProcessedSSSPing`, `RequestPath.srv`); `blueboat_sss_sim` modifies
-no other package (`simCLAUDE.md` NC #8). Two submodules are not colcon packages:
+no other package (`simCLAUDE.md` NC #8). `blueboat_perception` (`ament_python`) uses standard
+types only (`std_msgs`, `sensor_msgs`, `vision_msgs`), so it has no build-order constraint;
+the GCS imports its ROS-free core lazily for the replay window's Run AI (installed package,
+else the superproject checkout), and Perception imports nothing from the GCS. Two submodules are not colcon packages:
 `blueboat_gcs` and `BlueBoat-MCS` import `rclpy` from a sourced workspace at runtime and
 degrade to GUI-only without it; `SSS-Dataset-Aug-Studio` has no ROS dependency in any mode
 (its dev-only `tools/make_demo_dataset.py` puts `../BlueBoat-SSS-Sim/blueboat_sss_sim` on
@@ -110,7 +116,7 @@ pushing themselves, everywhere in this tree.
 
 ## 3. Git architecture
 
-The five module directories are git **submodules**, each an independent repository; root
+The six module directories are git **submodules**, each an independent repository; root
 `git status` shows a submodule as modified without naming files — inspect inside it.
 `.gitmodules` paths are authoritative for the layout.
 
@@ -168,6 +174,14 @@ gains the GUARDIAN box (top of the left column), starts `guardian.py watch` with
 real-robot launch, asks at Turn Off Connection / exit whether to turn the guardian off and
 disarm, moves LAYERS to the right column above MAP TOOLS and drops the robot heading arrow.
 Additive interface only: `/link_guardian/status`, `/link_guardian/command`, the `rearm` token.
+**On 2026-10-16 the user ordered the BlueBoat-Perception companion in MCS** (additions only,
+compatible with Control's requested "Replanner mode" row): `PerceptionConfig`
+(`config/settings.py`), `perception_command` / `perception_dataset_name` and a third
+companion (`ros/launch_manager.py`), the launch dialog's **Session** row (*Normal session* /
+*Dataset creation*, field `LaunchParameters.perception_mode`, no launch argument), the smoke
+test's `perception ok` block and the MCS docs. Every existing `to_cli()`, launch target and
+sea companion is unchanged (pinned). No interface changed; BlueBoat-Control was not edited.
+BlueBoat-Perception itself (added 2026-10-16) is not frozen.
 
 ---
 
@@ -184,7 +198,7 @@ QoS is `default` for every row unless the notes say otherwise (`/blueboat/odom`:
 
 | Name | Type | Producer → Consumers | Notes |
 |---|---|---|---|
-| `/blueboat/odom` | `nav_msgs/Odometry` | `robot_interface` (real) · Gazebo bridge (sim, `odom_topic` param) · `bag_replay` (bag replay: the recorded `/mavros/local_position/odom` with its **full** attitude and body twist, in the replay world frame) → `master_control`, `sss_processor_node`, `sss_sim_node`, GCS, MCS | **Both local ENU since 2026-08-31; only the origin differs.** Real: origin = boat at launch, yaw **absolute ENU**. Sim: Gazebo ENU, no re-zeroing. Documents describing a launch-relative yaw predate the fix. `sssTODO.md`: this topic reads zero in real-robot runs. |
+| `/blueboat/odom` | `nav_msgs/Odometry` | `robot_interface` (real) · Gazebo bridge (sim, `odom_topic` param) · `bag_replay` (bag replay: the recorded `/mavros/local_position/odom` with its **full** attitude and body twist, in the replay world frame) → `master_control`, `sss_processor_node`, `sss_sim_node`, GCS, MCS | **Both local ENU since 2026-08-31; only the origin differs.** Real: origin = boat at launch, yaw **absolute ENU**. Sim: Gazebo ENU, no re-zeroing. Documents describing a launch-relative yaw predate the fix. `sssTODO.md`: this topic reads zero in real-robot runs. The GCS takes per-row roll / pitch / yaw rate for the seabed-image metadata from `/mavros/imu/data` (2026-10-16), never from this topic's yaw-only real attitude. |
 | `/blueboat/pinger_coordinates` | `std_msgs/Float32MultiArray` `[x, y, z]` | `robot_interface` → `master_control`, GCS, MCS | **Body/vehicle frame, three values**: Water Linked *filtered* (`filaco`) x/y/z, dead-reckoned at odom rate between USBL fixes. `master_control` reads `[:2]` in `PID`, passes all three to `solve_LoS` in `LoS`; a consumer assuming length 2 reads a length-3 array. The 2-element **world-frame** `corrected_pinger` goes out here only under `robot_interface`'s `fixed_pinger`, hard-coded `False`, settable from no parameter or topic. GCS default `alignment.pinger_frame: robot`. |
 | `/blueboat/controller_ready` | `std_msgs/Bool` | `robot_interface` (real) · `simulation_interface` (sim) → `master_control`, MCS; also the **E-STOP acknowledgement** (`False` on latch) | **QoS producer-dependent:** real default depth 10 VOLATILE, sim latched (TRANSIENT_LOCAL). Both consumers subscribe volatile depth 10, compatible with either, so neither end may be "fixed" to match the other (CM-4). Late subscribers are covered by **both** producers' periodic re-publish (`ready_republish_period = 1.0` s; `simulation_interface` since 2026-10-09, when its latched one-shot left a late `master_control` waiting forever), not durability — one-shot handshakes race DDS discovery. |
 | `/thruster_input` | `std_msgs/Float32MultiArray` | `master_control` → `robot_interface`, `simulation_interface`, MCS | **`[right, left]`**, Newtons — traced end to end in `ctrlCLAUDE.md` §5; the only open link (`git -C BlueBoat-Control show d64ac71^:.claude/TODO.md` §2) is whether ArduPilot's `SERVO1` is physically the right thruster. **Never silent while `master_control` runs**: every early return publishes `[0, 0]`; both interface nodes zero thrust after `thruster_input_timeout` (0.5 s) of silence. |
@@ -236,12 +250,17 @@ both).
 | `/side_scan_sonar/{port,starboard}/profile` | `blueboat_interfaces/OmniscanProfile` | `sss_node` · `sss_sim_node` → `sss_processor_node`; GCS (BEST_EFFORT, depth 200, raw bins joined to `/sss_processor/processed` rows by `ping_number`) | BEST_EFFORT, KEEP_LAST, **10** | **`pwr_results` is `uint16[]` — settled** from the only definition, `BlueBoat-Control/blueboat_interfaces/msg/OmniscanProfile.msg` (CM-1); the sim's documentation-only copy `msg_reference/OmniscanProfile.msg` matches field for field, but its "linear echo power" comment is wrong. Field list guarded by `BlueBoat-Control/.claude/tools/interface_baseline.json`. **Normalised per ping, not absolute counts**: invert with `db = min_pwr_db + raw/65535·(max_pwr_db − min_pwr_db)` (`sss_helper.scale_to_db`). Every field ping has exactly one bin at 65535, minimum 0, span clamped at 90 dB (68 948 / 68 948 Shiraishi-jima pings); the sim emits the same. Stacking raw arrays from different pings into a waterfall without converting to dB is wrong at either end. |
 | `/side_scan_sonar/{port,starboard}/raw` | `std_msgs/UInt8MultiArray` | same → `sss_processor_node` only (the GCS subscribes `~/profile`, not this) | BEST_EFFORT, KEEP_LAST, 10 | Already-framed Cerulean Ping Protocol packet (msg_id 2198), republished verbatim; length `8 + 52 + 2·num_results + 2`. The processor rebuilds `.svlog` from it; disabling it produces empty logs. |
 | `/side_scan_sonar/ping/enable` | `std_msgs/Bool` | GCS, operator, launch one-shot → `sss_node`, `sss_sim_node` | default 10 | Pinging **off at startup in both**; the sim re-reads run-dependent parameters on every enable. The message is volatile: the GCS sends `true` at START once a subscriber is matched (≤ 10 s, then anyway with a warning). The GCS **Sonar** selector refuses to start `sss_node.py` beside a running simulator or driver (one `/side_scan_sonar` only). |
-| `/side_scan_sonar/ground_truth/contacts` | `std_msgs/String` (JSON) | `sss_sim_node` → offline analysis (`mission_metrics --source jsonl` on a dump) | default 10 | **Simulation-only, additive.** Schema: `BlueBoat-SSS-Sim/blueboat_sss_sim/docs/topics.md`. `ghost`/`via` mark a multipath image of the same `object_id` — aggregate on `(object_id, via)`; both default to direct when absent. `shadow_bins` and `visible` are read off the rendered visibility mask (a training label measures the image), so a consumer using them as a flat-bottom *height* estimator must invert the geometry itself. |
-| `/side_scan_sonar/ground_truth/sensor` | `std_msgs/String` (JSON) | `sss_sim_node` → offline analysis (`analysis/sea_validation.py`, the Gazebo sea gate) | default 10 | **Simulation-only, additive** (2026-10-08). Every ping cycle: the vehicle pose at the ping time and the transducer pose each side was rendered from (the lever arm rotated by the full attitude). Schema: `BlueBoat-SSS-Sim/blueboat_sss_sim/docs/topics.md`. |
+| `/side_scan_sonar/ground_truth/contacts` | `std_msgs/String` (JSON) | `sss_sim_node` → offline analysis (`mission_metrics --source jsonl` on a dump); BlueBoat-Perception's dataset labels (dataset mode in a world only, since 2026-10-16) | default 10 | **Simulation-only, additive.** Schema: `BlueBoat-SSS-Sim/blueboat_sss_sim/docs/topics.md`. `ghost`/`via` mark a multipath image of the same `object_id` — aggregate on `(object_id, via)`; both default to direct when absent. `shadow_bins` and `visible` are read off the rendered visibility mask (a training label measures the image), so a consumer using them as a flat-bottom *height* estimator must invert the geometry itself. |
+| `/side_scan_sonar/ground_truth/sensor` | `std_msgs/String` (JSON) | `sss_sim_node` → offline analysis (`analysis/sea_validation.py`, the Gazebo sea gate); BlueBoat-Perception's dataset labels (dataset mode in a world only) | default 10 | **Simulation-only, additive** (2026-10-08). Every ping cycle: the vehicle pose at the ping time and the transducer pose each side was rendered from (the lever arm rotated by the full attitude). Schema: `BlueBoat-SSS-Sim/blueboat_sss_sim/docs/topics.md`. |
 | `/sss_processor/processed` | `blueboat_interfaces/ProcessedSSSPing` | `sss_processor_node` → GCS | BEST_EFFORT, depth **200** at the GCS | Slant-range corrected, water column removed; sign of `*_y` = side (**+y port, −y starboard**). |
 | `/sss_processor/log/enable` | `std_msgs/Bool` | GCS (Record ON/OFF) → `sss_processor_node` | default | |
-| `/sss_ai/seabed_analysis` | `std_msgs/String` (JSON, schema 1) | GCS → *(no consumer in the current tree)* | default | Image metadata + detections, **never pixels**. |
-| `/sss_ai/detections` | `vision_msgs/Detection2DArray` | *(none)* → GCS | default | Placeholder, not wired to a model — the wire slot a detector would occupy. |
+| `/sss_ai/seabed_image` | `sensor_msgs/Image` 32FC1 | GCS → BlueBoat-Perception | RELIABLE, KEEP_LAST 32, VOLATILE (both ends, CM-4) | **Since 2026-10-16.** Every seabed image, recording or not: the raw float dB (= the session's `_world.npz:intensity_db`). `header.frame_id` = the image key `"<stream_id>/<image_id>"`, not a TF frame. Contract: `BlueBoat-Perception/docs/topics.md`. |
+| `/sss_ai/seabed_image/png` | `sensor_msgs/Image` mono8 | GCS → BlueBoat-Perception | same | The display PNG, byte-equal to the saved one. |
+| `/sss_ai/seabed_image/metadata` | `std_msgs/String` (JSON envelope) | GCS → BlueBoat-Perception | same | The picture metadata (schema 5) in an envelope carrying the key. |
+| `/sss_ai/seabed_analysis` | `std_msgs/String` (JSON) | GCS → *(no consumer in the current tree)* | default | Image metadata, **never pixels**. Schema = the picture metadata's: **5 since 2026-10-16** (4 before). `detections` is always `[]`; the detections are on `/sss_ai/detections`. |
+| `/sss_ai/detections` | `vision_msgs/Detection2DArray` | **BlueBoat-Perception → GCS** | default (RELIABLE, 10) | **The station's one detection source** (owner's order, 2026-10-16): one array per image, possibly empty. Every map marker, waterfall marker and `detections.csv` row comes from here; the GCS runs no detector. uid = `2_000_000 + 16·image_id + k`, restarting with `image_id` at every START. |
+| `/sss_ai/image_records` | `std_msgs/String` (JSON, `blueboat_perception/image_record/1`) | BlueBoat-Perception → *(future belief layer; offline analysis)* | RELIABLE, KEEP_LAST 100 | One per image, with or without detections (`detections: []` = searched, nothing found; `null` = no pixels). Offline over the session = live: byte-equal canonical JSON minus `provenance` / `source`. |
+| `/sss_ai/perception/status` | `std_msgs/String` (JSON) | BlueBoat-Perception → operator, tests | RELIABLE, depth 1, TRANSIENT_LOCAL | 1 Hz: join counters (`late_parts`, `gaps`, …), latency, configuration. |
 | `/rosout` | `rcl_interfaces/Log` | all nodes → GCS embedded console | default | The GCS matches the literal string `sss_processor_node` to sweep orphan processes on STOP, so that executable name and its `output='screen'` are load-bearing. |
 
 **Acquisition parameters** (`range_start_mm`, `range_length_mm`, `msec_per_ping`,
@@ -272,8 +291,13 @@ bundle's frozen `sonar.yaml` still renders with its frozen constants. No per-obj
 brightness, ever. Evidence: `simCLAUDE.md` NC #4/#6/#15/#17,
 `BlueBoat-SSS-Sim/blueboat_sss_sim/docs/sonar_model.md`.
 
-**Transducer lateral offset — disagreement:** `mount_y_abs_m: 0.20` in the sim,
-`TRANSDUCER_Y_OFFSET_PORT_M / _STBD_M = 0.0` in `sss_processor_node.py`; `simTODO.md` [P1].
+**Transducer lateral offset — agreed at 0.285 m** (BR-101447 hull spacing / 2; checked
+2026-10-16): `TRANSDUCER_Y_OFFSET_PORT_M / _STBD_M` in `sss_processor_node.py` (since SSS
+`994a74b`), mirrored in the GCS's `core/svlog.py`, and `mount_y_abs_m: 0.285` in the
+simulator's `config/default_sonar.yaml`. Submersion 0.15 m is an estimate (= the sim's
+`sensor_depth_m`); the fore/aft offset is still 0.0, unmeasured. The seabed pictures
+georeference with it since 2026-10-16 (georef convention 2, schema 5). `simTODO.md` [P1]
+still describes the old 0.20 / 0.0 disagreement (the simulator is not edited from that work).
 
 **Ping rate — VERIFIED on the corpus:** device period `max(50 ms, 2R/c + ~3 ms)` (the spec
 sheet's "20 pings/s up to 30 m"); the sim's `ping_period_s` implements exactly that. Compare
@@ -302,7 +326,7 @@ differ** by that offset; a torn row shows as the gap *changing*, never as it bei
 | Name | Type | Dir | Module |
 |---|---|---|---|
 | `/mavros/state` | `mavros_msgs/State` | in | `robot_interface`; MCS (only when `mavros_msgs` imports — absent in simulation) |
-| `/mavros/imu/data` | `sensor_msgs/Imu` | in | `robot_interface` |
+| `/mavros/imu/data` | `sensor_msgs/Imu` | in | `robot_interface`; `sss_processor_node` (→ `.svlog` ATTITUDE); GCS (BEST_EFFORT 10, seabed-image metadata only, never geometry; since 2026-10-16) |
 | `/mavros/local_position/odom` | `nav_msgs/Odometry` | in | `robot_interface` |
 | `/mavros/global_position/global` | `sensor_msgs/NavSatFix` | in | `robot_interface`, GCS, MCS — **BEST_EFFORT**; `lat==0 and lon==0` = no fix, discarded. In a Gazebo run of a GPS-anchored mission **MCS is the only publisher** (fixes synthesised from sim odom, ~5 Hz, `status` left at **-2 / STATUS_UNKNOWN**), so only `-1` (STATUS_NO_FIX) means no fix — never gate on `status < 0`. In a **bag replay** `bag_replay` is the only publisher: the recorded fixes, unchanged but for the stamp (MCS's SimGps stays disarmed). |
 | `/mavros/global_position/compass_hdg` | `std_msgs/Float64` | in | MCS, GCS. Degrees **clockwise from north**; MCS converts `radians(90 - hdg)`. Preferred heading source; odom yaw the fallback |
@@ -326,7 +350,11 @@ sea-state presets/timelines, trajectory YAML, position CSVs, mission report fold
 controller `.npy`, the `<root>` data-dir resolution) live in skill `file-interfaces`; load it
 before producing, reading, moving or converting any of them. **Before reading, comparing or
 decoding a `.svlog`, load skill `svlog`.** Field records are write-once (CM-7); the AI is fed
-the seabed pictures plus their JSON metadata, never world-frame crops (CM-10).
+the seabed pictures plus their JSON metadata, never world-frame crops (CM-10). Since
+2026-10-16 the detector input is BlueBoat-Perception's fixed mapping (`fixed_gray_v1`, its
+decision 6.4) of the pictures' **raw dB** and per-row gain, not the display PNG, which stays
+the operator picture and the `identity` baseline; CM-10 holds (the same waterfall-domain,
+boat-relative grid).
 
 ### 4.6 Shared conventions
 
@@ -501,14 +529,17 @@ description of the corpus.
 module consumes TF and none of those four frames exists** (§4.6 TF); the lever-arm point
 surfaces as the transducer-offset disagreement (§4.3).
 
-**D7 — Unimplemented interface boundary.** The detector, belief layer (multi-channel Bayesian
-grid: `p_target`, `n_observations`, `aspect_coverage`, `last_intensity`, `max_confidence`),
-initial CPP, replanner and mission manager are specified in §5 and correspond to deliverables
-D3, D4, D6, D7. No submodule implements them or is designated to own them; the GCS's unwired
-`vision_msgs/Detection2DArray` subscription is the only wire slot anticipating any of it.
-Detector output schema, belief-grid channels, the three replanner rules (resolution, budget,
-abandonment) and the confidence-calibration requirement are governed by `project_synthesis.md`
-§5.2, §8.1, §8.2 until a module claims them.
+**D7 — Interface boundary, partly claimed (2026-10-16).** The detector, belief layer
+(multi-channel Bayesian grid: `p_target`, `n_observations`, `aspect_coverage`,
+`last_intensity`, `max_confidence`), initial CPP, replanner and mission manager are specified
+in §5 and correspond to deliverables D3, D4, D6, D7. **BlueBoat-Perception owns the detector
+boundary:** `/sss_ai/detections` (the GCS map) and `/sss_ai/image_records` (one record per
+image, the belief layer's input contract, `BlueBoat-Perception/docs/topics.md` §4). Its
+detector is still the dummy, the YOLO adapter an interface stub, and calibration identity
+(`calibrated: false`, so `confidence` is no probability — §8.2 ⚠). The belief layer, initial
+CPP, replanner and mission manager remain unowned; belief-grid channels, the three replanner
+rules (resolution, budget, abandonment) and the confidence-calibration requirement are
+governed by `project_synthesis.md` §5.2, §8.1, §8.2 until a module claims them.
 
 ---
 
@@ -526,13 +557,14 @@ backlog — do not duplicate either here.
 | Acoustic model, world generation, mission bundles, renderer seams, smoke test | `BlueBoat-SSS-Sim/.claude/CLAUDE.md` · open items `BlueBoat-SSS-Sim/.claude/TODO.md` |
 | Station threading model, map and georeferencing, Pattern Designer | `BlueBoat-MCS/.claude/CLAUDE.md` · no `TODO.md` since the v1.0 freeze |
 | Augmentation families, intensity-domain policy, reproducibility contract, extension contract, release gates | `SSS-Dataset-Aug-Studio/.claude/CLAUDE.md` · open items `SSS-Dataset-Aug-Studio/.claude/TODO.md` |
+| Detector pipeline, detector input (fixed mapping, near-range mask, turn flags), image records, dataset mode, offline = live | `BlueBoat-Perception/.claude/CLAUDE.md` · open items `BlueBoat-Perception/.claude/TODO.md`; evidence `docs/PREPROCESSING_STUDY.md`, `docs/LIVE_CHECKS.md` |
 | Per-module test / lint / smoke gates, exact commands, what survives a fresh clone | skill `module-gates` (`.claude/skills/module-gates/SKILL.md`) |
 
 **CLAUDE.md map — read the relevant ones before touching a directory.** A nested `CLAUDE.md`
 loads by itself only when the Read tool opens a file in its directory; Bash, Grep and Glob
 access never trigger it. So before changing anything under one of these paths (or scripting a
 change there), Read its `CLAUDE.md` first:
-- module roots: `<module>/.claude/CLAUDE.md`, all five submodules;
+- module roots: `<module>/.claude/CLAUDE.md`, all six submodules;
 - `BlueBoat-Control/`: `blueboat_control/src/` (controller and thrust-path evidence),
   `blueboat_description/`, `log_reviewer/`;
 - `BlueBoat-SSS/`: `blueboat_sss/blueboat_gcs/` (GCS);
