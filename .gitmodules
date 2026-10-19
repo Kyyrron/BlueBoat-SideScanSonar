@@ -15,4 +15,4 @@
 	url = https://github.com/Kyyrron/SSS-Dataset-Aug-Studio.git
 [submodule "BlueBoat-Perception"]
 	path = BlueBoat-Perception
-	url = https://github.com/Kyyrron/BlueBoat-Perception.git
+	url = https://github.com/Kyyrron/BlueBoat-Perception
