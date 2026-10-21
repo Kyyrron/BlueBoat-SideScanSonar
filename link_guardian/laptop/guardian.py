@@ -58,9 +58,12 @@ RECOMMENDED = [
                                   "fire while armed (set 1 only with a hand transmitter)")),
 ]
 OPTIONAL_PARAMS = {"FS_GCS_TIMEOUT"}     # absent on older firmware
+# Verified by `check` only, never written by `setup` (a bitmask the owner may have tuned).
+ARMING_CHECK_WHY = ("0 disables Rover's pre-arm motor check, which is what refuses arming on "
+                    "passthrough and before the thrusters' output range is set (README §9)")
 # Created by the script itself on its first run.
 GUARDIAN_PARAMS = ["LGRD_ENABLE", "LGRD_ON", "LGRD_TIMEOUT", "LGRD_STAGE1",
-                   "LGRD_SYSID", "LGRD_COMPID", "LGRD_DETECT"]
+                   "LGRD_SYSID", "LGRD_COMPID", "LGRD_DETECT", "LGRD_NEUTRAL"]
 
 # Thruster mapping, identical to blueboat_control's param_set.py.
 RCIN1_PASSTHROUGH, RCIN3_PASSTHROUGH = 51, 53     # 'override' (our stack drives)
@@ -267,7 +270,7 @@ def op_check(node, pull=True):
     if pull:
         node.pull_params()
     names = ([n for n, *_ in RECOMMENDED] + GUARDIAN_PARAMS
-             + ["SERVO1_FUNCTION", "SERVO3_FUNCTION"])
+             + ["ARMING_CHECK", "SERVO1_FUNCTION", "SERVO3_FUNCTION"])
     v = node.get_params(names)
     items = []
 
@@ -291,6 +294,21 @@ def op_check(node, pull=True):
         good = have is not None and float(have) == float(want)
         item(name, "ok" if good else level,
              f"{_fmt(have)}" + ("" if good else f" (recommended {want}: {why})"))
+
+    have = v["ARMING_CHECK"]
+    item("ARMING_CHECK", "ok" if have not in (None, 0) else "warn",
+         _fmt(have) + ("" if have not in (None, 0) else f" (keep it non-zero: {ARMING_CHECK_WHY})"))
+
+    # Thrusters go neutral before the takeover, never after it.
+    if script and v["LGRD_NEUTRAL"] is None:
+        item("Script version", "warn", "older script (no LGRD_NEUTRAL): upload the current "
+             "link_guardian.lua and restart the autopilot")
+    elif v["LGRD_NEUTRAL"] is not None and v["LGRD_TIMEOUT"] is not None:
+        neutral, timeout = v["LGRD_NEUTRAL"], v["LGRD_TIMEOUT"]
+        good = neutral == 0 or neutral < timeout
+        item("Neutral hold", "ok" if good else "warn",
+             f"LGRD_NEUTRAL {_fmt(neutral)} s, LGRD_TIMEOUT {_fmt(timeout)} s"
+             + ("" if good else " - LGRD_NEUTRAL must be below LGRD_TIMEOUT or it never acts"))
 
     # The heartbeat identity the script listens for must be MAVROS's.
     try:

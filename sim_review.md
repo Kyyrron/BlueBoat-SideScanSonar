@@ -1,5 +1,7 @@
 # Simulator review — `BlueBoat-SSS-Sim` against the real Omniscan 450 pipeline
 
+> **Superseded in part since 2026-10-20** (dated review, not rewritten): where it assumes a detector trained on real beach imagery, 30 m coverage / 15 m revisit passes, a "MAVLink mission swap", or a publication plan, the owner's decisions of 2026-10-20 apply — see the revision note of `project_synthesis.md`.
+
 *Review only, 2026-09-17 (finished 2026-09-18). No simulator or GCS code was changed. The only edits
 outside this file are the three `CLAUDE.md` notes recording the `v1.0` freeze of
 `BlueBoat-Control` and `BlueBoat-MCS` (Part 3.2). Every repository claim carries a `path:line`

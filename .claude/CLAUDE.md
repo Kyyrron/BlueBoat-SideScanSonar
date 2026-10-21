@@ -38,10 +38,30 @@ BOAT — hardware + its own firmware only    THIS COMPUTER (operator laptop, ~/r
 └─ Water Linked USBL (.94)                 ├─ BlueBoat GCS             (mosaic, overlays, recording)
         ▲                                  ├─ SSS-Dataset-Aug-Studio   (offline, no ROS)
         │                                  ├─ BlueBoat-Perception      (detector — dummy today — + image records)
-        └── BlueBoat Base Station (WiFi) ──┤  [belief layer · replanner]  not implemented
+        └── BlueBoat Base Station (WiFi) ──┤  [Belief · Replanner · Evaluation]  planned, not built
             192.168.2.0/24                 └─ SIMULATION: blueboat_sss_sim serves the identical sonar
                                               interface, Gazebo owns hull dynamics
 ```
+
+**The module chain (owner's decision, 2026-10-20; `project_synthesis.md` §5.1).**
+
+```
+sonar module (seabed images + metadata) → Perception → Belief → Replanner → Control
+```
+
+- The GCS shows **only Perception's detections** (`/sss_ai/detections`); it runs no detector.
+- **Belief** reads **only** Perception's per-image records (`/sss_ai/image_records`) plus the
+  mission's survey area and anchor, and sends **only** to the Replanner.
+- The **Replanner** reads **only** Belief, acts on its own (simulation and boat alike) and
+  generates **every survey type** through Control's live path update (`/blueboat/update_path`,
+  §4.1).
+- **Belief, Replanner and Evaluation are planned, not built.** No package, node or topic of
+  theirs exists. Perception and the link guardian exist; the Aug Studio is optional.
+- The Mission Control Station does not use the path update yet; a survey-mission launch mode
+  is the planned way (Control `docs/REQUESTS.md` R-1). A built-world simulation cannot yet run
+  a replanner-owned run (R-3).
+- New modules may own their own interfaces package (CM-1); an existing topic is never renamed
+  or retyped.
 
 ### 1.1 Deployment — **VERIFIED by the owner, 2026-09-28**
 
@@ -62,8 +82,12 @@ build". In documents "robot-side" / "on the boat" never locate software: name th
 Lua script copied onto the autopilot — autopilot configuration, not a ROS node. While its
 session flag `LGRD_ON` is set (by the laptop for every real-robot session; reset at every
 autopilot boot) and MAVROS's heartbeat (ROS 2 MAVROS: **sys 1 / comp 191**) has been silent
-for `LGRD_TIMEOUT` s, it switches `SERVO1/3_FUNCTION` from passthrough to 74/73, **arms the
-autopilot itself** if needed (ArduPilot refuses to arm on passthrough), and enters RTL. Its
+for `LGRD_NEUTRAL` s (3) it holds the passthrough thrusters at neutral (RC override 1500 —
+with no RC receiver ArduPilot otherwise keeps the last laptop command), and after
+`LGRD_TIMEOUT` s (5) it switches `SERVO1/3_FUNCTION` from passthrough to 74/73, **arms the
+autopilot itself** if needed (ArduPilot refuses to arm on passthrough; first attempt 3.5 s
+after the switch, so Rover's disarmed 1 Hz loop has set the ±1000 thruster range), and enters
+RTL. Its
 laptop companion `link_guardian/laptop/guardian.py` (plain script, not a colcon package) is
 started by MCS with every real-robot launch: sets the flag, moves HOME to each run start,
 serves MCS's GUARDIAN box over `/link_guardian/status` / `/link_guardian/command`. Design,
@@ -71,12 +95,14 @@ setup and test ladder: `link_guardian/README.md`.
 
 | Module | Produces |
 |---|---|
-| **BlueBoat-Control** | Vehicle motion, pose, thrust, trajectories; per-run ros2bag + kinematic Gazebo replay of a run (v1.1); owns `blueboat_interfaces` — **frozen at tag `v1.0`** (§3) |
+| **BlueBoat-Control** | Vehicle motion, pose, thrust, trajectories; per-run ros2bag + kinematic Gazebo replay of a run (v1.1); owns `blueboat_interfaces` — **frozen at tag `v1.0`** (§3), with user-ordered additive changes since (`UpdatePath.srv`, 2026-10-15) |
 | **BlueBoat-SSS** — `blueboat_sss` | Sonar acquisition, slant-range correction, bottom tracking, `.svlog` |
 | **BlueBoat-SSS** — `blueboat_gcs` | Live mosaic, overlays, recording sessions, seabed images |
 | **BlueBoat-MCS** | Mission launch/supervision (incl. "From a ros2bag" replay launches and the link guardian's GUARDIAN box, v1.1), pattern designer, safe shutdown — **frozen at tag `v1.0`** (§3) |
 | **BlueBoat-SSS-Sim** | GPS-anchored Gazebo worlds (World Builder GUI over MCS anchored paths) + a drop-in replacement for the real sonar interface + the **sea state** (current/waves into Gazebo, `sea_state_node`) |
-| **SSS-Dataset-Aug-Studio** | Physics-informed augmentation of YOLO datasets (offline, file-level only) |
+| **SSS-Dataset-Aug-Studio** — *optional* | Physics-informed augmentation of YOLO datasets (offline, file-level only); nothing in the chain depends on it |
+| **Link guardian** (`link_guardian/`, not a submodule) | Connection-loss guardian: ArduPilot Lua script + laptop companion `guardian.py` (§1.1). Not yet tested on the boat |
+| **Belief · Replanner · Evaluation** | **Planned, not built** — the chain above; open requirements `project_synthesis.md` §5.2, §8.1, §8.4 |
 | **BlueBoat-Perception** — `blueboat_perception` | **The station's one detection source** (since 2026-10-16): the GCS's seabed images → detector input (`fixed_gray`, a fixed mapping of the raw dB) → detector (the station's former dummy; YOLO an interface stub) → calibration (identity) → `/sss_ai/detections` for the GCS map + one record per image (`/sss_ai/image_records`) for the future belief layer. ROS-free deterministic core, thin node, offline CLI (offline = live, byte-equal records); dataset mode: a YOLO dataset per world run, labelled from the simulator's ground truth (highlight + shadow boxes, the 29 World Builder classes), plus the archival ground-truth bag |
 
 ---
@@ -92,7 +118,7 @@ path in an older document is history.
 `~/ros2_ws` is the project's **only** ROS workspace (§1.1). The superproject is checked out at
 `~/ros2_ws/src/BlueBoat-SideScanSonar/` and is not itself the colcon workspace; `colcon build`
 runs from `~/ros2_ws`. Build `blueboat_interfaces` first — every ROS module's types resolve
-there (`OmniscanProfile`, `ProcessedSSSPing`, `RequestPath.srv`); `blueboat_sss_sim` modifies
+there (`OmniscanProfile`, `ProcessedSSSPing`, `RequestPath.srv`, `UpdatePath.srv`); `blueboat_sss_sim` modifies
 no other package (`simCLAUDE.md` NC #8). `blueboat_perception` (`ament_python`) uses standard
 types only (`std_msgs`, `sensor_msgs`, `vision_msgs`), so it has no build-order constraint;
 the GCS imports its ROS-free core lazily for the replay window's Run AI (installed package,
@@ -121,67 +147,19 @@ The six module directories are git **submodules**, each an independent repositor
 `.gitmodules` paths are authoritative for the layout.
 
 **Frozen modules (recorded 2026-09-18).** `BlueBoat-Control` and `BlueBoat-MCS` are frozen at
-tag `v1.0` (Control `65b15bb` "Dev V1.0 (#1)", MCS `790934f` "V1.0 (#1)", both on
-`origin/main`, 2026-09-14). The superproject gitlinks point at the `dev` HEADs `d64ac71` /
-`3cfb58c`, trees byte-identical to the tags (`git rev-parse v1.0^{tree}` = `HEAD^{tree}` in
-both, verified 2026-09-17); the tag is not an ancestor of `dev`, so `git describe --tags`
-fails there by design. **Sessions do not edit these two submodules** unless the user
-explicitly orders it; a needed change becomes a post-v1.0 item in the requesting module's
-`TODO.md` or a review's update plan. Re-verified online 2026-09-28: `origin/main` = `v1.0`,
-`origin/dev` = the gitlink, trees identical. **On 2026-09-28 the user ordered documentation,
-comment and UI-text corrections** in both (the §1.1 deployment wording; no behaviour change),
-and on 2026-10-08 a split of each `.claude/CLAUDE.md` into a trimmed root plus nested
-`CLAUDE.md` files (Control: `blueboat_control/src/`, `blueboat_description/`, `log_reviewer/`;
-MCS: `mcs/designer/`) — documentation only. **Also on 2026-10-08 the user ordered the MCS sea-state UI
-redesign** (`mcs/core/sea.py`, `gui/dialogs/sea_state_dialog.py`, new
-`gui/dialogs/sea_timeline_dialog.py`, `gui/sea_state_box.py`, `gui/theme.py`, the smoke-test
-sea blocks and the MCS docs) — a behaviour change of those files only; launch arguments and
-topics unchanged. **On 2026-10-09 the user ordered the run-session update in both modules**
-(a real-robot launch connects and idles; runs are started / stopped from the station, one
-log per run; Update Mission between runs; arrow-key control; Release E-STOP): Control's
-`master_control.py`, `robot_interaction/robot_interface.py`, `launch/BlueBoat_launch.py`
-and their docs; MCS's station code, smoke test and docs. Additive interface only — new
-`/blueboat/run_command`, `/blueboat/run_state`, `/blueboat/run_log`,
-`/blueboat/arrow_thrust`, parameters `session_mode`, `arrow_timeout` and launch argument
-`session_mode` (default `False`, so the CLI and `Sim_launch.py` keep their behaviour);
-nothing renamed or retyped (§4.1). **Also on 2026-10-09 the user opened both modules for the
-sea-state follow-ups** ("if there's anything you need to update in control or mcs, you can do
-it"): Control's `simulation_interface.py` re-publishes `/blueboat/controller_ready` every 1 s
-like `robot_interface` (QoS unchanged); MCS's `launch_manager.companion_command` starts the
-sea companion for every empty-world launch, a null sea included, and the SEA STATE box flags
-a run on Gazebo's box hull (`mcs/core/sea.py`, `gui/sea_state_box.py`, smoke test, docs). No
-interface changed. **On 2026-10-12 the user ordered a Rotation slider in MCS's ARROW CONTROL box**
-(3–15 N, default 5; Power default 10 N): `gui/arrow_box.py`, `config/settings.py`, the
-`core/arrows.py` docstring, the smoke test and the user guide. No interface changed — the
-stream still carries the composed `[right, left]`. **On 2026-10-13 the user ordered v1.1 in both
-modules: run bags and bag replay.** Every real-robot run also records a ros2bag of every
-non-SSS topic, filed into its `Robot_data/<stem>/` folder (`robot_interface` + the ROS-free
-`run_bag.py`: a separate `ros2 bag record` process, pre-armed paused between runs, resumed at
-run start); and MCS's Gazebo launch gains Source **"From a ros2bag"** → Control's new
-`Replay_launch.py` / `bag_replay` node: the boat moves **kinematically** along the recording
-(the force-free `blueboat_description replay:=true` description — no hydrodynamics, collision,
-gravity or thrusters, velocity pinned to zero — so sea state, wind and current cannot move it),
-in the empty world or a GPS-anchored built world (read-only: `world.sdf` + `metadata.yaml`).
-Additive interface only (§4.1): `/replay/state`, `/replay/command`, the `/replay/<name>`
-namespace, `robot_interface` parameters `record_bag` / `trajectory`, launch argument
-`record_bag` (default `True`, session runs only) and three additive `/blueboat/run_log` fields.
-Nothing renamed or retyped; BlueBoat-SSS-Sim untouched. **On 2026-10-14 the user ordered the
-link guardian in both modules (MCS v1.1):** Control's `robot_interface` arms the autopilot at
-session connection *before* going to override (MANUAL → `default` → arm → `override`; a failed
-arm never blocks the session) and gains the `input_str` token `rearm` and parameters
-`arm_on_connect` / `arm_timeout` / `arm_default_timeout` (interface baseline re-taken); MCS
-gains the GUARDIAN box (top of the left column), starts `guardian.py watch` with every
-real-robot launch, asks at Turn Off Connection / exit whether to turn the guardian off and
-disarm, moves LAYERS to the right column above MAP TOOLS and drops the robot heading arrow.
-Additive interface only: `/link_guardian/status`, `/link_guardian/command`, the `rearm` token.
-**On 2026-10-16 the user ordered the BlueBoat-Perception companion in MCS** (additions only,
-compatible with Control's requested "Replanner mode" row): `PerceptionConfig`
-(`config/settings.py`), `perception_command` / `perception_dataset_name` and a third
-companion (`ros/launch_manager.py`), the launch dialog's **Session** row (*Normal session* /
-*Dataset creation*, field `LaunchParameters.perception_mode`, no launch argument), the smoke
-test's `perception ok` block and the MCS docs. Every existing `to_cli()`, launch target and
-sea companion is unchanged (pinned). No interface changed; BlueBoat-Control was not edited.
-BlueBoat-Perception itself (added 2026-10-16) is not frozen.
+tag `v1.0` (Control `65b15bb`, MCS `790934f`, both on `origin/main`, 2026-09-14). **Sessions do
+not edit these two submodules** unless the user explicitly orders it; a needed change becomes a
+post-v1.0 item in the requesting module's `TODO.md` or a review's update plan. **Add-only rule
+(owner, 2026-10-20):** Control and MCS are updated **by additions only** — a new topic, service,
+parameter, launch argument or UI element; nothing proven is renamed, retyped or changed in
+behaviour unless the behaviour stays identical *and is shown to be*
+(`BlueBoat-Control/test/mc_harness.py --compare HEAD`, MCS's smoke test, the interface
+baseline). Every dated owner order is an instance of this rule. The "frozen" statement is the
+**2026-09-18 baseline**: the gitlinks have since moved on (2026-10-20: Control `b94dd7b`, MCS
+`490f195`), so the trees are no longer identical to the tags. The dated orders (2026-09-28 to
+2026-10-16: documentation splits, sea-state UI, run sessions, v1.1 run bags and bag replay,
+link guardian, live path update, the Perception companion in MCS) are recorded in skill
+`git-history`. BlueBoat-Perception itself (added 2026-10-16) is not frozen.
 
 ---
 
@@ -207,9 +185,12 @@ QoS is `default` for every row unless the notes say otherwise (`/blueboat/odom`:
 | `/blueboat/input_str` | `std_msgs/String` | MCS `command_center`, operator CLI → **`robot_interface` only** | `enable`, `disable`, `stop`, `override`, `default`, `arm`, `disarm`, `rearm` (session only, 2026-10-14: `default` → arm → `override`), `move <l> <r> <s>`. `arm` works only in `default` (ArduPilot refuses on passthrough). MCS publishes `rearm` (GUARDIAN box) and `disarm` (Turn Off choice). Neither `param_set` nor `master_control` subscribes; `robot_interface` translates `override`/`default` onto `/blueboat/param_str`. An unrecognised first token falls through to the move handler (needs exactly four fields); an empty message is ignored. `stop` **latches** (CM-15 corollary); only `enable` clears it (MCS **Release E-STOP**, run session with motors enabled). |
 | `/blueboat/manual_target` | `std_msgs/Float32MultiArray` `[x, y]` | MCS, GCS visualisation app → `master_control` | **World frame.** `[0.0, 0.0]` = resume-original-mission sentinel, not a coordinate; a genuine origin click is nudged by `1e-3`. Any manual target also releases arrow control (the MCS "hold where released" publishes the boat's own position). |
 | `/blueboat/arrow_thrust` | `std_msgs/Float32MultiArray` `[right, left]` N, or `[]` | MCS (ARROW CONTROL box) → `master_control` | 20 Hz while on, `[]` releases. Highest-priority branch in **every** mode (sim included): goes out through `publish_thrust`, freezes τ like a manual target, logs the last registered target; a gap > `arrow_timeout` (0.5 s) commands zero and **stays** in arrow control. Since 2026-10-09. |
-| `/blueboat/run_command` | `std_msgs/String` (JSON) | MCS → `master_control` | **Real-robot run session only** (`session_mode:=true`, every station launch since 2026-10-09). `configure` {controller_type, use_pinger, note, mission} / `start` / `stop`, each with a `seq`. Schema: `BlueBoat-Control/.claude/CLAUDE.md` §2.3. |
-| `/blueboat/run_state` | `std_msgs/String` (JSON) | `master_control` → `robot_interface`, MCS | **Run session only.** `seq`/`ok`/`detail` answer the last command; `state` idle / loading / running / error; heartbeated 1 Hz. `robot_interface` opens and closes each run's CSV from it. |
+| `/blueboat/run_command` | `std_msgs/String` (JSON) | MCS → `master_control` | **Real-robot run session only** (`session_mode:=true`, every station launch since 2026-10-09). `configure` {controller_type, use_pinger, note, mission, optional `path_source` (`mission` \| `replanner`, since 2026-10-15)} / `start` / `stop`, each with a `seq`. Schema: `BlueBoat-Control/.claude/CLAUDE.md` §2.3. |
+| `/blueboat/run_state` | `std_msgs/String` (JSON) | `master_control` → `robot_interface`, MCS | **Run session only.** `seq`/`ok`/`detail` answer the last command; `state` idle / loading / running / error; heartbeated 1 Hz. `robot_interface` opens and closes each run's CSV from it. Additive key `path_source` since 2026-10-15. |
 | `/blueboat/run_log` | `std_msgs/String` (JSON) | `robot_interface` → MCS | **Run session only.** The run's CSV and whether it is being written; heartbeated 1 Hz. Additive since v1.1 (2026-10-13): `bag_enabled`, `bag_recording`, `bag` (staging dir while recording, else the last run's filed bag) — MCS's RUN box "Bag" row; a pre-v1.1 producer sends none. |
+| `/blueboat/update_path` | service `blueboat_interfaces/srv/UpdatePath` | client → `master_control` (every launch, sim and real). Clients today: only Control's tests (`test/path_update_demo.py`, `test/gazebo_path_update.py`); the replanner and an MCS "Replanner mode" are future | **Live path update, 2026-10-15, additive.** Loads the first path of a **replanner-owned** run (`path_source:=replanner`), or replaces its rest from `change_point` on. A fixed-mission or pinger run answers `mission_owned`. Every request gets `ok` or one of 17 codes, and a refusal changes nothing. It never touches safety or operator state (Control N10). Gazebo-verified for PID/LoS/MPC, not on water. Contract: `BlueBoat-Control/docs/PATH_UPDATE_INTERFACE.md`. |
+| `/blueboat/path_progress` | `std_msgs/String` (JSON, `blueboat_path_progress/1`) | `master_control` → replanner (future), tests | Default QoS, 10 Hz plus one on every answer or transition, in every launch. Carries τ (the governor's path parameter; never derive wall-clock times from path seconds), the state, the following and active ids, `min_change_point`, the end of the path and the last answer. |
+| `/blueboat/path_update_event` | `std_msgs/String` (JSON, `blueboat_path_update_event/1`) | `master_control` → `robot_interface`, `simulation_interface`, the run bag | Reliable, **depth 50**, not heartbeated. One message per answer, activation, end or clear. Logged as the run's `<date>-<note>-pathlog.csv`, created only if the run received a request. |
 | `/replay/state` | `std_msgs/String` (JSON) | `bag_replay` → MCS (REPLAY box) | **Bag replay only, TRANSIENT_LOCAL depth 1**, 2 Hz: `{bag, t, duration, rate, paused, finished, frame: empty\|anchored, world, world_offset, pose_source, gazebo}`. |
 | `/replay/command` | `std_msgs/String` (JSON) | MCS → `bag_replay` | **Bag replay only.** `{"cmd": "pause"\|"resume"}` / `{"cmd": "rate", "rate": x}` (0.01–50). |
 | `/replay/<recorded name>` | as recorded | `bag_replay` → offline analysis | **Bag replay only.** Every recorded topic that is a command or session plumbing (`input_str`, `manual_target`, `arrow_thrust`, `run_*`, `param_*`, `controller_ready`, `/mavros/rc/override`, the raw `/blueboat/odom`) is republished under this prefix — never on its live name, so no consumer acts on it. Telemetry keeps its live name: every other `/mavros/*`, `/thruster_input`, `/controller_target`, `/blueboat/pinger_coordinates`, `/uw_gps_data`; `/monitoring_data` shifted into the replay world frame. Every `header.stamp` is rewritten to the replay's time; the bag's receive times are the timing truth (on the real launch simple_launch gives mavros `use_sim_time:=True` with no `/clock`, so recorded mavros stamps may read 0). |
@@ -233,11 +214,14 @@ QoS is `default` for every row unless the notes say otherwise (`/blueboat/odom`:
 path_request` / `---` / `nav_msgs/Path path`). Server: `path_generation` (`blueboat_control`)
 — **the only one**; **exactly one server may run** (simulated missions ride the same
 `from_yaml` branch). Clients: `master_control`, `path_publisher`, the two standalone
-`mpc_control` nodes, MCS. Request = an array of path-parameter values (deliberately
+`mpc_control` nodes, MCS, the GCS (`ros/path_listener.py:114`, the planned-path overlay; it
+also reads `/path_generation/get_parameters`). Request = an array of path-parameter values (deliberately
 parameter-agnostic); response `frame_id: "world"`, one pose per value. `master_control` asks
 `linspace(tau, tau + path_time, path_steps)`; `path_publisher` a *time window*
 `[0, total_time]`, so `full_mission_launch` sets `total_time` from the bundle's stored
-`duration_s`.
+`duration_s`. A replanner-owned run (`path_source:=replanner`, 2026-10-15) never calls
+`/path_request`: it holds its own path, fed through the second service, `/blueboat/update_path`
+(§4.1).
 
 ### 4.3 Sonar acquisition
 
@@ -268,16 +252,19 @@ both).
 real = sim since 2026-09-28 (range start 0, free run); the sim's smoke test reads the real
 driver's source and asserts the equality.
 
-| Parameter | Default (sim = real) | `project_synthesis.md` §8.5 reserved |
+| Parameter | Default (sim = real) | Survey setting (`project_synthesis.md` §8.5) |
 |---|---|---|
-| `range_length_mm` | 20000 (sized from water depth, `sssCLAUDE.md` NC #5) | 30 m coverage pass / 15 m revisit pass |
+| `range_length_mm` | 20000 (sized from water depth, `sssCLAUDE.md` NC #5) | **20 m per side for every survey condition** (owner, 2026-10-20) — the default, no override |
 | `gain_index` | −1 (device auto) | — |
 | `num_results` | 1200 (the device maximum) | — |
 | `pulse_len_percent` | 0.00125 | — |
 
 The device's **best range resolution** (owner's decision, 2026-09-28): the transmit pulse
 stays on its measured 44.3 µs floor to ~27 m. The sim's smoke gates keep measuring at the
-calibration acquisition (600 / 0.002 / gain 4); §8.5's passes are passed explicitly per run.
+calibration acquisition (600 / 0.002 / gain 4). The old 30 m coverage / 15 m revisit passes are
+**no longer part of the plan**; `BlueBoat-SSS-Sim`'s opt-in `config/coverage_pass_sonar.yaml`
+(30 m) and the GCS range slider (5–50 m, starts at 20) remain as diagnostic tools only, and the
+simulator's `config/enclosed_basin_world.yaml:9` still says "default 15 m range" (stale).
 `config/fault_injection_sonar.yaml` is **test-only** (CM-2 corollary) — never a calibration or
 comparison run. `gain_index: -1` is a command-only sentinel: `OmniscanProfile.gain_index` is
 `uint16`, so the device reports the concrete index its auto-gain resolved, and the sim (no AGC)
@@ -296,8 +283,9 @@ brightness, ever. Evidence: `simCLAUDE.md` NC #4/#6/#15/#17,
 `994a74b`), mirrored in the GCS's `core/svlog.py`, and `mount_y_abs_m: 0.285` in the
 simulator's `config/default_sonar.yaml`. Submersion 0.15 m is an estimate (= the sim's
 `sensor_depth_m`); the fore/aft offset is still 0.0, unmeasured. The seabed pictures
-georeference with it since 2026-10-16 (georef convention 2, schema 5). `simTODO.md` [P1]
-still describes the old 0.20 / 0.0 disagreement (the simulator is not edited from that work).
+georeference with it since 2026-10-16 (georef convention 2, schema 5). `simTODO.md` closed
+its old 0.20 / 0.0 disagreement item on 2026-10-19. The simulator's render fixture,
+frozen at 0.20 m, was rebaselined that day; re-rendering at 0.20 reproduced it bit for bit.
 
 **Ping rate — VERIFIED on the corpus:** device period `max(50 ms, 2R/c + ~3 ms)` (the spec
 sheet's "20 pings/s up to 30 m"); the sim's `ping_period_s` implements exactly that. Compare
@@ -323,23 +311,14 @@ differ** by that offset; a torn row shows as the gap *changing*, never as it bei
 
 ### 4.4 MAVROS boundary
 
-| Name | Type | Dir | Module |
-|---|---|---|---|
-| `/mavros/state` | `mavros_msgs/State` | in | `robot_interface`; MCS (only when `mavros_msgs` imports — absent in simulation) |
-| `/mavros/imu/data` | `sensor_msgs/Imu` | in | `robot_interface`; `sss_processor_node` (→ `.svlog` ATTITUDE); GCS (BEST_EFFORT 10, seabed-image metadata only, never geometry; since 2026-10-16) |
-| `/mavros/local_position/odom` | `nav_msgs/Odometry` | in | `robot_interface` |
-| `/mavros/global_position/global` | `sensor_msgs/NavSatFix` | in | `robot_interface`, GCS, MCS — **BEST_EFFORT**; `lat==0 and lon==0` = no fix, discarded. In a Gazebo run of a GPS-anchored mission **MCS is the only publisher** (fixes synthesised from sim odom, ~5 Hz, `status` left at **-2 / STATUS_UNKNOWN**), so only `-1` (STATUS_NO_FIX) means no fix — never gate on `status < 0`. In a **bag replay** `bag_replay` is the only publisher: the recorded fixes, unchanged but for the stamp (MCS's SimGps stays disarmed). |
-| `/mavros/global_position/compass_hdg` | `std_msgs/Float64` | in | MCS, GCS. Degrees **clockwise from north**; MCS converts `radians(90 - hdg)`. Preferred heading source; odom yaw the fallback |
-| `/mavros/rc/override` | `mavros_msgs/OverrideRCIn` | out | `robot_interface` at ~20 Hz, latest-wins |
-
-FCU endpoint = `BlueBoat_launch.py`'s `fcu_url` launch argument (default
-`udp://:14550@192.168.2.2:14550`). **Port 14550 collides with a running QGroundControl** →
-intermittent launch failures (`mavros_router`:
-`link[1000] open failed: DeviceError:udp:bind: Address already in use`); close QGC or pass
-`fcu_url:=` with another port.
-
-The sim's `mavros_shim_node` (on by default) republishes `/blueboat/odom` under MAVROS names
-for tooling written against them (`simCLAUDE.md` §3.2).
+The `/mavros/*` topics and services each node takes from or sends to ArduPilot, the sim's
+`mavros_shim_node` republishing and the FCU endpoint are in skill `interface-inventory`.
+Gotcha kept here: `BlueBoat_launch.py`'s `fcu_url` default (`udp://:14550@192.168.2.2:14550`)
+**collides with a running QGroundControl** (`mavros_router` `udp:bind: Address already in
+use`) — close QGC or pass `fcu_url:=` with another port. `/mavros/global_position/global` has
+`lat==0 and lon==0` = no fix, and in a stock-world Gazebo run MCS is its only publisher with
+`status` -2, so only `-1` means no fix — never gate on `status < 0`. `/mavros/rc/override` is
+written only by `robot_interface`.
 
 ### 4.5 File-level interfaces
 
@@ -365,7 +344,15 @@ boat-relative grid).
 | Frame on the wire | `/blueboat/manual_target` **world**; `/blueboat/pinger_coordinates` and `/controller_target` **body**; `/monitoring_data` **world in every branch**. `master_control` converts the manual target via `inRobotFrame()` before `solve_LoS()` and passes the pinger vector through, so both are robot-frame at the solver — correct by design. |
 | MAVROS twist | `/mavros/local_position/odom` has `child_frame_id: base_link`: `twist` is body-frame, `pose` world-frame. `robot_interface` re-expresses **pose** into a boot-relative frame and passes **twist** through untouched. |
 | Gazebo generation | ROS 2 **Jazzy** + Gazebo **Harmonic** (Fortress not installed). `blueboat_sss_sim` emits `gz-sim-*` names throughout. `blueboat_description` is still Fortress-named (`ignition-gazebo-*-system`) and loads only through Harmonic's deprecated-name shim, which warns per plugin and is removed in gz-sim 9 — the port is a post-v1.0 item. |
-| TF | `project_synthesis.md` §5.2 specifies `map → odom → base_link → sss_link` with lever-arm offsets. **No module publishes or consumes that tree, and no module reads TF at all.** The one TF publisher is the external `pose_to_tf` node that `blueboat_description/launch/upload_rov_launch.py` starts **in simulation only**, emitting a single `world → blueboat/base_link` for RViz. Geometry is handled per-module; the lever-arm point surfaces as the transducer-offset disagreement (§4.3). |
+| TF | `project_synthesis.md` §5.2 specifies `map → odom → base_link → sss_link` with lever-arm offsets. **No module publishes or consumes that tree, and no module reads TF at all.** TF is published **in simulation and bag replay only**, by two things, neither on a real-robot run: the external `pose_to_tf` node that `blueboat_description/launch/upload_rov_launch.py` starts (a single `world → blueboat/base_link` for RViz) and `robot_state_publisher` (`state_publisher_launch.py:22`: `/tf` and `/tf_static` from the URDF). Geometry is handled per-module; the lever-arm point surfaces as the transducer-offset disagreement (§4.3). |
+
+### 4.7 Other served interfaces (added 2026-10-20)
+
+Debug, plumbing and parameter-level names not listed in §4.1–§4.4 (`/sim/sea_state/markers`,
+`/side_scan_sonar/set_parameters`, the run bag's `resume` service, the Gazebo bridge topics,
+`/clock`, `/tf`, the parameter inventory) are in skill `interface-inventory`. Control's complete
+set is the `entries` list of `BlueBoat-Control/.claude/tools/interface_baseline.json`.
+There is **no ROS action server and no `/diagnostics` topic** in any module.
 
 ---
 
@@ -377,8 +364,11 @@ more modules); module-local rules stay in the module.
 **CM-1 — Topic, service and parameter signatures are a cross-repo contract.** No module
 changes a name or message type unilaterally; refactors change file internals only
 (`ctrlCLAUDE.md` N1, `simCLAUDE.md` NC #1; all of §4 depends on it). `blueboat_interfaces` is
-the only place a message type is defined; the sim reuses it and puts additional simulation
-data on new additive JSON topics (`ground_truth/contacts` is the pattern).
+the only place a *vehicle or sonar* message type is defined; the sim reuses it and puts
+additional simulation data on new additive JSON topics (`ground_truth/contacts` is the
+pattern). **New modules (Belief, Replanner, Evaluation) may own their own interfaces package**
+(owner, 2026-10-20), and BlueBoat-Perception already publishes JSON and standard types only;
+what is never allowed is renaming or retyping an existing topic, service or parameter.
 
 **CM-2 — Simulation and real water expose the identical ROS interface:** names, types, QoS
 (BEST_EFFORT / KEEP_LAST / 10 on the sonar topics), parameter names, node names, ping-enable
@@ -432,17 +422,25 @@ re-applies a frame correction.** The conversion belongs at the source (`ctrlCLAU
 
 **CM-9 — The belief layer is the only object the replanner reads.** Detector, sensor and
 planner changes interact only through it (`project_synthesis.md` §5.1 ⚠, `sssCLAUDE.md` #15).
-Nothing in the current tree implements it — §6 D7.
+Belief reads only Perception's per-image records plus the mission's survey area and anchor,
+and sends only to the Replanner; the Replanner reads only Belief. Nothing in the current tree
+implements either — §6 D7.
 
 **CM-10 — AI inputs are waterfall-domain and boat-relative, never world-frame mosaic crops:**
 world-frame patches distort near turns and make intensity aggregation ambiguous where cells
 are revisited (`project_synthesis.md` §5.2 ⚠, `sssCLAUDE.md` #12).
 
-**CM-11 — The headline detector trains on real imagery only.** Synthetic data is for the
-policy comparison, the sim-to-real transfer-gap experiment and development; a detector
-trained on it would inherit aspect sensitivity from the model rather than measure it
-(`project_synthesis.md` §7.6 ⚠, `sssCLAUDE.md` #11, `simCLAUDE.md` NC #11, the Aug Studio's
-stated role).
+**CM-11 — The headline detector is a YOLO model in BlueBoat-Perception, trained on simulated
+datasets (Perception's dataset mode), with its confidence calibrated on held-out simulated
+worlds** (owner, 2026-10-20; replaces "trains on real imagery only"). Real water validates the
+simulator (motion and sensor), runs the heading-response experiment, checks simulator-to-real
+conclusions later and serves the final demonstration; a labelled real dataset blocks nothing.
+**Consequence to keep stated:** a simulation-trained detector inherits its aspect sensitivity
+from the simulator's model, so detector-dependent results stay model-conditional (CM-13) and
+the real heading-response experiment is what bounds the simulator. Split and calibrate by
+world, never by image (consecutive seabed images overlap 50 %). `project_synthesis.md` §4 E2 /
+E7, §7.6, §8.2. The old wording survives in `sssCLAUDE.md` #11, `simCLAUDE.md` NC #11, and
+Perception / Aug Studio documents — stale lines listed in the 2026-10-20 report.
 
 **CM-12 — The policy baseline is two-pass orthogonal, and tuned seriously.** Single-pass is a
 strawman; a deliberately weakened baseline is detected instantly and sinks the comparison
@@ -458,6 +456,18 @@ layer may support which claim; no layer is used above its evidential weight.
 in the water.** Field time is weather-gated and the scarcest resource; needing a field session
 to test a change means the replay tooling has a gap (`project_synthesis.md` §8.6 ⚠,
 `ctrlCLAUDE.md` N7, `sssCLAUDE.md` #14).
+
+What "recorded" means in the tree differs by stream. A real run's **run bag** (v1.1) holds
+navigation, commands and session plumbing, and **excludes** `/side_scan_sonar/*`,
+`/sss_processor/*` and `/sss_ai/*` (`run_bag.py:52`). The sonar's record is the `.svlog`
+and the GCS recording session. So:
+- control iterates against run bags (`Replay_launch.py`, the log reviewer);
+- perception and AI iterate against **GCS sessions**, with `blueboat-perception-offline`,
+  which reproduces live records byte for byte;
+- `.svlog` files are replayed through the GCS window, whose Run AI uses Perception's core.
+
+`svlog_to_rosbag.py` converts a `.svlog` to a bag, but no tool joins a run bag and a sonar
+recording into one replay.
 
 **CM-15 — Safe shutdown precedes terminating a launch:** publish `default` on
 `/blueboat/input_str`, confirm a matched subscriber, wait for the `/blueboat/param_mode` echo,
@@ -514,32 +524,70 @@ input path; the GCS mosaic is an operator display feeding no detector, and CM-10
 protects the perception pipeline, is not violated. If a detector is ever fed from the mosaic,
 the ⚠ binds directly.
 
-**D5 — Range settings.** §8.5 reserves 30 m per side for coverage and 15 m for revisit passes;
-`sssCLAUDE.md` NC #5 sets range from water depth (~4× the deepest expected), because 80 m in
-shallow water pushed the bottom return to sample 49/600 and broke bottom detection. The
-implemented default, 20 m at both ends (§4.3), sits between the reserved values; the rules
-agree in the harbour band and can conflict in very shallow water; §8.5 stays authoritative for
-what the experiments use. The field went the other way on 2026-09-07: the beach sessions ran
-**20 m** at ~1.2 m altitude — what `config/shallow_beach_sonar.yaml` reproduces and the second
-calibration corpus is made of. A third rule is thus in evidence — *range follows the altitude
-the boat can actually hold* — and the reserved values remain the experiment plan, not a
-description of the corpus.
+**D5 — Range settings: resolved 2026-10-20.** The owner's decision is **20 m per side for
+every survey condition** (§4.3, `project_synthesis.md` §8.5, rewritten): the old 30 m coverage /
+15 m revisit passes are gone, and the implemented default is the setting. `sssCLAUDE.md` NC #5
+(range from water depth, ~4× the deepest expected, because 80 m in shallow water pushed the
+bottom return to sample 49/600 and broke bottom detection) still governs very shallow water.
+The beach sessions of 2026-09-07 also ran **20 m** at ~1.2 m altitude (what
+`config/shallow_beach_sonar.yaml` reproduces). Leftovers that still say 30 m / 15 m are module
+lines or opt-in diagnostics (§4.3).
 
 **D6 — TF tree.** §5.2's `map → odom → base_link → sss_link` with lever-arm offsets: **no
 module consumes TF and none of those four frames exists** (§4.6 TF); the lever-arm point
 surfaces as the transducer-offset disagreement (§4.3).
 
-**D7 — Interface boundary, partly claimed (2026-10-16).** The detector, belief layer
-(multi-channel Bayesian grid: `p_target`, `n_observations`, `aspect_coverage`,
-`last_intensity`, `max_confidence`), initial CPP, replanner and mission manager are specified
-in §5 and correspond to deliverables D3, D4, D6, D7. **BlueBoat-Perception owns the detector
-boundary:** `/sss_ai/detections` (the GCS map) and `/sss_ai/image_records` (one record per
-image, the belief layer's input contract, `BlueBoat-Perception/docs/topics.md` §4). Its
-detector is still the dummy, the YOLO adapter an interface stub, and calibration identity
-(`calibrated: false`, so `confidence` is no probability — §8.2 ⚠). The belief layer, initial
-CPP, replanner and mission manager remain unowned; belief-grid channels, the three replanner
-rules (resolution, budget, abandonment) and the confidence-calibration requirement are
-governed by `project_synthesis.md` §5.2, §8.1, §8.2 until a module claims them.
+**D7 — Interface boundary, partly claimed (2026-10-16; chain re-stated 2026-10-20).** The
+detector, the belief layer (multi-channel Bayesian grid: `p_target`, `n_observations`,
+`aspect_coverage`, `last_intensity`, `max_confidence`) and the replanner are specified in §5.
+Since 2026-10-20 the plan is the chain of §1: sonar module → Perception → Belief → Replanner →
+Control, and the §5.1 "initial CPP" and "mission manager" boxes are **folded into the
+Replanner**, which generates every survey type through Control's live path update.
+**BlueBoat-Perception owns the detector boundary:** `/sss_ai/detections` (the GCS map) and
+`/sss_ai/image_records` (one record per image, Belief's input contract,
+`BlueBoat-Perception/docs/topics.md` §4). Its detector is still the dummy, the YOLO adapter an
+interface stub, and calibration identity (`calibrated: false`, so `confidence` is no
+probability — §8.2 ⚠). **Belief, Replanner and Evaluation are planned, not built, and
+unowned**; belief-grid channels, the three replanner rules (resolution, budget, abandonment)
+and the confidence-calibration requirement are governed by `project_synthesis.md` §5.2, §8.1,
+§8.2 until a module claims them. One fact to carry: the image records hold no survey area, no
+anchor and no latitude / longitude, so Belief takes those from the mission, as the chain says.
+
+**D8 — Mission swap: resolved 2026-10-20 (recorded 2026-10-19, Control `docs/REQUESTS.md`
+R-4).** The old §5.1 had the mission manager perform a "MAVLink mission swap" to ArduPilot. In
+the implementation nothing goes to ArduPilot: `master_control` follows the path on the laptop
+and streams RC override (Control N6). `project_synthesis.md` §5.1, §5.2, §7.5, §9 D5 now name
+Control's live path update (`/blueboat/update_path`, `/blueboat/path_progress`,
+`/blueboat/path_update_event`; §4.1) as the mechanism. It is built and tested in Gazebo, **not
+on water, and has no client**; MCS does not use it yet (a survey-mission launch mode is the
+planned way); built-world simulations cannot yet run replanner-owned runs (Control R-3). The
+caller is the Replanner (D7), unbuilt.
+
+**D9 — Detector family and input geometry: resolved 2026-10-20 (recorded 2026-10-19).** The
+old §5.1–§5.2 specified a "classical proposer + CNN classifier" on 512 × 512 patches every N
+pings at ~1–2 Hz. Decision: **a YOLO model in BlueBoat-Perception**, on the GCS seabed images
+as the code has them — 256 rows × 1200–2402 native slant bins, a new image every 128 rows
+(~0.1–0.36 Hz measured), raw dB mapped by `fixed_gray_v1`, the adapter to tile across-track and
+merge with NMS (`project_synthesis.md` §5.2 describes it). **Not yet built:** the YOLO adapter
+is an interface stub that raises on use; no weights, training script, train / validation split
+by world or calibrator beyond identity exist (the dataset mode that writes the training data
+does). CM-10 holds.
+
+**D10 — "SSS data pipeline: Built, field-validated" (§9 D1; recorded 2026-10-19; synthesis
+§9 D1 re-stated 2026-10-20 as built, verified in simulation, field validation partial).** The
+pipeline is built and verified live in simulation, but the field validation predates most of
+it:
+- The corpus holds no field recording made by the current stack. The 2026-09-07 beach logs
+  were recorded by Cerulean's SonarLink on BlueOS.
+- Only three July harbour logs come from `sss_processor_node`, and they predate the
+  September changes: packet-based side identity, counter-offset row assembly, 20 m / 1200
+  bins, GPS velocities in `.svlog`, the 0.285 m lever arm and georef convention 2
+  (`project_review.md` header; `sssTODO.md` "Needs a real-sonar session", "Needed field
+  data").
+
+*More reliable:* the module TODOs. "Field-validated" applies to the July processor and to
+offline replays of SonarLink logs, not to the stack as it stands. The "waterfall buffer" of
+D1 exists as the GCS's seabed images.
 
 ---
 
@@ -556,9 +604,14 @@ backlog — do not duplicate either here.
 | Sonar driver, processor, `.svlog` format, GCS internals, measured acquisition settings | `BlueBoat-SSS/.claude/CLAUDE.md` · open items `BlueBoat-SSS/.claude/TODO.md` |
 | Acoustic model, world generation, mission bundles, renderer seams, smoke test | `BlueBoat-SSS-Sim/.claude/CLAUDE.md` · open items `BlueBoat-SSS-Sim/.claude/TODO.md` |
 | Station threading model, map and georeferencing, Pattern Designer | `BlueBoat-MCS/.claude/CLAUDE.md` · no `TODO.md` since the v1.0 freeze |
-| Augmentation families, intensity-domain policy, reproducibility contract, extension contract, release gates | `SSS-Dataset-Aug-Studio/.claude/CLAUDE.md` · open items `SSS-Dataset-Aug-Studio/.claude/TODO.md` |
+| Augmentation families, intensity-domain policy, reproducibility contract, extension contract, release gates (the module is **optional**) | `SSS-Dataset-Aug-Studio/.claude/CLAUDE.md` · open items `SSS-Dataset-Aug-Studio/.claude/TODO.md` |
+| Live path update (the Replanner's entry point): contract, refusal codes, tests, first water test | `BlueBoat-Control/docs/PATH_UPDATE_INTERFACE.md`, `PATH_UPDATE_DESIGN.md`, `PATH_UPDATE_REPORT.md`, `PATH_UPDATE_REAL_WATER_TEST.md`; requests `docs/REQUESTS.md` |
+| Connection-loss guardian: design, setup, test ladder | `link_guardian/README.md` (superproject) |
+| Planned chain (Belief, Replanner, Evaluation) | `project_synthesis.md` §5.1–§5.2, §7.3, §8.1–§8.4 — no module exists |
 | Detector pipeline, detector input (fixed mapping, near-range mask, turn flags), image records, dataset mode, offline = live | `BlueBoat-Perception/.claude/CLAUDE.md` · open items `BlueBoat-Perception/.claude/TODO.md`; evidence `docs/PREPROCESSING_STUDY.md`, `docs/LIVE_CHECKS.md` |
 | Per-module test / lint / smoke gates, exact commands, what survives a fresh clone | skill `module-gates` (`.claude/skills/module-gates/SKILL.md`) |
+| Dated owner orders that opened the frozen Control / MCS (2026-09-28 to 2026-10-16) | skill `git-history` |
+| MAVROS boundary table, FCU endpoint, other served interfaces (§4.4, §4.7 detail) | skill `interface-inventory` |
 
 **CLAUDE.md map — read the relevant ones before touching a directory.** A nested `CLAUDE.md`
 loads by itself only when the Read tool opens a file in its directory; Bash, Grep and Glob

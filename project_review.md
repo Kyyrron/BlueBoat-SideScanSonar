@@ -1,5 +1,7 @@
 # Project review — side-scan sonar sensor pipeline: literature versus implementation
 
+> **Superseded in part since 2026-10-20** (dated review, not rewritten): where it assumes a detector trained on real beach imagery, 30 m coverage / 15 m revisit passes, a "MAVLink mission swap", or a publication plan, the owner's decisions of 2026-10-20 apply — see the revision note of `project_synthesis.md`.
+
 *First-pass review, 2026-09-14. Review only: no code was changed. Every repository claim
 carries a `path:line` (paths relative to this superproject root); every literature claim
 carries a numbered reference from the list below; every measured number names the log and

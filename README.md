@@ -1,3 +1,38 @@
+# BlueBoat — aspect-aware side-scan sonar survey (superproject)
+
+## Project at a glance
+
+A BlueRobotics BlueBoat USV with two Cerulean Omniscan 450 SS runs autonomous, heading-aware
+side-scan sonar survey in shallow enclosed water. **All project software runs on the operator
+laptop** (this workspace, `~/ros2_ws`), linked to the boat through the BlueBoat Base Station
+WiFi; the boat carries only its hardware and its own firmware (plus the connection-loss script in
+`link_guardian/`).
+
+The scientific goal is a model-conditional, simulated comparison of adaptive heading-aware
+replanning against a seriously tuned two-pass orthogonal survey, with real water used to
+validate the simulator, run the heading-response experiment and demonstrate the system.
+
+```
+sonar module (seabed images + metadata) → Perception → Belief → Replanner → Control
+```
+
+| Module (submodule) | State |
+|---|---|
+| `BlueBoat-Control` — vehicle motion, run bags / replay, **live path update** | existing (additions only) |
+| `BlueBoat-MCS` — Mission Control Station | existing (additions only) |
+| `BlueBoat-SSS` — sonar driver, processor, Ground Control Station | existing |
+| `BlueBoat-SSS-Sim` — Gazebo worlds, sonar and sea-state simulation | existing |
+| `BlueBoat-Perception` — detector (placeholder today), per-image records, simulated dataset mode | existing |
+| `SSS-Dataset-Aug-Studio` — dataset augmentation | optional |
+| Belief · Replanner · Evaluation | **planned, not built** |
+
+Read first: `project_synthesis.md` (scope, evidence, architecture, rules) and
+`.claude/CLAUDE.md` (how the modules relate: interfaces, cross-module rules). Each submodule
+has its own `.claude/CLAUDE.md`. The rest of this file is the original BlueBoat Control README
+(robot description, launch files and terminal commands).
+
+---
+
 # BlueBoat ROS2
 
 This repository contains the robot description and necessary launch files to describe and simulate the BlueBoat (Uncrewed Surface Vessel) with Gazebo and its hydrodynamics plugins under ROS 2.

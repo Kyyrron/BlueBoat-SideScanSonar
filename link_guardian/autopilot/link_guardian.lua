@@ -14,24 +14,43 @@ What it does
        session) sets it when the session connects; the script resets it to 0 at every
        boot, so a flag from an old session never survives a reboot. It becomes active
        once the laptop has been heard with the flag on.
-    3. If the laptop is silent for LGRD_TIMEOUT seconds while active:
-         a. hand the thrusters back to the autopilot. Our stack drives them through RC
-            passthrough (SERVO1/3_FUNCTION = 51/53), which ArduPilot's navigation modes
-            cannot drive, so SERVO1/3_FUNCTION are set to LGRD_SRV1_FN / LGRD_SRV3_FN
-            (74 ThrottleRight / 73 ThrottleLeft, the BlueBoat default). Not saved: a
-            reboot restores the stored values.
+    3. Laptop silent for LGRD_NEUTRAL seconds (default 3): hold the thrusters at neutral.
+       Our stack drives them through RC passthrough (SERVO1/3_FUNCTION = 51/53) with RC
+       overrides, and with no RC receiver on the boat ArduPilot keeps the LAST override
+       value forever once the laptop stops sending - the boat would keep its last thrust.
+       The script overrides those RC channels with 1500 until the link is back (MAVROS's
+       20 Hz stream then wins again) or until the takeover below.
+    4. Laptop silent for LGRD_TIMEOUT seconds (default 5): take over.
+         a. hand the thrusters back to the autopilot: SERVO1/3_FUNCTION are set to
+            LGRD_SRV1_FN / LGRD_SRV3_FN (74 ThrottleRight / 73 ThrottleLeft, the BlueBoat
+            default), which ArduPilot's navigation modes drive. Not saved: a reboot
+            restores the stored values.
          b. ARM the autopilot if it is not armed (after an E-STOP, or when arming failed
             at connection). This only works after (a): ArduPilot refuses to arm while the
-            thrusters are on passthrough. It keeps retrying (pre-arm checks such as a GPS
-            fix must pass) and holds meanwhile.
+            thrusters are on passthrough. The first attempt waits ARM_SETTLE_MS (below),
+            then it keeps retrying (pre-arm checks such as a GPS fix must pass) and holds
+            meanwhile.
          c. (optional, LGRD_STAGE1=1) drive back to the last point where the link was
             alive and wait there LGRD_WAIT s, in case the link comes back;
          d. RTL: ArduPilot drives the boat to HOME (straight line) and holds there.
-    4. When the link comes back, the boat keeps doing what the guardian set until the
+    5. When the link comes back, the boat keeps doing what the guardian set until the
        operator takes control back (MCS GUARDIAN box "Take back control", or any mode
        change from a ground station). It never resumes a mission. A disarm while the
        laptop is connected (the operator's E-STOP) stands the guardian down; a disarm
        nobody could have sent (link down) is undone.
+
+Thruster output range (why the arming waits)
+  For 73/74 Rover must scale each output channel -1000..+1000 (0 = 1500 us, stopped). It
+  applies that range only in its 1 Hz loop, and only while DISARMED. A channel armed on
+  73/74 before that happened gets a 0..100 range instead: zero thrust then comes out near
+  1100 us (full reverse) and small forward commands saturate. Once a disarmed 1 Hz pass
+  has run on 73/74 the good range sticks until reboot. So:
+    - the first arm attempt is made ARM_SETTLE_MS after switching to 73/74 (disarmed);
+    - the script remembers whether, since boot, it has seen the autopilot disarmed on
+      73/74 for SCALING_SETTLE_MS. If not, a takeover while armed first disarms and goes
+      through (b) instead of switching the thrusters under an armed autopilot.
+  (With ARMING_CHECK enabled Rover's own pre-arm motor check already prevents the bad
+  case in practice; this does not rely on it.)
 
 HOME is set by ArduPilot at arming (the session start) and moved by the laptop to the
 start of each run while the link is up.
@@ -50,12 +69,21 @@ Parameters (appear after the first boot with the script; see README.md):
   LGRD_SRV3_FN  73    SERVO3_FUNCTION on takeover (ThrottleLeft)
   LGRD_DETECT   1     1 = watch the laptop heartbeat itself (recommended)
                       0 = use ArduPilot's own GCS-heartbeat time (gcs:last_seen)
+  LGRD_NEUTRAL  3     s of laptop silence before holding the thrusters at neutral;
+                      0 = off. Keep it below LGRD_TIMEOUT.
+
+Messages are kept under 50 characters (one MAVLink STATUSTEXT, "LinkGuard: " included):
+longer ones are split and the station only shows the first piece.
 --]]
 
 local TAG = "LinkGuard: "
 local PERIOD_MS = 200
 local ARM_RETRY_MS = 2000
 local ARM_REPORT_MS = 15000
+local ARM_SETTLE_MS = 3500       -- disarmed on 73/74 before the first arm attempt
+local SCALING_SETTLE_MS = 2000   -- disarmed on 73/74 this long = output range applied
+local NEUTRAL_PWM = 1500
+local MAX_TEXT = 50              -- MAVLink STATUSTEXT text field
 
 -- ArduPilot Rover mode numbers
 local MODE_HOLD = 4
@@ -64,6 +92,9 @@ local MODE_RTL = 11
 local MODE_GUIDED = 15
 local MODE_NAME = {[0] = "MANUAL", [4] = "HOLD", [5] = "LOITER", [10] = "AUTO",
                    [11] = "RTL", [12] = "SMART_RTL", [15] = "GUIDED"}
+
+-- SERVOx_FUNCTION values RCIN1..RCIN16 (RC passthrough)
+local FN_RCIN1, FN_RCIN16 = 51, 66
 
 -- MAV_SEVERITY
 local SEV_CRITICAL, SEV_WARNING, SEV_NOTICE, SEV_INFO = 2, 4, 5, 6
@@ -96,6 +127,7 @@ local P_SRV1_FN = bind_add_param("SRV1_FN", 9, 74)
 local P_SRV3_FN = bind_add_param("SRV3_FN", 10, 73)
 local P_DETECT  = bind_add_param("DETECT",  11, 1)
 local P_ON      = bind_add_param("ON",      12, 0)
+local P_NEUTRAL = bind_add_param("NEUTRAL", 13, 3)
 
 -- A session flag must never outlive the session: every boot starts OFF until the
 -- laptop sets it again (runtime value only; the laptop's own set is what is saved).
@@ -105,7 +137,7 @@ param:set(PARAM_PREFIX .. "ON", 0)
 -- Helpers
 ---------------------------------------------------------------------------
 local function say(sev, text)
-  gcs:send_text(sev, TAG .. text)
+  gcs:send_text(sev, string.sub(TAG .. text, 1, MAX_TEXT))
 end
 
 local function now_ms()
@@ -136,7 +168,7 @@ local last_hb_ms = nil       -- last laptop heartbeat, autopilot clock
 
 do
   local ok = pcall(function()
-    mavlink:init(10, 1)
+    mavlink:init(10, 1)        -- (queue length, number of msg ids) - the binding's order
     mavlink:register_rx_msgid(0)
   end)
   mav_ok = ok
@@ -164,7 +196,7 @@ local function drain_heartbeats()
     local ok, sysid, compid, msgid = pcall(header_ids, msg)
     if ok and msgid == 0 and sysid == want_sys and (want_comp == 0 or compid == want_comp) then
       if last_hb_ms == nil then
-        say(SEV_INFO, string.format("laptop heartbeat seen (sys %d comp %d)", sysid, compid))
+        say(SEV_INFO, string.format("laptop heard (sys %d comp %d)", sysid, compid))
       end
       last_hb_ms = now_ms()
     end
@@ -183,6 +215,33 @@ local function laptop_age_ms()
 end
 
 ---------------------------------------------------------------------------
+-- Thruster output range (see the header): has a disarmed 1 Hz pass run on 73/74?
+---------------------------------------------------------------------------
+local scaling_ok = false
+local disarmed_on_fn_since = nil
+
+local function on_autopilot_functions()
+  local s1, s3 = param:get("SERVO1_FUNCTION"), param:get("SERVO3_FUNCTION")
+  return s1 ~= nil and s3 ~= nil
+     and math.floor(s1) == math.floor(P_SRV1_FN:get())
+     and math.floor(s3) == math.floor(P_SRV3_FN:get())
+end
+
+local function track_scaling(armed)
+  if scaling_ok then return end
+  if not armed and on_autopilot_functions() then
+    local t = now_ms()
+    disarmed_on_fn_since = disarmed_on_fn_since or t
+    if t - disarmed_on_fn_since >= SCALING_SETTLE_MS then
+      scaling_ok = true
+      say(SEV_INFO, "thruster range OK")
+    end
+  else
+    disarmed_on_fn_since = nil
+  end
+end
+
+---------------------------------------------------------------------------
 -- Actions
 ---------------------------------------------------------------------------
 local function thrusters_to_autopilot()
@@ -193,6 +252,21 @@ local function thrusters_to_autopilot()
     if cur == nil or math.floor(cur) ~= want then
       if not param:set(name, want) then
         say(SEV_CRITICAL, "could not set " .. name)
+      end
+    end
+  end
+end
+
+-- Hold the RC channels that SERVO1/3 pass through at neutral. Does nothing once the
+-- thrusters are on the autopilot's own functions.
+local function hold_neutral()
+  for _, name in ipairs({"SERVO1_FUNCTION", "SERVO3_FUNCTION"}) do
+    local fn = param:get(name)
+    if fn ~= nil then
+      fn = math.floor(fn)
+      if fn >= FN_RCIN1 and fn <= FN_RCIN16 then
+        local ch = rc:get_channel(fn - FN_RCIN1 + 1)
+        if ch then ch:set_override(NEUTRAL_PWM) end
       end
     end
   end
@@ -215,12 +289,15 @@ local last_link_loc = nil    -- last position with a live laptop link
 local stage1_start_ms = nil
 local arrived_ms = nil
 local link_was_ok = true
+local neutral_active = false
 local last_reassert_ms = 0
 local arm_start_ms = nil
+local arm_not_before_ms = 0
 local last_arm_try_ms = 0
 local last_arm_report_ms = 0
 
 local function set_state(s, age)
+  if s == state then return end
   state = s
   log_state(s, age)
 end
@@ -229,7 +306,7 @@ local function start_rtl(age)
   -- Mode first, then thrusters: the autopilot must already be steering when the
   -- outputs are handed over.
   if not ahrs:home_is_set() then
-    say(SEV_CRITICAL, "no HOME set - RTL impossible, holding position")
+    say(SEV_CRITICAL, "no HOME set - holding position")
   end
   local m = enter_first({MODE_RTL, MODE_LOITER, MODE_HOLD})
   thrusters_to_autopilot()
@@ -250,10 +327,10 @@ local function start_stage1(age)
     stage1_start_ms = now_ms()
     arrived_ms = nil
     set_state("stage1", age)
-    say(SEV_CRITICAL, "going back to the last point with a laptop link")
+    say(SEV_CRITICAL, "going to last point with link")
     return
   end
-  say(SEV_WARNING, "cannot go to the last-link point, returning HOME instead")
+  say(SEV_WARNING, "no last-link point - RTL instead")
   start_rtl(age)
 end
 
@@ -266,24 +343,36 @@ local function go(age)
   end
 end
 
--- Disarmed: hold, hand the thrusters over (so pre-arm can pass) and arm.
+-- Disarmed: hold, hand the thrusters over (so pre-arm can pass) and arm once Rover has
+-- applied the thruster output range (ARM_SETTLE_MS, see the header).
 local function start_arming(age)
   thrusters_to_autopilot()
   expected_mode = enter_first({MODE_HOLD})
   arm_start_ms = now_ms()
+  arm_not_before_ms = arm_start_ms + ARM_SETTLE_MS
   last_arm_try_ms = 0
-  last_arm_report_ms = now_ms()
+  last_arm_report_ms = arm_start_ms
   set_state("arming", age)
-  say(SEV_CRITICAL, "autopilot disarmed - arming it")
+  say(SEV_CRITICAL, "disarmed - arming it")
 end
 
 local function takeover(age)
-  say(SEV_CRITICAL, string.format("laptop link lost for %.0f s - taking over", age / 1000))
-  if arming:is_armed() then
-    thrusters_to_autopilot()
+  neutral_active = false
+  say(SEV_CRITICAL, string.format("link lost %.0f s - taking over", age / 1000))
+  if not arming:is_armed() then
+    start_arming(age)
+  elseif scaling_ok then
     go(age)
   else
-    start_arming(age)
+    -- Armed, but the thruster output range was never seen applied: switching to 73/74
+    -- now could leave idle at full reverse. Go through a disarmed pass instead.
+    say(SEV_CRITICAL, "thrust range unchecked - re-arming")
+    if arming:disarm() then
+      start_arming(age)
+    else
+      say(SEV_CRITICAL, "disarm refused - RTL anyway")
+      go(age)
+    end
   end
 end
 
@@ -310,16 +399,19 @@ end
 local function update()
   drain_heartbeats()
 
+  local armed = arming:is_armed()
+  track_scaling(armed)
+
   if P_ENABLE:get() < 1 or P_ON:get() < 1 then
     if state ~= "idle" then
-      say(SEV_WARNING, P_ENABLE:get() < 1 and "disabled (LGRD_ENABLE=0), standing down"
+      say(SEV_WARNING, P_ENABLE:get() < 1 and "LGRD_ENABLE=0 - standing down"
                                           or "guardian OFF (LGRD_ON=0)")
     end
+    neutral_active = false
     set_state("idle")
     return
   end
 
-  local armed = arming:is_armed()
   local age = laptop_age_ms()
   local link_ok = age ~= nil and age < P_TIMEOUT:get() * 1000
 
@@ -328,22 +420,35 @@ local function update()
     if link_ok then
       set_state("watch", age)
       link_was_ok = true
-      say(SEV_NOTICE, string.format("ON - return HOME after %.0f s without laptop%s",
-          P_TIMEOUT:get(), armed and "" or " (autopilot disarmed: will arm itself)"))
+      say(SEV_NOTICE, string.format("ON, HOME after %.0f s silence%s",
+          P_TIMEOUT:get(), armed and "" or ", disarmed"))
     end
     return
   end
 
   if link_ok and not link_was_ok then
-    say(SEV_NOTICE, "laptop link back - " .. state .. ", vehicle in " .. mode_name(vehicle:get_mode()))
+    say(SEV_NOTICE, "laptop back - " .. state .. ", " .. mode_name(vehicle:get_mode()))
   end
   link_was_ok = link_ok
 
   if state == "watch" then
     -- Armed or not (an E-STOP disarms): the guardian stays on and arms itself if needed.
     if link_ok then
-      local loc = ahrs:get_location()
-      if loc then last_link_loc = loc end
+      local neutral_s = P_NEUTRAL:get()
+      if neutral_s > 0 and age >= neutral_s * 1000 then
+        if not neutral_active then
+          neutral_active = true
+          say(SEV_WARNING, string.format("no laptop %.0f s - thrusters neutral", age / 1000))
+        end
+        hold_neutral()
+      else
+        if neutral_active then
+          neutral_active = false
+          say(SEV_NOTICE, "laptop back - thrusters released")
+        end
+        local loc = ahrs:get_location()
+        if loc then last_link_loc = loc end
+      end
     elseif age ~= nil then
       takeover(age)
     end
@@ -354,7 +459,7 @@ local function update()
   if not armed and state ~= "arming" then
     if link_ok then
       -- Only someone with a working link can have disarmed it: the operator stood it down.
-      say(SEV_NOTICE, "disarmed by the operator - watching again")
+      say(SEV_NOTICE, "operator disarmed - watching")
       set_state("watch", age)
       return
     end
@@ -367,7 +472,7 @@ local function update()
       -- The link came back before the boat could arm: it stays disarmed in HOLD and the
       -- operator takes over (a later loss starts again from "watch").
       set_state("watch", age)
-      say(SEV_NOTICE, "link back before arming - boat stopped in HOLD, take back control")
+      say(SEV_NOTICE, "link back before arming - in HOLD")
       return
     end
     reassert(age)
@@ -377,14 +482,14 @@ local function update()
       return
     end
     local t = now_ms()
-    if t - last_arm_try_ms >= ARM_RETRY_MS then
+    if t >= arm_not_before_ms and t - last_arm_try_ms >= ARM_RETRY_MS then
       last_arm_try_ms = t
       thrusters_to_autopilot()
       arming:arm()
     end
     if t - last_arm_report_ms >= ARM_REPORT_MS then
       last_arm_report_ms = t
-      say(SEV_CRITICAL, string.format("still cannot arm after %.0f s (see PreArm messages), retrying",
+      say(SEV_CRITICAL, string.format("not armed after %.0f s, see PreArm",
           (t - arm_start_ms) / 1000))
     end
 
@@ -394,7 +499,7 @@ local function update()
       local m = enter_first({MODE_LOITER, MODE_HOLD})
       expected_mode = m
       set_state("held", age)
-      say(SEV_NOTICE, "holding position, waiting for the operator")
+      say(SEV_NOTICE, "holding, waiting for operator")
     else
       reassert(age)
       local here = ahrs:get_location()
@@ -404,7 +509,7 @@ local function update()
       local waited = arrived_ms and (now_ms() - arrived_ms) > P_WAIT:get() * 1000
       local too_long = (now_ms() - stage1_start_ms) > P_S1_MAX:get() * 1000
       if waited or too_long then
-        say(SEV_WARNING, "no link at the last-link point")
+        say(SEV_WARNING, "no link at last-link point")
         start_rtl(age)
       end
     end
@@ -413,12 +518,12 @@ local function update()
     if link_ok then
       -- Any mode change while the laptop is back = the operator took control.
       if vehicle:get_mode() ~= expected_mode then
-        say(SEV_NOTICE, "operator took control (" .. mode_name(vehicle:get_mode()) .. ") - watching again")
+        say(SEV_NOTICE, "operator in control (" .. mode_name(vehicle:get_mode()) .. ")")
         set_state("watch", age)
       end
     elseif state == "held" then
       -- Link lost again while waiting for the operator: straight home this time.
-      say(SEV_CRITICAL, "laptop link lost again - taking over")
+      say(SEV_CRITICAL, "laptop lost again - taking over")
       start_rtl(age)
     else
       reassert(age)
@@ -432,7 +537,7 @@ end
 local function protected_update()
   local ok, err = pcall(update)
   if not ok then
-    gcs:send_text(SEV_CRITICAL, TAG .. "internal error: " .. tostring(err))
+    say(SEV_CRITICAL, "error: " .. tostring(err))
     return protected_update, 1000
   end
   return protected_update, PERIOD_MS
@@ -441,6 +546,6 @@ end
 if mav_ok then
   say(SEV_INFO, "loaded - watching laptop heartbeat")
 else
-  say(SEV_WARNING, "loaded - MAVLink rx unavailable, using GCS last-seen (see README)")
+  say(SEV_WARNING, "loaded - no MAVLink rx, GCS timer")
 end
 return protected_update, 1000
