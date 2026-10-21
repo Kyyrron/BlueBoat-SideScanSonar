@@ -103,6 +103,7 @@ setup and test ladder: `link_guardian/README.md`.
 | **SSS-Dataset-Aug-Studio** — *optional* | Physics-informed augmentation of YOLO datasets (offline, file-level only); nothing in the chain depends on it |
 | **Link guardian** (`link_guardian/`, not a submodule) | Connection-loss guardian: ArduPilot Lua script + laptop companion `guardian.py` (§1.1). Not yet tested on the boat |
 | **Belief · Replanner · Evaluation** | **Planned, not built** — the chain above; open requirements `project_synthesis.md` §5.2, §8.1, §8.4 |
+| **BlueBoat-Experiments** — `blueboat_experiments` (added 2026-10-21, not frozen) | The AROB 2027 yaw-fragmentation study: an **offline tool** (`bbx`, pip-installable, no ROS at module level) — geometric footprint replay, field-log (3 Hz poslog) analysis, and a campaign runner that starts isolated headless simulations (own `ROS_DOMAIN_ID` 21–25, `GZ_PARTITION`, `ROS_HOME`) through the simulator's `full_mission_launch.py`. Serves and consumes **no new topic**; reads bags it records under `~/ros2_ws/sim_runs/arob2027_yaw/`. Its frozen numbers: `BlueBoat-Experiments/docs/EXPERIMENT_PROTOCOL.md`, `campaign.yaml` |
 | **BlueBoat-Perception** — `blueboat_perception` | **The station's one detection source** (since 2026-10-16): the GCS's seabed images → detector input (`fixed_gray`, a fixed mapping of the raw dB) → detector (the station's former dummy; YOLO an interface stub) → calibration (identity) → `/sss_ai/detections` for the GCS map + one record per image (`/sss_ai/image_records`) for the future belief layer. ROS-free deterministic core, thin node, offline CLI (offline = live, byte-equal records); dataset mode: a YOLO dataset per world run, labelled from the simulator's ground truth (highlight + shadow boxes, the 29 World Builder classes), plus the archival ground-truth bag |
 
 ---
@@ -124,7 +125,8 @@ types only (`std_msgs`, `sensor_msgs`, `vision_msgs`), so it has no build-order 
 the GCS imports its ROS-free core lazily for the replay window's Run AI (installed package,
 else the superproject checkout), and Perception imports nothing from the GCS. Two submodules are not colcon packages:
 `blueboat_gcs` and `BlueBoat-MCS` import `rclpy` from a sourced workspace at runtime and
-degrade to GUI-only without it; `SSS-Dataset-Aug-Studio` has no ROS dependency in any mode
+degrade to GUI-only without it; `BlueBoat-Experiments` is an offline tool (its own `.venv`)
+whose runner launches the simulator in subprocesses; `SSS-Dataset-Aug-Studio` has no ROS dependency in any mode
 (its dev-only `tools/make_demo_dataset.py` puts `../BlueBoat-SSS-Sim/blueboat_sss_sim` on
 `sys.path` for the simulator's ROS-free offline path; not installed).
 
@@ -204,8 +206,8 @@ QoS is `default` for every row unless the notes say otherwise (`/blueboat/odom`:
 | `/current` | `geometry_msgs/Vector3` | `sea_state_node` (sim) → ros_gz bridge → gz `/ocean_current` → the boat's `Hydrodynamics` plugin | World-frame water velocity **at the boat**: the configured mean current + its smooth, bounded, seeded variation in time (exactly sampled Gauss-Markov) and space (weak eddies) + wave orbital velocity — a pure function of seed, sim time and position since 2026-10-08; exact zeros under the null preset. Bridged by `world_launch.py` and `full_mission_launch.py`. |
 | `/world/<w>/wrench`, `/world/<w>/wrench/clear` | `ros_gz_interfaces/EntityWrench`, `/Entity` | `sea_state_node` → ros_gz bridge → gz `ApplyLinkWrench` (injected at run time when the world lacks it — BlueBoat-Control's stock `ocean`; detected by the system's own `/wrench/persistent`, since the bridge itself advertises `/wrench`) | One-shot hull wrench per physics step on model `blueboat`: since 2026-10-09 the catamaran hydrostatics in **every** run (calm too — one hull model in every scenario; MCS starts the companion for every empty-world run) plus the wave excitation; `hull.hydrostatics: gazebo_box_when_calm` restores the old "nothing while calm". |
 | `/sim/sea_state/boat_pose` | `geometry_msgs/TransformStamped` | ros_gz bridge in `sea_state_launch.py` (from gz `/model/blueboat/pose`, `blueboat_description`'s own `PosePublisher`) → `sea_state_node`, `sss_sim_node` | **Simulation-only, additive** (2026-10-09): the boat's pose every physics step (100 Hz), sim-time stamped — what the hull wrench and the sonar use; the 20 Hz `/blueboat/odom` is their fallback. |
-| `/sim/sea_state` | `std_msgs/String` (JSON) | `sea_state_node` → MCS (SEA STATE box) | **TRANSIENT_LOCAL, depth 1**, 2 Hz. Schema: `BlueBoat-SSS-Sim/blueboat_sss_sim/docs/topics.md`. Additive since 2026-10-08: the current's variation, the waves' crest/wakes, and `boat{roll/pitch/heave std}` over 30 s (MCS "Boat motion" row). |
-| `/sim/sea_state/command` | `std_msgs/String` (JSON) | MCS ("Change sea state…") → `sea_state_node` | `{current, waves, ramp_s}` or `{schedule, t0}`; the node ramps, never steps. Plain-language keys since 2026-10-08 (current `variation`; waves `tp_s: auto`, `crest`, `wakes`; keyframe `ramp_s`) are resolved **by the simulator** (`sea/presets.py`); MCS sends them and now launches every sea as a `sea_schedule:=` scenario file. |
+| `/sim/sea_state` | `std_msgs/String` (JSON) | `sea_state_node` → MCS (SEA STATE box) | **TRANSIENT_LOCAL, depth 1**, 2 Hz. Schema: `BlueBoat-SSS-Sim/blueboat_sss_sim/docs/topics.md`. Additive since 2026-10-08: the current's variation, the waves' crest/wakes, and `boat{roll/pitch/heave std}` over 30 s (MCS "Boat motion" row). Additive 2026-10-21: `yaw_moment{std_nm, tau_s, nm}` (the synthetic yaw disturbance; 0 = off). |
+| `/sim/sea_state/command` | `std_msgs/String` (JSON) | MCS ("Change sea state…") → `sea_state_node` | `{current, waves, ramp_s}` or `{schedule, t0}`; the node ramps, never steps. Plain-language keys since 2026-10-08 (current `variation`; waves `tp_s: auto`, `crest`, `wakes`; keyframe `ramp_s`) are resolved **by the simulator** (`sea/presets.py`); MCS sends them and now launches every sea as a `sea_schedule:=` scenario file. Optional `yaw_moment: {std_nm, tau_s}` (2026-10-21, additive): a seeded Gauss–Markov yaw moment on the hull wrench — a fitted wind/wave surrogate used by BlueBoat-Experiments; absent = off, bit-identical. |
 | `/set_path` | `nav_msgs/Path` | `path_publisher` (`blueboat_control`) · `bag_replay` (the run's `-path.yaml` snapshot, every 5 s) → GCS, RViz | Published under the *relative* name `set_path` in the root namespace, re-requesting the whole path every `refresh_period` (5 s). Started by `Sim_launch.py` and the simulator's `full_mission_launch.py`, **not** `BlueBoat_launch.py` — no `/set_path` in a real-robot run. **Truncates** to its `/path_request` window (`total_time`, default 1000 s). So the GCS prefers the station's deployed trajectory (`blueboat_gcs/core/deployed_path.py`: newest `~/.config/blueboat_mcs/trajectories/.deployed/*.yaml`, placed through the designer file's `geo_anchor`) and falls back to this topic — a file-mediated read of an MCS artifact, not a new wire contract. |
 
 ### 4.2 Path service
@@ -319,6 +321,11 @@ use`) — close QGC or pass `fcu_url:=` with another port. `/mavros/global_posit
 `lat==0 and lon==0` = no fix, and in a stock-world Gazebo run MCS is its only publisher with
 `status` -2, so only `-1` means no fix — never gate on `status < 0`. `/mavros/rc/override` is
 written only by `robot_interface`.
+**Bench stand-in without GPS:** `fakegps.py` (superproject root) publishes a fixed (0, 0) pose
+plus the compass yaw on `/mavros/local_position/odom`, so `/blueboat/odom` exists and the arrow
+keys work (`master_control` drops all thrust while it has no pose). Open-loop only: no
+anchored mission can start (no `geo.is_valid`), no path is followed. Stop it once the EKF
+publishes real odometry.
 
 ### 4.5 File-level interfaces
 
@@ -608,6 +615,7 @@ backlog — do not duplicate either here.
 | Live path update (the Replanner's entry point): contract, refusal codes, tests, first water test | `BlueBoat-Control/docs/PATH_UPDATE_INTERFACE.md`, `PATH_UPDATE_DESIGN.md`, `PATH_UPDATE_REPORT.md`, `PATH_UPDATE_REAL_WATER_TEST.md`; requests `docs/REQUESTS.md` |
 | Connection-loss guardian: design, setup, test ladder | `link_guardian/README.md` (superproject) |
 | Planned chain (Belief, Replanner, Evaluation) | `project_synthesis.md` §5.1–§5.2, §7.3, §8.1–§8.4 — no module exists |
+| AROB 2027 yaw-fragmentation study: protocol, campaign runner, reports | `BlueBoat-Experiments/.claude/CLAUDE.md`, `docs/EXPERIMENT_PROTOCOL.md`, `reports/SETUP_REPORT.md`; open items `BlueBoat-Experiments/.claude/TODO.md` |
 | Detector pipeline, detector input (fixed mapping, near-range mask, turn flags), image records, dataset mode, offline = live | `BlueBoat-Perception/.claude/CLAUDE.md` · open items `BlueBoat-Perception/.claude/TODO.md`; evidence `docs/PREPROCESSING_STUDY.md`, `docs/LIVE_CHECKS.md` |
 | Per-module test / lint / smoke gates, exact commands, what survives a fresh clone | skill `module-gates` (`.claude/skills/module-gates/SKILL.md`) |
 | Dated owner orders that opened the frozen Control / MCS (2026-09-28 to 2026-10-16) | skill `git-history` |
@@ -617,7 +625,8 @@ backlog — do not duplicate either here.
 loads by itself only when the Read tool opens a file in its directory; Bash, Grep and Glob
 access never trigger it. So before changing anything under one of these paths (or scripting a
 change there), Read its `CLAUDE.md` first:
-- module roots: `<module>/.claude/CLAUDE.md`, all six submodules;
+- module roots: `<module>/.claude/CLAUDE.md`, all seven submodules (BlueBoat-Experiments since
+  2026-10-21);
 - `BlueBoat-Control/`: `blueboat_control/src/` (controller and thrust-path evidence),
   `blueboat_description/`, `log_reviewer/`;
 - `BlueBoat-SSS/`: `blueboat_sss/blueboat_gcs/` (GCS);
