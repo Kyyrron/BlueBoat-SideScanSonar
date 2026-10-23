@@ -211,7 +211,7 @@ OPERATOR LAPTOP (via the BlueBoat Base Station WiFi) — the module chain
 | Module | Status | Role |
 |---|---|---|
 | Sonar module (`blueboat_sss`, `blueboat_gcs`) | existing | Acquisition, slant-range correction, bottom tracking, `.svlog`; the GCS turns the stream into **seabed images + metadata** |
-| BlueBoat-Perception | existing (detector is a placeholder) | Seabed images → detector input → detector → calibration → detections for the GCS + **one record per image** for Belief; also builds simulated training datasets (dataset mode) |
+| BlueBoat-Perception | existing (dummy detector by default; YOLO adapter built, not yet trained) | Seabed images → detector input → detector → calibration → detections for the GCS + **one record per image** for Belief; also builds simulated training datasets (dataset mode) |
 | Ground Control Station | existing | Operator display. Shows **only Perception's detections**; runs no detector |
 | Belief | **planned, not built** | Reads **only** Perception's per-image records, plus the mission's survey area and anchor. Sends **only** to the Replanner |
 | Replanner | **planned, not built** | Reads **only** Belief. Acts on its own, in simulation and on the boat. Generates **every survey type** (including the two-pass baseline and the plain boustrophedon) and sends it through Control's live path update |
@@ -269,10 +269,13 @@ What the code does today:
   `identity` baseline only.
 - An optional near-range (nadir) mask and per-row turn flags exist; turn flags mark rows and
   detections, they drop nothing.
-- The detector runs **once per image**. Today it is a placeholder (one detection at the image
-  centre). The planned YOLO adapter is an interface stub that raises on use; it is meant to
-  **tile each image across-track** (never squash it) and merge boxes across tiles with NMS.
-  Patch size and overlap are not fixed yet.
+- The detector runs **once per image**. The default is still a placeholder (one detection at
+  the image centre). Since 2026-10-23 a YOLO adapter (Ultralytics YOLO11s / YOLO26s) is built:
+  it **tiles each image across-track** into 256 × 256 tiles at native resolution (stride 128,
+  the nadir kept, never squashed), runs every tile, shifts the boxes back and merges the
+  overlapping tiles' boxes (`nms`, or `greedy_nmm` = intersection-over-smaller union), giving
+  one detection list and one record per image. No trained weights exist yet; the merge rule is
+  chosen by the planned comparison on held-out simulated worlds.
 
 Mapping a detection back to world coordinates: row → ping → USV pose; column → slant range →
 ground range and side (the image's metadata carries the per-row track).
@@ -592,8 +595,8 @@ from which heading.
 | # | Deliverable | Status |
 |---|---|---|
 | D1 | SSS data pipeline — slant-range correction, bottom tracking, geocoding, seabed images (the "waterfall buffer") | **Built**; verified live in simulation; field validation partial — no recording by the current stack exists (`.claude/CLAUDE.md` §6 D10) |
-| D2 | Simulated detector datasets — made by Perception's dataset mode from the simulator's ground truth | Dataset mode **built** (29 classes, write-once, labelled); no training run, no train / validation split by world yet |
-| D3 | Detection module — YOLO model in BlueBoat-Perception | Perception pipeline **built**; detector is a **placeholder**; YOLO adapter is an interface stub; no trained model; calibration is the identity |
+| D2 | Simulated detector datasets — made by Perception's dataset mode from the simulator's ground truth | Dataset mode **built** (29 classes, write-once, labelled); tile-dataset tool with the split by world **built** (2026-10-23); no simulated worlds built for it, no training run yet |
+| D3 | Detection module — YOLO model in BlueBoat-Perception | Perception pipeline **built**; default detector is a **placeholder**; YOLO adapter over tiles, training and evaluation tools **built** (2026-10-23); no trained model, comparison not run; calibration is the identity |
 | D4 | Belief layer — multi-channel Bayesian grid | **Planned, not built** (input contract exists: Perception's image records) |
 | D5 | Mission interface — path following and live path update | **Built**: path following, and the live path update service with its progress and event topics (Gazebo-tested, not on water, no client yet) |
 | D6 | Adaptive replanner — generates every survey type through the path update | **Planned, not built** |

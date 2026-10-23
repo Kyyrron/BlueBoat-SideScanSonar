@@ -37,7 +37,7 @@ BOAT — hardware + its own firmware only    THIS COMPUTER (operator laptop, ~/r
 ├─ GPS / compass                           ├─ Mission Control Station  (supervise, command, E-STOP)
 └─ Water Linked USBL (.94)                 ├─ BlueBoat GCS             (mosaic, overlays, recording)
         ▲                                  ├─ SSS-Dataset-Aug-Studio   (offline, no ROS)
-        │                                  ├─ BlueBoat-Perception      (detector — dummy today — + image records)
+        │                                  ├─ BlueBoat-Perception      (detector — dummy default; YOLO over tiles, untrained — + image records)
         └── BlueBoat Base Station (WiFi) ──┤  [Belief · Replanner · Evaluation]  planned, not built
             192.168.2.0/24                 └─ SIMULATION: blueboat_sss_sim serves the identical sonar
                                               interface, Gazebo owns hull dynamics
@@ -103,7 +103,7 @@ setup and test ladder: `link_guardian/README.md`.
 | **SSS-Dataset-Aug-Studio** — *optional* | Physics-informed augmentation of YOLO datasets (offline, file-level only); nothing in the chain depends on it |
 | **Link guardian** (`link_guardian/`, not a submodule) | Connection-loss guardian: ArduPilot Lua script + laptop companion `guardian.py` (§1.1). Not yet tested on the boat |
 | **Belief · Replanner · Evaluation** | **Planned, not built** — the chain above; open requirements `project_synthesis.md` §5.2, §8.1, §8.4 |
-| **BlueBoat-Perception** — `blueboat_perception` | **The station's one detection source** (since 2026-10-16): the GCS's seabed images → detector input (`fixed_gray`, a fixed mapping of the raw dB) → detector (the station's former dummy; YOLO an interface stub) → calibration (identity) → `/sss_ai/detections` for the GCS map + one record per image (`/sss_ai/image_records`) for the future belief layer. ROS-free deterministic core, thin node, offline CLI (offline = live, byte-equal records); dataset mode: a YOLO dataset per world run, labelled from the simulator's ground truth (highlight + shadow boxes, the 29 World Builder classes), plus the archival ground-truth bag |
+| **BlueBoat-Perception** — `blueboat_perception` | **The station's one detection source** (since 2026-10-16): the GCS's seabed images → detector input (`fixed_gray`, a fixed mapping of the raw dB) → detector (the station's former dummy, still the default; or since 2026-10-23 a YOLO model — Ultralytics YOLO11s / YOLO26s, imported lazily — run on 256 × 256 across-track tiles at native resolution and merged across tiles, `nms` / `greedy_nmm`; no trained weights yet) → calibration (identity) → `/sss_ai/detections` for the GCS map + one record per image (`/sss_ai/image_records`) for the future belief layer. ROS-free deterministic core, thin node, offline CLI (offline = live, byte-equal records); dataset mode: a YOLO dataset per world run, labelled from the simulator's ground truth (highlight + shadow boxes, the 29 World Builder classes), plus the archival ground-truth bag; offline tools (not installed): tile datasets split by world, YOLO training, evaluation on held-out worlds |
 
 ---
 
@@ -242,7 +242,7 @@ both).
 | `/sss_ai/seabed_image/png` | `sensor_msgs/Image` mono8 | GCS → BlueBoat-Perception | same | The display PNG, byte-equal to the saved one. |
 | `/sss_ai/seabed_image/metadata` | `std_msgs/String` (JSON envelope) | GCS → BlueBoat-Perception | same | The picture metadata (schema 5) in an envelope carrying the key. |
 | `/sss_ai/seabed_analysis` | `std_msgs/String` (JSON) | GCS → *(no consumer in the current tree)* | default | Image metadata, **never pixels**. Schema = the picture metadata's: **5 since 2026-10-16** (4 before). `detections` is always `[]`; the detections are on `/sss_ai/detections`. |
-| `/sss_ai/detections` | `vision_msgs/Detection2DArray` | **BlueBoat-Perception → GCS** | default (RELIABLE, 10) | **The station's one detection source** (owner's order, 2026-10-16): one array per image, possibly empty. Every map marker, waterfall marker and `detections.csv` row comes from here; the GCS runs no detector. uid = `2_000_000 + 16·image_id + k`, restarting with `image_id` at every START. |
+| `/sss_ai/detections` | `vision_msgs/Detection2DArray` | **BlueBoat-Perception → GCS** | default (RELIABLE, 10) | **The station's one detection source** (owner's order, 2026-10-16): one array per image, possibly empty. Every map marker, waterfall marker and `detections.csv` row comes from here; the GCS runs no detector. uid = `2_000_000 + 16·image_id + k`, restarting with `image_id` at every START. Since 2026-10-23 only detections with `confidence >= map_min_confidence` (0.10) are published here; the image record keeps all, same uids; ≤ 999 per image. |
 | `/sss_ai/image_records` | `std_msgs/String` (JSON, `blueboat_perception/image_record/1`) | BlueBoat-Perception → *(future belief layer; offline analysis)* | RELIABLE, KEEP_LAST 100 | One per image, with or without detections (`detections: []` = searched, nothing found; `null` = no pixels). Offline over the session = live: byte-equal canonical JSON minus `provenance` / `source`. |
 | `/sss_ai/perception/status` | `std_msgs/String` (JSON) | BlueBoat-Perception → operator, tests | RELIABLE, depth 1, TRANSIENT_LOCAL | 1 Hz: join counters (`late_parts`, `gaps`, …), latency, configuration. |
 | `/rosout` | `rcl_interfaces/Log` | all nodes → GCS embedded console | default | The GCS matches the literal string `sss_processor_node` to sweep orphan processes on STOP, so that executable name and its `output='screen'` are load-bearing. |
@@ -324,7 +324,8 @@ written only by `robot_interface`.
 
 The Aug Studio exposes **no ROS interface of any kind** — files and CLI only; several other
 handoffs are file-mediated too. The per-artifact contracts (`.svlog`, GCS recording sessions
-and seabed images, world folders, YOLO and augmented datasets, `sss_aug_dataset.yaml`,
+and seabed images, world folders, YOLO and augmented datasets, Perception's tile datasets /
+models / evaluations (`Tile_data/`, `Perception_models/`, `Perception_eval/`), `sss_aug_dataset.yaml`,
 sea-state presets/timelines, trajectory YAML, position CSVs, mission report folders,
 controller `.npy`, the `<root>` data-dir resolution) live in skill `file-interfaces`; load it
 before producing, reading, moving or converting any of them. **Before reading, comparing or
@@ -548,8 +549,8 @@ Control, and the §5.1 "initial CPP" and "mission manager" boxes are **folded in
 Replanner**, which generates every survey type through Control's live path update.
 **BlueBoat-Perception owns the detector boundary:** `/sss_ai/detections` (the GCS map) and
 `/sss_ai/image_records` (one record per image, Belief's input contract,
-`BlueBoat-Perception/docs/topics.md` §4). Its detector is still the dummy, the YOLO adapter an
-interface stub, and calibration identity (`calibrated: false`, so `confidence` is no
+`BlueBoat-Perception/docs/topics.md` §4). Its default detector is still the dummy; the YOLO
+adapter over tiles is built (2026-10-23) but has no trained weights; calibration is identity (`calibrated: false`, so `confidence` is no
 probability — §8.2 ⚠). **Belief, Replanner and Evaluation are planned, not built, and
 unowned**; belief-grid channels, the three replanner rules (resolution, budget, abandonment)
 and the confidence-calibration requirement are governed by `project_synthesis.md` §5.2, §8.1,
@@ -571,10 +572,11 @@ old §5.1–§5.2 specified a "classical proposer + CNN classifier" on 512 × 51
 pings at ~1–2 Hz. Decision: **a YOLO model in BlueBoat-Perception**, on the GCS seabed images
 as the code has them — 256 rows × 1200–2402 native slant bins, a new image every 128 rows
 (~0.1–0.36 Hz measured), raw dB mapped by `fixed_gray_v1`, the adapter to tile across-track and
-merge with NMS (`project_synthesis.md` §5.2 describes it). **Not yet built:** the YOLO adapter
-is an interface stub that raises on use; no weights, training script, train / validation split
-by world or calibrator beyond identity exist (the dataset mode that writes the training data
-does). CM-10 holds.
+merge (`project_synthesis.md` §5.2 describes it). **Built 2026-10-23:** the YOLO adapter
+(Ultralytics YOLO11s / YOLO26s; tiles 256 × 256, stride 128, merge `nms` or `greedy_nmm`;
+offline = live byte-equal on CPU) and the offline tools — tile datasets split by world,
+training, evaluation on held-out worlds. **Not yet:** trained weights, the comparison run
+(merge rule and visibility threshold undecided), a calibrator beyond identity. CM-10 holds.
 
 **D10 — "SSS data pipeline: Built, field-validated" (§9 D1; recorded 2026-10-19; synthesis
 §9 D1 re-stated 2026-10-20 as built, verified in simulation, field validation partial).** The
@@ -611,7 +613,7 @@ backlog — do not duplicate either here.
 | Live path update (the Replanner's entry point): contract, refusal codes, tests, first water test | `BlueBoat-Control/docs/PATH_UPDATE_INTERFACE.md`, `PATH_UPDATE_DESIGN.md`, `PATH_UPDATE_REPORT.md`, `PATH_UPDATE_REAL_WATER_TEST.md`; requests `docs/REQUESTS.md` |
 | Connection-loss guardian: design, setup, test ladder | `link_guardian/README.md` (superproject) |
 | Planned chain (Belief, Replanner, Evaluation) | `project_synthesis.md` §5.1–§5.2, §7.3, §8.1–§8.4 — no module exists |
-| Detector pipeline, detector input (fixed mapping, near-range mask, turn flags), image records, dataset mode, offline = live | `BlueBoat-Perception/.claude/CLAUDE.md` · open items `BlueBoat-Perception/.claude/TODO.md`; evidence `docs/PREPROCESSING_STUDY.md`, `docs/LIVE_CHECKS.md` |
+| Detector pipeline, detector input (fixed mapping, near-range mask, turn flags), YOLO over tiles, tile datasets / training / evaluation tools, image records, dataset mode, offline = live | `BlueBoat-Perception/.claude/CLAUDE.md` · open items `BlueBoat-Perception/.claude/TODO.md`; evidence `docs/PREPROCESSING_STUDY.md`, `docs/LIVE_CHECKS.md` |
 | Per-module test / lint / smoke gates, exact commands, what survives a fresh clone | skill `module-gates` (`.claude/skills/module-gates/SKILL.md`) |
 | Dated owner orders that opened the frozen Control / MCS (2026-09-28 to 2026-10-16) | skill `git-history` |
 | MAVROS boundary table, FCU endpoint, other served interfaces (§4.4, §4.7 detail) | skill `interface-inventory` |

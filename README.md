@@ -22,7 +22,7 @@ sonar module (seabed images + metadata) → Perception → Belief → Replanner 
 | `BlueBoat-MCS` — Mission Control Station | existing (additions only) |
 | `BlueBoat-SSS` — sonar driver, processor, Ground Control Station | existing |
 | `BlueBoat-SSS-Sim` — Gazebo worlds, sonar and sea-state simulation | existing |
-| `BlueBoat-Perception` — detector (placeholder today), per-image records, simulated dataset mode | existing |
+| `BlueBoat-Perception` — detector (dummy by default; YOLO over tiles, not yet trained), per-image records, simulated dataset mode, tile-dataset / training / evaluation tools | existing |
 | `SSS-Dataset-Aug-Studio` — dataset augmentation | optional |
 | Belief · Replanner · Evaluation | **planned, not built** |
 
