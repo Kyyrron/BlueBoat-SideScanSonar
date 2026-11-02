@@ -11,7 +11,8 @@ drives everything else from its GUARDIAN box; the subcommands also work from a t
     guardian.py check [--json]  read-only: installed, configured, ready?
     guardian.py setup           write the recommended ArduPilot failsafe parameters
     guardian.py on | off        set the session flag LGRD_ON on the autopilot
-    guardian.py reclaim         after a guardian return: give control back to our stack
+    guardian.py reclaim         manual fallback: give control back to our stack (the script
+                                does it by itself as soon as the laptop is heard again)
     guardian.py watch           session companion (started by MCS): keeps the guardian ON,
                                 moves HOME to each run start, reports on
                                 /link_guardian/status, obeys /link_guardian/command
@@ -52,18 +53,20 @@ COMMAND_TOPIC = "/link_guardian/command"
 RECOMMENDED = [
     ("SCR_ENABLE", 1, "fail", "Lua scripting on (restart the autopilot after changing it)"),
     ("FS_GCS_ENABLE", 1, "warn", "ArduPilot's own GCS failsafe as a backstop"),
-    ("FS_ACTION", 1, "warn", "failsafe action = RTL (same destination as the guardian)"),
-    ("FS_GCS_TIMEOUT", 10, "warn", "backstop fires after the guardian (LGRD_TIMEOUT 5 s)"),
+    ("FS_ACTION", 1, "warn", "failsafe action = RTL (the backstop if the script is dead)"),
+    ("FS_GCS_TIMEOUT", 20, "warn", "backstop fires after the guardian (LGRD_TIMEOUT 15 s)"),
     ("FS_THR_ENABLE", 0, "warn", ("no RC receiver on the boat: the radio failsafe would "
                                   "fire while armed (set 1 only with a hand transmitter)")),
+    ("LGRD_TIMEOUT", 15, "warn", "s of laptop silence before the guardian retraces the path"),
 ]
 OPTIONAL_PARAMS = {"FS_GCS_TIMEOUT"}     # absent on older firmware
+SCRIPT_PARAMS = {"LGRD_TIMEOUT"}         # exist only once the script runs
 # Verified by `check` only, never written by `setup` (a bitmask the owner may have tuned).
 ARMING_CHECK_WHY = ("0 disables Rover's pre-arm motor check, which is what refuses arming on "
                     "passthrough and before the thrusters' output range is set (README §9)")
 # Created by the script itself on its first run.
-GUARDIAN_PARAMS = ["LGRD_ENABLE", "LGRD_ON", "LGRD_TIMEOUT", "LGRD_STAGE1",
-                   "LGRD_SYSID", "LGRD_COMPID", "LGRD_DETECT", "LGRD_NEUTRAL"]
+GUARDIAN_PARAMS = ["LGRD_ENABLE", "LGRD_ON", "LGRD_SYSID", "LGRD_COMPID", "LGRD_DETECT",
+                   "LGRD_NEUTRAL", "LGRD_TRAIL_D"]
 
 # Thruster mapping, identical to blueboat_control's param_set.py.
 RCIN1_PASSTHROUGH, RCIN3_PASSTHROUGH = 51, 53     # 'override' (our stack drives)
@@ -291,6 +294,8 @@ def op_check(node, pull=True):
         if have is None and name in OPTIONAL_PARAMS:
             item(name, "ok", "not on this firmware (older ArduPilot)")
             continue
+        if have is None and name in SCRIPT_PARAMS:
+            continue                     # the Script row already says it is missing
         good = have is not None and float(have) == float(want)
         item(name, "ok" if good else level,
              f"{_fmt(have)}" + ("" if good else f" (recommended {want}: {why})"))
@@ -300,15 +305,22 @@ def op_check(node, pull=True):
          _fmt(have) + ("" if have not in (None, 0) else f" (keep it non-zero: {ARMING_CHECK_WHY})"))
 
     # Thrusters go neutral before the takeover, never after it.
-    if script and v["LGRD_NEUTRAL"] is None:
-        item("Script version", "warn", "older script (no LGRD_NEUTRAL): upload the current "
-             "link_guardian.lua and restart the autopilot")
+    if script and (v["LGRD_NEUTRAL"] is None or v["LGRD_TRAIL_D"] is None):
+        item("Script version", "warn", "older script (returns HOME, no path retrace, no "
+             "auto-resume): upload the current link_guardian.lua and restart the autopilot")
     elif v["LGRD_NEUTRAL"] is not None and v["LGRD_TIMEOUT"] is not None:
         neutral, timeout = v["LGRD_NEUTRAL"], v["LGRD_TIMEOUT"]
         good = neutral == 0 or neutral < timeout
         item("Neutral hold", "ok" if good else "warn",
              f"LGRD_NEUTRAL {_fmt(neutral)} s, LGRD_TIMEOUT {_fmt(timeout)} s"
              + ("" if good else " - LGRD_NEUTRAL must be below LGRD_TIMEOUT or it never acts"))
+
+    # ArduPilot's own failsafe must not beat the guardian to it.
+    fs, timeout = v["FS_GCS_TIMEOUT"], v["LGRD_TIMEOUT"]
+    if fs is not None and timeout is not None and fs <= timeout:
+        item("Backstop order", "warn", f"FS_GCS_TIMEOUT {_fmt(fs)} s <= LGRD_TIMEOUT "
+             f"{_fmt(timeout)} s: ArduPilot's RTL would fire first (it cannot drive the "
+             "thrusters); Apply settings")
 
     # The heartbeat identity the script listens for must be MAVROS's.
     try:
@@ -332,6 +344,8 @@ def op_check(node, pull=True):
     return {"ready": ready, "items": items, "script": script,
             "guardian_on": (v["LGRD_ON"] >= 1) if v["LGRD_ON"] is not None else None,
             "servo1": v["SERVO1_FUNCTION"], "servo3": v["SERVO3_FUNCTION"],
+            "timeout": v["LGRD_TIMEOUT"],
+            "retrace": v["LGRD_TRAIL_D"] is not None,
             "armed": bool(node.state and node.state.armed),
             "mode": node.state.mode if node.state else None, "t": time.time()}
 
@@ -346,7 +360,7 @@ def op_setup(node):
             got = node.set_param(name, want)
             done.append(f"{name}={_fmt(got)}")
         except RuntimeError as e:
-            if name in OPTIONAL_PARAMS:
+            if name in OPTIONAL_PARAMS or (name in SCRIPT_PARAMS and "does not exist" in str(e)):
                 continue
             failed.append(f"{name}: {e}")
     detail = "set " + ", ".join(done)
@@ -362,9 +376,9 @@ def op_flag(node, on):
 
 
 def op_reclaim(node, force=False):
-    if node.run_running and not force:
-        return False, ("a run is still active - press Stop Run first, otherwise the boat "
-                       "resumes the run the instant control is back")
+    # The script does this itself on the laptop's first heartbeat; this is the manual
+    # fallback. An active run goes on, on purpose (2026-10-28) - `force` is kept for
+    # the CLI and older stations.
     mode = node.param_mode if node.param_mode in ("override", "default") else "override"
     servo = ((RCIN1_PASSTHROUGH, RCIN3_PASSTHROUGH) if mode == "override"
              else (THROTTLE_RIGHT, THROTTLE_LEFT))
@@ -541,8 +555,8 @@ class Watch:
             self.check = None
             self.next_ensure = 0.0
         if not st.connected and self.was_connected:
-            log.error("LINK TO THE BOAT LOST. If the guardian is ON, the boat returns HOME "
-                      "after LGRD_TIMEOUT s on its own.")
+            log.error("LINK TO THE BOAT LOST. If the guardian is ON, the boat retraces its "
+                      "path after LGRD_TIMEOUT s on its own, and resumes when the link is back.")
         self.was_connected = st.connected
 
         # Keep the flag set (cheap, idempotent; also covers an autopilot reboot).
@@ -591,7 +605,8 @@ class Watch:
         if st.mode != self.last_mode:
             if st.mode in AUTONOMOUS_MODES and st.connected and self.busy != "reclaim":
                 log.error(f"Boat is in {st.mode}: the guardian (or an ArduPilot failsafe) "
-                          "is in control. Stop the run, then Take back control.")
+                          "is in control. The guardian hands control back by itself once it "
+                          "hears this laptop; Take back control is the fallback.")
             self.last_mode = st.mode
 
     def publish_status(self):

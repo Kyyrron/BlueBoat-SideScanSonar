@@ -19,7 +19,10 @@ ros2 topic pub --once /blueboat/input_str std_msgs/msg/String "data: move 3 3 2"
     cd src/BlueBoat-SideScanSonar/BlueBoat-MCS
     python3 run.py
 
-    python3 log_reviewer/run.py 
+
+    cd ~/ros2_ws/
+    source env.sh
+    python3 ~/ros2_ws/src/BlueBoat-SideScanSonar/BlueBoat-Control/log_reviewer/run.py 
 
 -- SSS
 

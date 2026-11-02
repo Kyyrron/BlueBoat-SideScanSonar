@@ -12,18 +12,19 @@ CM-1 (no renaming or retyping of an existing name) applies to every row here.
 
 | Name | Type | Dir | Module |
 |---|---|---|---|
-| `/mavros/state` | `mavros_msgs/State` | in | `robot_interface`; MCS (only when `mavros_msgs` imports — absent in simulation) |
+| `/mavros/state` | `mavros_msgs/State` | in | `robot_interface`; MCS (only when `mavros_msgs` imports — absent in simulation); `sss_processor_node` (BEST_EFFORT 10, → `.svlog` HEARTBEAT, since 2026-10-27) |
 | `/mavros/imu/data` | `sensor_msgs/Imu` | in | `robot_interface`; `sss_processor_node` (→ `.svlog` ATTITUDE); GCS (BEST_EFFORT 10, seabed-image metadata only, never geometry; since 2026-10-16) |
 | `/mavros/local_position/odom` | `nav_msgs/Odometry` | in | `robot_interface` |
 | `/mavros/global_position/global` | `sensor_msgs/NavSatFix` | in | `robot_interface`, GCS, MCS — **BEST_EFFORT**; `lat==0 and lon==0` = no fix, discarded. In a Gazebo run of a GPS-anchored mission on a **stock world** (`Sim_launch`) **MCS is the only publisher** (fixes synthesised from sim odom, ~5 Hz, `status` left at **-2 / STATUS_UNKNOWN**), so only `-1` (STATUS_NO_FIX) means no fix — never gate on `status < 0`. In a **built-world** run (`full_mission_launch`, `with_mavros_shim` default on) the simulator's `mavros_shim` publishes it (~5 Hz, `STATUS_FIX`) and MCS disarms its own SimGps whenever `world_dir` is set (`mcs/gui/main_window.py:346-366`). In a **bag replay** `bag_replay` is the only publisher: the recorded fixes, unchanged but for the stamp (MCS's SimGps stays disarmed). |
 | `/mavros/global_position/compass_hdg` | `std_msgs/Float64` | in | MCS, GCS. Degrees **clockwise from north**; MCS converts `radians(90 - hdg)`. Preferred heading source; odom yaw the fallback |
 | `/mavros/rc/override` | `mavros_msgs/OverrideRCIn` | out | `robot_interface` at ~20 Hz, latest-wins |
-| `/mavros/local_position/pose` (`PoseStamped`), `/mavros/local_position/velocity_local` (`TwistStamped`), `/mavros/vfr_hud` (`VfrHud`) | as listed | in | `sss_processor_node` (BEST_EFFORT 10; the `.svlog` MAVLink envelopes — `src/sss_processor_node.py:381-389`); the GCS also takes `vfr_hud` |
-| `/mavros/global_position/rel_alt` (`Float64`), `/mavros/home_position/home` (`HomePosition`), `/mavros/global_position/gp_origin` (`GeoPointStamped`) | as listed | in | `sss_processor_node` (default 10), same envelopes |
+| `/mavros/local_position/pose` (`PoseStamped`), `/mavros/local_position/velocity_local` (`TwistStamped`), `/mavros/vfr_hud` (`VfrHud`) | as listed | in | `sss_processor_node` (BEST_EFFORT 10; the `.svlog` MAVLink envelopes — the subscription block of `SSSProcessorNode.__init__`); the GCS also takes `vfr_hud` |
+| `/mavros/global_position/rel_alt` (`Float64`), `/mavros/global_position/compass_hdg` (`Float64`), `/mavros/home_position/home` (`HomePosition`), `/mavros/global_position/gp_origin` (`GeoPointStamped`) | as listed | in | `sss_processor_node` (rel_alt / compass_hdg BEST_EFFORT 10, the other two default 10), same envelopes |
+| `/mavros/set_message_interval` | service `mavros_msgs/MessageInterval` | client | `sss_processor_node` (2026-10-27): SonarView's message-interval set (`svlog_helper.DEFAULT_PERIODIC_MESSAGES`) while the sonar streams, every 30 s — **autopilot-wide: raises every `/mavros/*` pose topic, `/blueboat/odom` included, from 4 Hz to ~13 Hz** (root `CLAUDE.md` §4.4) |
 | `/mavros/battery` | `sensor_msgs/BatteryState` | in | MCS (`mcs/ros/bridge_node.py:128`), BEST_EFFORT |
 | `/mavros/cmd/arming`, `/mavros/cmd/command`, `/mavros/set_mode` | services `CommandBool`, `CommandLong`, `SetMode` | client | `robot_interface` (`robot_interaction/robot_interface.py:227-229`); `guardian.py` also uses `cmd/command` and `set_mode` |
 | `/mavros/param/pull`, `/mavros/param/get_parameters`, `/mavros/param/set_parameters` | services `ParamPull`, rcl `GetParameters` / `SetParameters` | client | `param_set` (`robot_interaction/param_set.py:101-103`); `guardian.py` (`link_guardian/laptop/guardian.py:93-108`) |
-| `/mavros/statustext/recv`, `/mavros/cmd/set_home`, `/mavros/home_position/req_update` | `StatusText` / services | in / client | `guardian.py` only |
+| `/mavros/statustext/recv`, `/mavros/cmd/set_home`, `/mavros/home_position/req_update` | `StatusText` / services | in / client | `guardian.py`; `statustext/recv` also `sss_processor_node` (BEST_EFFORT 10, → `.svlog` STATUSTEXT, since 2026-10-27) |
 
 FCU endpoint = `BlueBoat_launch.py`'s `fcu_url` launch argument (default
 `udp://:14550@192.168.2.2:14550`). **Port 14550 collides with a running QGroundControl** →

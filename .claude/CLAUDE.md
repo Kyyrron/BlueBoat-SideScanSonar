@@ -84,10 +84,14 @@ session flag `LGRD_ON` is set (by the laptop for every real-robot session; reset
 autopilot boot) and MAVROS's heartbeat (ROS 2 MAVROS: **sys 1 / comp 191**) has been silent
 for `LGRD_NEUTRAL` s (3) it holds the passthrough thrusters at neutral (RC override 1500 —
 with no RC receiver ArduPilot otherwise keeps the last laptop command), and after
-`LGRD_TIMEOUT` s (5) it switches `SERVO1/3_FUNCTION` from passthrough to 74/73, **arms the
-autopilot itself** if needed (ArduPilot refuses to arm on passthrough; first attempt 3.5 s
-after the switch, so Rover's disarmed 1 Hz loop has set the ±1000 thruster range), and enters
-RTL. Its
+`LGRD_TIMEOUT` s (**15**, was 5 until 2026-10-28) it switches `SERVO1/3_FUNCTION` from
+passthrough to 74/73, **arms the autopilot itself** if needed (ArduPilot refuses to arm on
+passthrough; first attempt 3.5 s after the switch, so Rover's disarmed 1 Hz loop has set the
+±1000 thruster range), and **retraces the boat's own trail** in reverse in GUIDED (recorded
+in the script's memory every 2 m while the guardian is ON, armed or not, whatever the station
+drives; RTL only as fallback). On the laptop's **first heartbeat** it hands control back
+itself — HOLD → the saved passthrough mapping → MANUAL — so the run goes on with no operator
+action (owner, 2026-10-28; MCS "Take back control" is a fallback). Its
 laptop companion `link_guardian/laptop/guardian.py` (plain script, not a colcon package) is
 started by MCS with every real-robot launch: sets the flag, moves HOME to each run start,
 serves MCS's GUARDIAN box over `/link_guardian/status` / `/link_guardian/command`. Design,
@@ -191,7 +195,7 @@ QoS is `default` for every row unless the notes say otherwise (`/blueboat/odom`:
 | `/blueboat/update_path` | service `blueboat_interfaces/srv/UpdatePath` | client → `master_control` (every launch, sim and real). Clients today: only Control's tests (`test/path_update_demo.py`, `test/gazebo_path_update.py`); the replanner and an MCS "Replanner mode" are future | **Live path update, 2026-10-15, additive.** Loads the first path of a **replanner-owned** run (`path_source:=replanner`), or replaces its rest from `change_point` on. A fixed-mission or pinger run answers `mission_owned`. Every request gets `ok` or one of 17 codes, and a refusal changes nothing. It never touches safety or operator state (Control N10). Gazebo-verified for PID/LoS/MPC, not on water. Contract: `BlueBoat-Control/docs/PATH_UPDATE_INTERFACE.md`. |
 | `/blueboat/path_progress` | `std_msgs/String` (JSON, `blueboat_path_progress/1`) | `master_control` → replanner (future), tests | Default QoS, 10 Hz plus one on every answer or transition, in every launch. Carries τ (the governor's path parameter; never derive wall-clock times from path seconds), the state, the following and active ids, `min_change_point`, the end of the path and the last answer. |
 | `/blueboat/path_update_event` | `std_msgs/String` (JSON, `blueboat_path_update_event/1`) | `master_control` → `robot_interface`, `simulation_interface`, the run bag | Reliable, **depth 50**, not heartbeated. One message per answer, activation, end or clear. Logged as the run's `<date>-<note>-pathlog.csv`, created only if the run received a request. |
-| `/replay/state` | `std_msgs/String` (JSON) | `bag_replay` → MCS (REPLAY box) | **Bag replay only, TRANSIENT_LOCAL depth 1**, 2 Hz: `{bag, t, duration, rate, paused, finished, frame: empty\|anchored, world, world_offset, pose_source, gazebo}`. |
+| `/replay/state` | `std_msgs/String` (JSON) | `bag_replay` → MCS (REPLAY box) | **Bag replay only, TRANSIENT_LOCAL depth 1**, 2 Hz: `{bag, t, duration, rate, paused, finished, frame: empty\|anchored, world, world_offset, pose_source, gazebo}`; additive 2026-10-27 `{placement, attitude_source, attitude_rate_hz, attitude_interp, heave, boat_pose}`. |
 | `/replay/command` | `std_msgs/String` (JSON) | MCS → `bag_replay` | **Bag replay only.** `{"cmd": "pause"\|"resume"}` / `{"cmd": "rate", "rate": x}` (0.01–50). |
 | `/replay/<recorded name>` | as recorded | `bag_replay` → offline analysis | **Bag replay only.** Every recorded topic that is a command or session plumbing (`input_str`, `manual_target`, `arrow_thrust`, `run_*`, `param_*`, `controller_ready`, `/mavros/rc/override`, the raw `/blueboat/odom`) is republished under this prefix — never on its live name, so no consumer acts on it. Telemetry keeps its live name: every other `/mavros/*`, `/thruster_input`, `/controller_target`, `/blueboat/pinger_coordinates`, `/uw_gps_data`; `/monitoring_data` shifted into the replay world frame. Every `header.stamp` is rewritten to the replay's time; the bag's receive times are the timing truth (on the real launch simple_launch gives mavros `use_sim_time:=True` with no `/clock`, so recorded mavros stamps may read 0). |
 | `/link_guardian/status` | `std_msgs/String` (JSON) | `guardian.py watch` (superproject `link_guardian/`, started by MCS for every real-robot launch) → MCS (GUARDIAN box) | **Real-robot session only**, 1 Hz: `{connected, armed, mode, want_on, guardian_on, check, home, run_running, messages, busy, ack}`. Since 2026-10-14. |
@@ -203,7 +207,7 @@ QoS is `default` for every row unless the notes say otherwise (`/blueboat/odom`:
 | `/pose_arrow` | `visualization_msgs/Marker` | `master_control` → RViz / Gazebo | Debug only. |
 | `/current` | `geometry_msgs/Vector3` | `sea_state_node` (sim) → ros_gz bridge → gz `/ocean_current` → the boat's `Hydrodynamics` plugin | World-frame water velocity **at the boat**: the configured mean current + its smooth, bounded, seeded variation in time (exactly sampled Gauss-Markov) and space (weak eddies) + wave orbital velocity — a pure function of seed, sim time and position since 2026-10-08; exact zeros under the null preset. Bridged by `world_launch.py` and `full_mission_launch.py`. |
 | `/world/<w>/wrench`, `/world/<w>/wrench/clear` | `ros_gz_interfaces/EntityWrench`, `/Entity` | `sea_state_node` → ros_gz bridge → gz `ApplyLinkWrench` (injected at run time when the world lacks it — BlueBoat-Control's stock `ocean`; detected by the system's own `/wrench/persistent`, since the bridge itself advertises `/wrench`) | One-shot hull wrench per physics step on model `blueboat`: since 2026-10-09 the catamaran hydrostatics in **every** run (calm too — one hull model in every scenario; MCS starts the companion for every empty-world run) plus the wave excitation; `hull.hydrostatics: gazebo_box_when_calm` restores the old "nothing while calm". |
-| `/sim/sea_state/boat_pose` | `geometry_msgs/TransformStamped` | ros_gz bridge in `sea_state_launch.py` (from gz `/model/blueboat/pose`, `blueboat_description`'s own `PosePublisher`) → `sea_state_node`, `sss_sim_node` | **Simulation-only, additive** (2026-10-09): the boat's pose every physics step (100 Hz), sim-time stamped — what the hull wrench and the sonar use; the 20 Hz `/blueboat/odom` is their fallback. |
+| `/sim/sea_state/boat_pose` | `geometry_msgs/TransformStamped` | ros_gz bridge in `sea_state_launch.py` (from gz `/model/blueboat/pose`, `blueboat_description`'s own `PosePublisher`) · **in a bag replay, `bag_replay`** (the replayed pose, 100 Hz, 2026-10-27; no sea state runs there) → `sea_state_node`, `sss_sim_node` | **Simulation-only, additive** (2026-10-09): the boat's pose every physics step (100 Hz), sim-time stamped — what the hull wrench and the sonar use; the 20 Hz `/blueboat/odom` is their fallback. |
 | `/sim/sea_state` | `std_msgs/String` (JSON) | `sea_state_node` → MCS (SEA STATE box) | **TRANSIENT_LOCAL, depth 1**, 2 Hz. Schema: `BlueBoat-SSS-Sim/blueboat_sss_sim/docs/topics.md`. Additive since 2026-10-08: the current's variation, the waves' crest/wakes, and `boat{roll/pitch/heave std}` over 30 s (MCS "Boat motion" row). |
 | `/sim/sea_state/command` | `std_msgs/String` (JSON) | MCS ("Change sea state…") → `sea_state_node` | `{current, waves, ramp_s}` or `{schedule, t0}`; the node ramps, never steps. Plain-language keys since 2026-10-08 (current `variation`; waves `tp_s: auto`, `crest`, `wakes`; keyframe `ramp_s`) are resolved **by the simulator** (`sea/presets.py`); MCS sends them and now launches every sea as a `sea_schedule:=` scenario file. |
 | `/set_path` | `nav_msgs/Path` | `path_publisher` (`blueboat_control`) · `bag_replay` (the run's `-path.yaml` snapshot, every 5 s) → GCS, RViz | Published under the *relative* name `set_path` in the root namespace, re-requesting the whole path every `refresh_period` (5 s). Started by `Sim_launch.py` and the simulator's `full_mission_launch.py`, **not** `BlueBoat_launch.py` — no `/set_path` in a real-robot run. **Truncates** to its `/path_request` window (`total_time`, default 1000 s). So the GCS prefers the station's deployed trajectory (`blueboat_gcs/core/deployed_path.py`: newest `~/.config/blueboat_mcs/trajectories/.deployed/*.yaml`, placed through the designer file's `geo_anchor`) and falls back to this topic — a file-mediated read of an MCS artifact, not a new wire contract. |
@@ -249,12 +253,15 @@ both).
 
 **Acquisition parameters** (`range_start_mm`, `range_length_mm`, `msec_per_ping`,
 `gain_index`, `num_results`, `pulse_len_percent`): identical names, semantics **and defaults**
-real = sim since 2026-09-28 (range start 0, free run); the sim's smoke test reads the real
-driver's source and asserts the equality.
+real = sim since 2026-09-28 (range start 0); the sim's smoke test reads the real driver's
+source and asserts the equality. **Since 2026-10-27 they are SonarView's acquisition**
+(owner: "as close to SonarView as possible", identically in SSS and SSS-Sim; only the range
+may vary — `sssCLAUDE.md` NC #3b).
 
 | Parameter | Default (sim = real) | Survey setting (`project_synthesis.md` §8.5) |
 |---|---|---|
 | `range_length_mm` | 20000 (sized from water depth, `sssCLAUDE.md` NC #5) | **20 m per side for every survey condition** (owner, 2026-10-20) — the default, no override |
+| `msec_per_ping` | **50** (SonarView's command, 2026-10-27; was 0 = free run) | — |
 | `gain_index` | −1 (device auto) | — |
 | `num_results` | 1200 (the device maximum) | — |
 | `pulse_len_percent` | 0.00125 | — |
@@ -281,15 +288,33 @@ brightness, ever. Evidence: `simCLAUDE.md` NC #4/#6/#15/#17,
 **Transducer lateral offset — agreed at 0.285 m** (BR-101447 hull spacing / 2; checked
 2026-10-16): `TRANSDUCER_Y_OFFSET_PORT_M / _STBD_M` in `sss_processor_node.py` (since SSS
 `994a74b`), mirrored in the GCS's `core/svlog.py`, and `mount_y_abs_m: 0.285` in the
-simulator's `config/default_sonar.yaml`. Submersion 0.15 m is an estimate (= the sim's
-`sensor_depth_m`); the fore/aft offset is still 0.0, unmeasured. The seabed pictures
+simulator's `config/default_sonar.yaml`. **Submersion agreed at 0.22 m (2026-11-02), fore/aft still disagrees:** field-calibration
+pass 3 measured the installation (rear-most hull holes, the same for every corpus):
+`sensor_depth_m` **0.22** in the simulator and `TRANSDUCER_SUBMERSION_M` **0.22** in
+`sss_processor_node` / the GCS's `core/svlog.py` (both moved the same day). Fore/aft: the
+simulator's `mount_x_m` is **−0.345** (the drawing, vs the hull centre); the processor's
+`TRANSDUCER_X_OFFSET_M` stays 0.0 and no georeference uses a fore/aft arm. That arm is
+relative to the navigation fix (−0.60 m measured on the pool corpus with the GPS near the
+bow), so it belongs in a per-session setting; planned in `~/calib/pass3/GCS_PLAN.md` item 4. The seabed pictures
 georeference with it since 2026-10-16 (georef convention 2, schema 5). `simTODO.md` closed
 its old 0.20 / 0.0 disagreement item on 2026-10-19. The simulator's render fixture,
 frozen at 0.20 m, was rebaselined that day; re-rendering at 0.20 reproduced it bit for bit.
 
-**Ping rate — VERIFIED on the corpus:** device period `max(50 ms, 2R/c + ~3 ms)` (the spec
-sheet's "20 pings/s up to 30 m"); the sim's `ping_period_s` implements exactly that. Compare
-sim and real ping counts at the same `range_length_mm`.
+**Ping rate — VERIFIED, corrected 2026-10-27:** period `max(msec_per_ping, 2R/c + ~3 ms)`.
+The corpus's `max(50 ms, 2R/c + ~3 ms)` (the spec sheet's "20 pings/s up to 30 m") is
+**SonarView's 50 ms command**, not a device cap: every corpus file is SonarView's, and our
+driver free-running (`msec_per_ping` 0) pinged every **29.0 ms (34.5 Hz) at 20 m** on all four
+2026-10-27 recordings. With the default 50 ms, sim (`ping_period_s`, its `max_ping_rate_hz`
+cap now 0 = off) and real give the corpus law at every range. Compare sim and real ping
+counts at the same `range_length_mm`.
+
+**Ping loss, 2026-10-27 — before ROS** (`sssCLAUDE.md` *Measured acquisition settings*,
+`BlueBoat-SSS/blueboat_sss/blueboat_gcs/docs/SONARVIEW_SVLOG_ANALYSIS.md` §11). Our first
+field recordings lost 4–61 % of pings where SonarView, the same morning, lost 0 %; the
+GCS's depth-200 records miss exactly the pings the processor's depth-10 ones miss, so QoS is
+not the cause (CM-4 stands). Causes: `brping`'s receive buffer shared by both devices (now
+replaced by a per-device `OmniscanLink`) and the WiFi hop, which SonarLink — recording on
+the boat's Pi — never crosses and our stack always does (§1.1).
 
 **Ping assembly.** Both stacks key rows on `ping_number` and emit one-sided rows; neither
 pairs by arrival time or withholds a ping while the bottom tracker bootstraps (`sssCLAUDE.md`
@@ -319,6 +344,24 @@ use`) — close QGC or pass `fcu_url:=` with another port. `/mavros/global_posit
 `lat==0 and lon==0` = no fix, and in a stock-world Gazebo run MCS is its only publisher with
 `status` -2, so only `-1` means no fix — never gate on `status < 0`. `/mavros/rc/override` is
 written only by `robot_interface`.
+
+**Autopilot message rates — set by the sonar processor (2026-10-27, owner-accepted).** Without
+a request ArduPilot streams **4 Hz** on the mavros link: `/mavros/local_position/odom`,
+`/mavros/imu/data`, `/mavros/global_position/global` and hence `/blueboat/odom` all ran at
+~4 Hz in every 2026-10-27 run bag — except while SonarView was open (10.7–13 Hz), because
+SonarLink requests ATTITUDE / LOCAL_POSITION_NED / GLOBAL_POSITION_INT at 30 Hz and a message
+interval is autopilot-wide. `sss_processor_node` now sends SonarView's exact set through
+`/mavros/set_message_interval` whenever the sonar streams, re-asserted every 30 s, so
+**every `/mavros/*` consumer gets ~13 Hz** (the autopilot's delivered ceiling for that
+request, measured in SonarView's own on-boat recordings) **until the autopilot reboots,
+including later runs without the sonar**. Control effect, judged by the owner: `master_control`'s
+20 Hz loop sees a fresh pose on most ticks instead of one pose for five; the PID derivative
+(Δerror / 0.05 s) becomes smooth instead of a 5× spike every fifth tick, so gains tuned at
+4 Hz may need a retune; MPC/LoS get fresher state; real moves closer to the sim's 20 Hz odom;
+run bags' `/mavros/*` topics grow ~3×. Record the pose rate with any control experiment.
+In simulation the service is absent and nothing is requested. mavros stamps **0** on the real
+launch (`use_sim_time` with no `/clock`): the processor keys zero-stamped odom and mavlink
+envelopes on arrival time (`sssCLAUDE.md`); the source fix stays a Control item.
 
 ### 4.5 File-level interfaces
 
@@ -468,7 +511,15 @@ and the GCS recording session. So:
 - `.svlog` files are replayed through the GCS window, whose Run AI uses Perception's core.
 
 `svlog_to_rosbag.py` converts a `.svlog` to a bag, but no tool joins a run bag and a sonar
-recording into one replay.
+recording into one replay. A run bag can drive the **simulated** sonar (2026-10-27): the
+replay publishes the boat pose. Neither MCS nor the replay starts that sonar (MCS owner
+decision, 2026-10-27); since 2026-11-02 the **GCS** does, at START with *Sonar: Simulation*,
+when the process table shows a bag replay on a world folder and no `/side_scan_sonar`
+(`ros2 launch blueboat_sss_sim sss_sim_launch.py world_dir:=<world> with_mavros_shim:=false
+auto_ping:=false`, `blueboat_gcs/ros/sonar_source.py`). Before that, a session recorded
+during a replay held only the replayed MAVLink. The recorded
+position and full attitude then render the world's seabed. That is real motion with a simulated sensor, evidence about the simulator
+under that motion, never a field sonar result.
 
 **CM-15 — Safe shutdown precedes terminating a launch:** publish `default` on
 `/blueboat/input_str`, confirm a matched subscriber, wait for the `/blueboat/param_mode` echo,
@@ -583,7 +634,13 @@ training, evaluation on held-out worlds. **Not yet:** trained weights, the compa
 pipeline is built and verified live in simulation, but the field validation predates most of
 it:
 - The corpus holds no field recording made by the current stack. The 2026-09-07 beach logs
-  were recorded by Cerulean's SonarLink on BlueOS.
+  were recorded by Cerulean's SonarLink on BlueOS. **First current-stack field recordings,
+  2026-10-27** (one pool, three harbour sessions, `~/ros2_ws/data/SSS_data/sessions/`):
+  side identity and the 20 m / 1200-bin acquisition held, but they lost 4–61 % of pings at a
+  free-running 34.5 Hz with 4 Hz frozen-stamp pose, against SonarView's 0 % at 20 Hz the
+  same morning, and bottom tracking failed in deep water. The acquisition and recording side
+  was reworked to SonarView's that day (§4.3, §4.4); it needs a field re-test
+  (`sssTODO.md`).
 - Only three July harbour logs come from `sss_processor_node`, and they predate the
   September changes: packet-based side identity, counter-offset row assembly, 20 m / 1200
   bins, GPS velocities in `.svlog`, the 0.285 m lever arm and georef convention 2

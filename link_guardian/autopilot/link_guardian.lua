@@ -14,29 +14,38 @@ What it does
        session) sets it when the session connects; the script resets it to 0 at every
        boot, so a flag from an old session never survives a reboot. It becomes active
        once the laptop has been heard with the flag on.
-    3. Laptop silent for LGRD_NEUTRAL seconds (default 3): hold the thrusters at neutral.
+    3. While the guardian is ON it records the boat's TRAIL: a point every LGRD_TRAIL_D
+       metres (default 2), armed or disarmed, link up or down, whatever the laptop is
+       driving (path, manual target, arrows). It lives in the script's memory: reset at
+       every boot and whenever the guardian goes from OFF to ON (one trail per session).
+       1000 points at most; when full, every other point is dropped and the spacing
+       doubles, so the whole path is kept, coarser.
+    4. Laptop silent for LGRD_NEUTRAL seconds (default 3): hold the thrusters at neutral.
        Our stack drives them through RC passthrough (SERVO1/3_FUNCTION = 51/53) with RC
        overrides, and with no RC receiver on the boat ArduPilot keeps the LAST override
        value forever once the laptop stops sending - the boat would keep its last thrust.
        The script overrides those RC channels with 1500 until the link is back (MAVROS's
        20 Hz stream then wins again) or until the takeover below.
-    4. Laptop silent for LGRD_TIMEOUT seconds (default 5): take over.
-         a. hand the thrusters back to the autopilot: SERVO1/3_FUNCTION are set to
-            LGRD_SRV1_FN / LGRD_SRV3_FN (74 ThrottleRight / 73 ThrottleLeft, the BlueBoat
-            default), which ArduPilot's navigation modes drive. Not saved: a reboot
-            restores the stored values.
+    5. Laptop silent for LGRD_TIMEOUT seconds (default 15): take over.
+         a. remember SERVO1/3_FUNCTION (the station's passthrough mapping), then hand the
+            thrusters to the autopilot: LGRD_SRV1_FN / LGRD_SRV3_FN (74 ThrottleRight /
+            73 ThrottleLeft, the BlueBoat default), which ArduPilot's navigation modes
+            drive. Not saved: a reboot restores the stored values.
          b. ARM the autopilot if it is not armed (after an E-STOP, or when arming failed
             at connection). This only works after (a): ArduPilot refuses to arm while the
             thrusters are on passthrough. The first attempt waits ARM_SETTLE_MS (below),
             then it keeps retrying (pre-arm checks such as a GPS fix must pass) and holds
             meanwhile.
-         c. (optional, LGRD_STAGE1=1) drive back to the last point where the link was
-            alive and wait there LGRD_WAIT s, in case the link comes back;
-         d. RTL: ArduPilot drives the boat to HOME (straight line) and holds there.
-    5. When the link comes back, the boat keeps doing what the guardian set until the
-       operator takes control back (MCS GUARDIAN box "Take back control", or any mode
-       change from a ground station). It never resumes a mission. A disarm while the
-       laptop is connected (the operator's E-STOP) stands the guardian down; a disarm
+         c. RETRACE: GUIDED to each trail point in reverse order, newest first. A point
+            counts as reached within LGRD_RADIUS m; one not reached within LGRD_PT_MAX s
+            is skipped. At the oldest point: LOITER (else HOLD) and wait there.
+            No trail, or GUIDED refused: RTL (straight line to HOME) instead.
+    6. When the link comes back (first laptop heartbeat) the guardian hands control back
+       at once: HOLD, SERVO1/3_FUNCTION back to what they were before the takeover,
+       MANUAL. The station's RC override then drives again, so the run (or manual
+       target) continues where the laptop left it - no operator action. The trail is cut
+       back to the point reached, so a second loss retraces from there. A disarm while
+       the laptop is connected (the operator's E-STOP) never triggers anything; a disarm
        nobody could have sent (link down) is undone.
 
 Thruster output range (why the arming waits)
@@ -53,16 +62,13 @@ Thruster output range (why the arming waits)
   case in practice; this does not rely on it.)
 
 HOME is set by ArduPilot at arming (the session start) and moved by the laptop to the
-start of each run while the link is up.
+start of each run while the link is up. Only the RTL fallback goes there.
 
 Parameters (appear after the first boot with the script; see README.md):
   LGRD_ENABLE   1     master switch; 0 = guardian off (stands down immediately)
   LGRD_ON       0     session flag, set by the laptop; reset to 0 at every boot
-  LGRD_TIMEOUT  5     s of laptop silence before taking over
-  LGRD_STAGE1   0     1 = first go back to the last point with a link
-  LGRD_WAIT     30    s to wait at that point before RTL
-  LGRD_S1_MAX   180   s max for stage 1 (getting there + waiting), then RTL
-  LGRD_RADIUS   5     m, "arrived" radius for stage 1
+  LGRD_TIMEOUT  15    s of laptop silence before taking over
+  LGRD_RADIUS   3     m, a trail point counts as reached within this distance
   LGRD_SYSID    1     MAVLink system id of the laptop (MAVROS 2: the target system, 1)
   LGRD_COMPID   191   MAVLink component id of the laptop (MAVROS 2: 191); 0 = any
   LGRD_SRV1_FN  74    SERVO1_FUNCTION on takeover (ThrottleRight)
@@ -71,6 +77,10 @@ Parameters (appear after the first boot with the script; see README.md):
                       0 = use ArduPilot's own GCS-heartbeat time (gcs:last_seen)
   LGRD_NEUTRAL  3     s of laptop silence before holding the thrusters at neutral;
                       0 = off. Keep it below LGRD_TIMEOUT.
+  LGRD_TRAIL_D  2     m between two trail points (the spacing doubles when it is full)
+  LGRD_PT_MAX   60    s to reach one trail point before skipping to the next
+(LGRD_STAGE1 / WAIT / S1_MAX, table entries 3-5, existed until 2026-10-28; the retrace
+replaced them. Their entries are not reused.)
 
 Messages are kept under 50 characters (one MAVLink STATUSTEXT, "LinkGuard: " included):
 longer ones are split and the station only shows the first piece.
@@ -84,8 +94,10 @@ local ARM_SETTLE_MS = 3500       -- disarmed on 73/74 before the first arm attem
 local SCALING_SETTLE_MS = 2000   -- disarmed on 73/74 this long = output range applied
 local NEUTRAL_PWM = 1500
 local MAX_TEXT = 50              -- MAVLink STATUSTEXT text field
+local TRAIL_MAX = 1000           -- trail points kept (thinned by half when full)
 
 -- ArduPilot Rover mode numbers
+local MODE_MANUAL = 0
 local MODE_HOLD = 4
 local MODE_LOITER = 5
 local MODE_RTL = 11
@@ -116,11 +128,9 @@ local function bind_add_param(name, idx, default_value)
 end
 
 local P_ENABLE  = bind_add_param("ENABLE",  1, 1)
-local P_TIMEOUT = bind_add_param("TIMEOUT", 2, 5)
-local P_STAGE1  = bind_add_param("STAGE1",  3, 0)
-local P_WAIT    = bind_add_param("WAIT",    4, 30)
-local P_S1_MAX  = bind_add_param("S1_MAX",  5, 180)
-local P_RADIUS  = bind_add_param("RADIUS",  6, 5)
+local P_TIMEOUT = bind_add_param("TIMEOUT", 2, 15)
+-- 3, 4, 5: LGRD_STAGE1 / WAIT / S1_MAX until 2026-10-28 - never reuse these indices.
+local P_RADIUS  = bind_add_param("RADIUS",  6, 3)
 local P_SYSID   = bind_add_param("SYSID",   7, 1)
 local P_COMPID  = bind_add_param("COMPID",  8, 191)
 local P_SRV1_FN = bind_add_param("SRV1_FN", 9, 74)
@@ -128,6 +138,8 @@ local P_SRV3_FN = bind_add_param("SRV3_FN", 10, 73)
 local P_DETECT  = bind_add_param("DETECT",  11, 1)
 local P_ON      = bind_add_param("ON",      12, 0)
 local P_NEUTRAL = bind_add_param("NEUTRAL", 13, 3)
+local P_TRAIL_D = bind_add_param("TRAIL_D", 14, 2)
+local P_PT_MAX  = bind_add_param("PT_MAX",  15, 60)
 
 -- A session flag must never outlive the session: every boot starts OFF until the
 -- laptop sets it again (runtime value only; the laptop's own set is what is saved).
@@ -149,7 +161,7 @@ local function mode_name(m)
 end
 
 -- Dataflash log entry on every state change, for post-run analysis. Never fatal.
-local STATE_CODE = {idle = 0, watch = 1, arming = 2, stage1 = 3, stage2 = 4, held = 5}
+local STATE_CODE = {idle = 0, watch = 1, arming = 2, retrace = 3, stage2 = 4, held = 5}
 local function log_state(state, age_ms)
   pcall(function()
     logger:write("LGRD", "State,Age", "Bf", STATE_CODE[state] or 255, (age_ms or -1) / 1000.0)
@@ -281,13 +293,68 @@ local function enter_first(modes)
 end
 
 ---------------------------------------------------------------------------
+-- Trail: where the boat has been this session, oldest first
+---------------------------------------------------------------------------
+-- Plain lat/lng integers (1e-7 deg), not Location objects: 1000 points cost a few kB.
+local trail_lat, trail_lng = {}, {}
+local trail_n = 0
+local trail_scale = 1        -- spacing = LGRD_TRAIL_D x this (doubled at every thinning)
+
+local function trail_clear()
+  trail_lat, trail_lng, trail_n, trail_scale = {}, {}, 0, 1
+end
+
+-- Trail point i as a Location (a copy of `template` keeps its altitude frame).
+local function trail_point(i, template)
+  local loc = template and template:copy() or Location()
+  loc:lat(trail_lat[i])
+  loc:lng(trail_lng[i])
+  return loc
+end
+
+-- Keep every other point, always the newest, and double the spacing.
+local function trail_spacing()
+  return math.max(P_TRAIL_D:get(), 0.5) * trail_scale
+end
+
+local function trail_thin()
+  local lat, lng, k = {}, {}, 0
+  for i = 1, trail_n do
+    if (trail_n - i) % 2 == 0 then
+      k = k + 1
+      lat[k], lng[k] = trail_lat[i], trail_lng[i]
+    end
+  end
+  trail_lat, trail_lng, trail_n = lat, lng, k
+  trail_scale = trail_scale * 2
+  say(SEV_INFO, string.format("trail thinned, %.0f m spacing", trail_spacing()))
+end
+
+local function trail_record(here)
+  if trail_n > 0 and here:get_distance(trail_point(trail_n, here)) < trail_spacing() then
+    return
+  end
+  if trail_n >= TRAIL_MAX then trail_thin() end
+  trail_n = trail_n + 1
+  trail_lat[trail_n], trail_lng[trail_n] = here:lat(), here:lng()
+end
+
+-- Drop the points after `n` (already driven back over).
+local function trail_cut(n)
+  for i = trail_n, n + 1, -1 do
+    trail_lat[i], trail_lng[i] = nil, nil
+  end
+  trail_n = math.min(trail_n, n)
+end
+
+---------------------------------------------------------------------------
 -- State machine
 ---------------------------------------------------------------------------
-local state = "idle"         -- idle | watch | arming | stage1 | stage2 | held
+local state = "idle"         -- idle | watch | arming | retrace | stage2 | held
 local expected_mode = nil    -- mode the guardian put the vehicle in
-local last_link_loc = nil    -- last position with a live laptop link
-local stage1_start_ms = nil
-local arrived_ms = nil
+local saved_fn = nil         -- {SERVO1, SERVO3}_FUNCTION before the takeover
+local retrace_i = nil        -- trail point being driven to
+local retrace_pt_ms = nil    -- when it became the target
 local link_was_ok = true
 local neutral_active = false
 local last_reassert_ms = 0
@@ -319,28 +386,38 @@ local function start_rtl(age)
   end
 end
 
-local function start_stage1(age)
-  if last_link_loc and vehicle:set_mode(MODE_GUIDED)
-     and vehicle:set_target_location(last_link_loc) then
-    thrusters_to_autopilot()
-    expected_mode = MODE_GUIDED
-    stage1_start_ms = now_ms()
-    arrived_ms = nil
-    set_state("stage1", age)
-    say(SEV_CRITICAL, "going to last point with link")
+-- First trail point, from the newest down, farther than LGRD_RADIUS from `here`.
+local function next_point(i, here)
+  while i > 1 and here:get_distance(trail_point(i, here)) <= P_RADIUS:get() do
+    i = i - 1
+  end
+  return i
+end
+
+local function start_retrace(age)
+  local here = ahrs:get_location()
+  if trail_n == 0 or not here then
+    say(SEV_WARNING, "no trail - RTL instead")
+    start_rtl(age)
     return
   end
-  say(SEV_WARNING, "no last-link point - RTL instead")
+  retrace_i = next_point(trail_n, here)
+  if vehicle:set_mode(MODE_GUIDED)
+     and vehicle:set_target_location(trail_point(retrace_i, here)) then
+    thrusters_to_autopilot()
+    expected_mode = MODE_GUIDED
+    retrace_pt_ms = now_ms()
+    set_state("retrace", age)
+    say(SEV_CRITICAL, string.format("retracing the path (%d pts)", retrace_i))
+    return
+  end
+  say(SEV_WARNING, "GUIDED refused - RTL instead")
   start_rtl(age)
 end
 
 -- Armed: start the return proper.
 local function go(age)
-  if P_STAGE1:get() >= 1 then
-    start_stage1(age)
-  else
-    start_rtl(age)
-  end
+  start_retrace(age)
 end
 
 -- Disarmed: hold, hand the thrusters over (so pre-arm can pass) and arm once Rover has
@@ -359,6 +436,13 @@ end
 local function takeover(age)
   neutral_active = false
   say(SEV_CRITICAL, string.format("link lost %.0f s - taking over", age / 1000))
+  -- The station's mapping (passthrough), given back when the laptop returns.
+  local s1, s3 = param:get("SERVO1_FUNCTION"), param:get("SERVO3_FUNCTION")
+  if s1 ~= nil and s3 ~= nil and not on_autopilot_functions() then
+    saved_fn = {math.floor(s1), math.floor(s3)}
+  else
+    saved_fn = nil
+  end
   if not arming:is_armed() then
     start_arming(age)
   elseif scaling_ok then
@@ -370,10 +454,38 @@ local function takeover(age)
     if arming:disarm() then
       start_arming(age)
     else
-      say(SEV_CRITICAL, "disarm refused - RTL anyway")
+      say(SEV_CRITICAL, "disarm refused - retrace anyway")
       go(age)
     end
   end
+end
+
+-- The laptop is back: give the boat straight back to the station (HOLD, its servo
+-- mapping, MANUAL - what `guardian.py reclaim` does), so the run goes on by itself.
+local function resume(age)
+  if state == "retrace" and retrace_i then
+    trail_cut(retrace_i)
+  elseif state == "held" then
+    trail_cut(1)
+  end
+  enter_first({MODE_HOLD})
+  local ok = true
+  if saved_fn then
+    ok = param:set("SERVO1_FUNCTION", saved_fn[1]) and ok
+    ok = param:set("SERVO3_FUNCTION", saved_fn[2]) and ok
+  end
+  if not ok then
+    say(SEV_CRITICAL, "could not restore SERVO1/3")
+  end
+  if not vehicle:set_mode(MODE_MANUAL) then
+    say(SEV_CRITICAL, "MANUAL refused - " .. mode_name(vehicle:get_mode()))
+  end
+  saved_fn = nil
+  expected_mode = nil
+  retrace_i = nil
+  neutral_active = false
+  set_state("watch", age)
+  say(SEV_NOTICE, "laptop back - mission resumed")
 end
 
 -- While the link is down, something else (ArduPilot's own GCS/RC failsafe) may switch
@@ -383,16 +495,43 @@ local function reassert(age)
   local t = now_ms()
   if t - last_reassert_ms < 2000 then return end
   last_reassert_ms = t
-  if state == "stage1" then
-    if not (vehicle:set_mode(MODE_GUIDED) and vehicle:set_target_location(last_link_loc)) then
+  if state == "retrace" then
+    if not (vehicle:set_mode(MODE_GUIDED)
+            and vehicle:set_target_location(trail_point(retrace_i, ahrs:get_location()))) then
       start_rtl(age)
     end
   elseif state == "arming" then
     local m = enter_first({MODE_HOLD})
     if m then expected_mode = m end
+  elseif state == "held" then
+    local m = enter_first({MODE_LOITER, MODE_HOLD})
+    if m then expected_mode = m end
   else
     local m = enter_first({MODE_RTL, MODE_LOITER, MODE_HOLD})
     if m then expected_mode = m end
+  end
+end
+
+local function update_retrace()
+  local here = ahrs:get_location()
+  if not here then return end
+  local reached = here:get_distance(trail_point(retrace_i, here)) <= P_RADIUS:get()
+  local late = now_ms() - retrace_pt_ms > P_PT_MAX:get() * 1000
+  if not (reached or late) then return end
+  if late and not reached then
+    say(SEV_WARNING, string.format("point %d not reached, skipped", retrace_i))
+  end
+  if retrace_i <= 1 then
+    expected_mode = enter_first({MODE_LOITER, MODE_HOLD})
+    set_state("held")
+    say(SEV_CRITICAL, "back at path start - holding")
+    return
+  end
+  retrace_i = next_point(retrace_i - 1, here)
+  retrace_pt_ms = now_ms()
+  if not vehicle:set_target_location(trail_point(retrace_i, here)) then
+    say(SEV_WARNING, "GUIDED target refused - RTL")
+    start_rtl()
   end
 end
 
@@ -415,12 +554,13 @@ local function update()
   local age = laptop_age_ms()
   local link_ok = age ~= nil and age < P_TIMEOUT:get() * 1000
 
-  -- Flag on: become active once the laptop is heard.
+  -- Flag on: become active once the laptop is heard. A new trail per session.
   if state == "idle" then
     if link_ok then
+      trail_clear()
       set_state("watch", age)
       link_was_ok = true
-      say(SEV_NOTICE, string.format("ON, HOME after %.0f s silence%s",
+      say(SEV_NOTICE, string.format("ON, retrace after %.0f s silence%s",
           P_TIMEOUT:get(), armed and "" or ", disarmed"))
     end
     return
@@ -432,7 +572,9 @@ local function update()
   link_was_ok = link_ok
 
   if state == "watch" then
-    -- Armed or not (an E-STOP disarms): the guardian stays on and arms itself if needed.
+    -- Armed or not, link up or not: the trail is always recorded.
+    local here = ahrs:get_location()
+    if here then trail_record(here) end
     if link_ok then
       local neutral_s = P_NEUTRAL:get()
       if neutral_s > 0 and age >= neutral_s * 1000 then
@@ -441,13 +583,9 @@ local function update()
           say(SEV_WARNING, string.format("no laptop %.0f s - thrusters neutral", age / 1000))
         end
         hold_neutral()
-      else
-        if neutral_active then
-          neutral_active = false
-          say(SEV_NOTICE, "laptop back - thrusters released")
-        end
-        local loc = ahrs:get_location()
-        if loc then last_link_loc = loc end
+      elseif neutral_active then
+        neutral_active = false
+        say(SEV_NOTICE, "laptop back - thrusters released")
       end
     elseif age ~= nil then
       takeover(age)
@@ -455,26 +593,20 @@ local function update()
     return
   end
 
-  -- From here on the guardian is in charge (arming / stage1 / stage2 / held).
+  -- From here on the guardian is in charge (arming / retrace / stage2 / held).
+  if link_ok then
+    -- The laptop is back: its mission goes on, nothing for the operator to do.
+    resume(age)
+    return
+  end
+
   if not armed and state ~= "arming" then
-    if link_ok then
-      -- Only someone with a working link can have disarmed it: the operator stood it down.
-      say(SEV_NOTICE, "operator disarmed - watching")
-      set_state("watch", age)
-      return
-    end
+    -- Link down: nobody could have disarmed it on purpose.
     start_arming(age)
     return
   end
 
   if state == "arming" then
-    if link_ok then
-      -- The link came back before the boat could arm: it stays disarmed in HOLD and the
-      -- operator takes over (a later loss starts again from "watch").
-      set_state("watch", age)
-      say(SEV_NOTICE, "link back before arming - in HOLD")
-      return
-    end
     reassert(age)
     if armed then
       say(SEV_NOTICE, "armed")
@@ -493,41 +625,12 @@ local function update()
           (t - arm_start_ms) / 1000))
     end
 
-  elseif state == "stage1" then
-    if link_ok then
-      -- Stage 1 did its job: stop at the last-link point and wait for the operator.
-      local m = enter_first({MODE_LOITER, MODE_HOLD})
-      expected_mode = m
-      set_state("held", age)
-      say(SEV_NOTICE, "holding, waiting for operator")
-    else
-      reassert(age)
-      local here = ahrs:get_location()
-      if here and last_link_loc and here:get_distance(last_link_loc) <= P_RADIUS:get() then
-        arrived_ms = arrived_ms or now_ms()
-      end
-      local waited = arrived_ms and (now_ms() - arrived_ms) > P_WAIT:get() * 1000
-      local too_long = (now_ms() - stage1_start_ms) > P_S1_MAX:get() * 1000
-      if waited or too_long then
-        say(SEV_WARNING, "no link at last-link point")
-        start_rtl(age)
-      end
-    end
+  elseif state == "retrace" then
+    reassert(age)
+    if state == "retrace" then update_retrace() end
 
-  elseif state == "stage2" or state == "held" then
-    if link_ok then
-      -- Any mode change while the laptop is back = the operator took control.
-      if vehicle:get_mode() ~= expected_mode then
-        say(SEV_NOTICE, "operator in control (" .. mode_name(vehicle:get_mode()) .. ")")
-        set_state("watch", age)
-      end
-    elseif state == "held" then
-      -- Link lost again while waiting for the operator: straight home this time.
-      say(SEV_CRITICAL, "laptop lost again - taking over")
-      start_rtl(age)
-    else
-      reassert(age)
-    end
+  else  -- stage2 (RTL fallback) or held (back at the path start)
+    reassert(age)
   end
 end
 
