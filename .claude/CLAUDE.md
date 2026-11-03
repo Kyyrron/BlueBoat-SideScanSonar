@@ -350,15 +350,24 @@ a request ArduPilot streams **4 Hz** on the mavros link: `/mavros/local_position
 `/mavros/imu/data`, `/mavros/global_position/global` and hence `/blueboat/odom` all ran at
 ~4 Hz in every 2026-10-27 run bag — except while SonarView was open (10.7–13 Hz), because
 SonarLink requests ATTITUDE / LOCAL_POSITION_NED / GLOBAL_POSITION_INT at 30 Hz and a message
-interval is autopilot-wide. `sss_processor_node` now sends SonarView's exact set through
-`/mavros/set_message_interval` whenever the sonar streams, re-asserted every 30 s, so
-**every `/mavros/*` consumer gets ~13 Hz** (the autopilot's delivered ceiling for that
-request, measured in SonarView's own on-boat recordings) **until the autopilot reboots,
-including later runs without the sonar**. Control effect, judged by the owner: `master_control`'s
-20 Hz loop sees a fresh pose on most ticks instead of one pose for five; the PID derivative
-(Δerror / 0.05 s) becomes smooth instead of a 5× spike every fifth tick, so gains tuned at
-4 Hz may need a retune; MPC/LoS get fresher state; real moves closer to the sim's 20 Hz odom;
-run bags' `/mavros/*` topics grow ~3×. Record the pose rate with any control experiment.
+interval is autopilot-wide. `sss_processor_node` sends SonarView's exact set through
+`/mavros/set_message_interval` whenever the sonar streams, re-asserted every 30 s and (since
+2026-11-03) renewed whenever its measured pose rate falls below 10 Hz (`sssCLAUDE.md`).
+**What the `/mavros/*` consumers actually receive does not hold steady — UNCERTAIN.**
+SonarView's own on-boat recordings carry ~13 Hz per pose message for that request. On the
+2026-10-28 water run (`fragmentation_evidence_8`) the autopilot delivered **30 Hz for about
+9 s of every 30 s re-assert period and 4 Hz for the other ~21 s**, repeating (calibration
+pass 4 report, `~/calib/pass4/step1/D5b/REPORT.md`, owner's machine). So something resets
+the intervals between re-asserts. The cause is not identified, and the renewal added for it
+is **unverified on water**. The earlier statement here, "~13 Hz until the autopilot reboots,
+including later runs without the sonar", does not hold for that run. Control effect: on
+that pattern `master_control`'s 20 Hz loop saw **4 Hz pose for about 70 % of the run**
+(one pose for five ticks, the PID derivative Δerror / 0.05 s a 5× spike every fifth tick)
+and a fresh pose on most ticks only during the 30 Hz bursts. PID-derivative gains tuned or
+judged at 13 Hz may therefore behave differently from what a run delivers. The owner's
+2026-10-27 judgment stands for the intended steady rate: smooth derivative, gains tuned at
+4 Hz may need a retune, fresher MPC/LoS state, real closer to the sim's 20 Hz odom, run
+bags' `/mavros/*` topics larger. Record the pose rate with any control experiment.
 In simulation the service is absent and nothing is requested. mavros stamps **0** on the real
 launch (`use_sim_time` with no `/clock`): the processor keys zero-stamped odom and mavlink
 envelopes on arrival time (`sssCLAUDE.md`); the source fix stays a Control item.
