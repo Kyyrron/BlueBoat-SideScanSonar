@@ -16,3 +16,9 @@
 [submodule "BlueBoat-Perception"]
 	path = BlueBoat-Perception
 	url = https://github.com/Kyyrron/BlueBoat-Perception
+[submodule "BlueBoat-Belief"]
+	path = BlueBoat-Belief
+	url = https://github.com/Kyyrron/BlueBoat-Belief.git
+[submodule "BlueBoat-Replanner"]
+	path = BlueBoat-Replanner
+	url = https://github.com/Kyyrron/BlueBoat-Replanner.git
