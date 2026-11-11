@@ -1,0 +1,131 @@
+/* BlueBoat Hub design tokens: a calm, dark instrument panel.
+   Dark is the default; light follows the system unless the viewer picks one
+   (data-theme on <html>). */
+
+:root {
+  --bg: #0b1016;
+  --surface: #121a23;
+  --raised: #18222e;
+  --sunken: #0e141b;
+  --border: #233040;
+  --border-strong: #2e3d50;
+  --text: #e6edf3;
+  --muted: #8b9aab;
+  --faint: #5d6b7b;
+  --accent: #2dd4bf;
+  --accent-ink: #04211d;
+  --accent-soft: rgba(45, 212, 191, 0.12);
+  --running: #22c55e;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --info: #38bdf8;
+  --error-soft: rgba(239, 68, 68, 0.12);
+  --warning-soft: rgba(245, 158, 11, 0.12);
+  --running-soft: rgba(34, 197, 94, 0.12);
+
+  --g-teal: #2dd4bf;
+  --g-violet: #a78bfa;
+  --g-amber: #f59e0b;
+  --g-slate: #94a3b8;
+
+  --term-bg: #0d131a;
+  --term-fg: #d7dee6;
+  --term-cursor: #2dd4bf;
+  --term-selection: rgba(45, 212, 191, 0.28);
+
+  --r-tile: 14px;
+  --r-ctl: 8px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 28px rgba(0, 0, 0, 0.22);
+  --overlay: rgba(4, 8, 12, 0.62);
+
+  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'DejaVu Sans Mono', monospace;
+
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+
+  --rail-w: 64px;
+  --topbar-h: 56px;
+
+  --t-fast: 150ms;
+  --t-med: 220ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --bg: #f3f5f8;
+    --surface: #ffffff;
+    --raised: #eef2f6;
+    --sunken: #f7f9fb;
+    --border: #d8e0e8;
+    --border-strong: #c3cfdb;
+    --text: #0f1720;
+    --muted: #556577;
+    --faint: #8a98a8;
+    --accent: #0d9488;
+    --accent-ink: #ffffff;
+    --accent-soft: rgba(13, 148, 136, 0.1);
+    --running: #16a34a;
+    --warning: #d97706;
+    --error: #dc2626;
+    --info: #0284c7;
+    --error-soft: rgba(220, 38, 38, 0.08);
+    --warning-soft: rgba(217, 119, 6, 0.1);
+    --running-soft: rgba(22, 163, 74, 0.1);
+    --g-teal: #0d9488;
+    --g-violet: #7c3aed;
+    --g-amber: #d97706;
+    --g-slate: #64748b;
+    --term-bg: #fbfcfd;
+    --term-fg: #1d2733;
+    --term-cursor: #0d9488;
+    --term-selection: rgba(13, 148, 136, 0.22);
+    --shadow: 0 1px 2px rgba(15, 23, 32, 0.06), 0 8px 24px rgba(15, 23, 32, 0.06);
+    --overlay: rgba(15, 23, 32, 0.32);
+    color-scheme: light;
+  }
+}
+
+:root[data-theme='light'] {
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --raised: #eef2f6;
+  --sunken: #f7f9fb;
+  --border: #d8e0e8;
+  --border-strong: #c3cfdb;
+  --text: #0f1720;
+  --muted: #556577;
+  --faint: #8a98a8;
+  --accent: #0d9488;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(13, 148, 136, 0.1);
+  --running: #16a34a;
+  --warning: #d97706;
+  --error: #dc2626;
+  --info: #0284c7;
+  --error-soft: rgba(220, 38, 38, 0.08);
+  --warning-soft: rgba(217, 119, 6, 0.1);
+  --running-soft: rgba(22, 163, 74, 0.1);
+  --g-teal: #0d9488;
+  --g-violet: #7c3aed;
+  --g-amber: #d97706;
+  --g-slate: #64748b;
+  --term-bg: #fbfcfd;
+  --term-fg: #1d2733;
+  --term-cursor: #0d9488;
+  --term-selection: rgba(13, 148, 136, 0.22);
+  --shadow: 0 1px 2px rgba(15, 23, 32, 0.06), 0 8px 24px rgba(15, 23, 32, 0.06);
+  --overlay: rgba(15, 23, 32, 0.32);
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}

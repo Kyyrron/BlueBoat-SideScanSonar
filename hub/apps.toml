@@ -1,0 +1,301 @@
+# BlueBoat Hub — app registry.
+#
+# Read at start and hot-reloaded on save; a broken edit keeps the last good
+# registry and shows the error in the hub. Adding an app (Belief, Replanner,
+# …) is an edit here, not code — see README.md "Adding an app".
+#
+# The command lines are the owner's own launch lines from terminals.txt.
+# Every app runs as
+#     <shell> '<printf of the command>; <template>'
+# in its own tmux session (socket `blueboat-hub`). The hub never launches
+# BlueBoat_launch.py / full_mission_launch.py itself: MCS owns mission
+# launches, E-STOP and the CM-15 safe shutdown.
+
+[defaults]
+workspace = "~/ros2_ws"
+# Interactive bash so ~/.bashrc runs exactly as in a terminal: it sources
+# /opt/ros/jazzy and sets ACADOS_SOURCE_DIR / LD_LIBRARY_PATH for the MPC
+# controller. A non-interactive `bash -lc` would skip all of that.
+shell = ["bash", "-ic"]
+template = "cd {workspace} && source env.sh && cd {cwd} && exec {command}"
+
+[build]
+# As BlueBoat-MCS/build.sh and BlueBoat-SSS/build.sh: plain `colcon build`
+# from the workspace, never with install/setup.bash sourced first.
+command = "source /opt/ros/jazzy/setup.bash && colcon build"
+select_flag = "--packages-select"
+pinned_first = ["blueboat_interfaces"]
+
+# ---------------------------------------------------------------- groups
+# accent: teal | violet | amber | slate
+
+[[groups]]
+id = "operate"
+name = "Operate"
+accent = "teal"
+
+[[groups]]
+id = "simulate"
+name = "Simulate"
+accent = "violet"
+
+[[groups]]
+id = "sonar"
+name = "Sonar · advanced"
+accent = "violet"
+collapsed = true
+
+[[groups]]
+id = "analyse"
+name = "Analyse"
+accent = "amber"
+
+[[groups]]
+id = "tools"
+name = "Tools"
+accent = "slate"
+
+[[groups]]
+id = "planned"
+name = "Planned"
+accent = "slate"
+
+# ------------------------------------------------------------------ apps
+# Fields: id, name, group, description, icon (see src/lib/icons.ts), cwd
+# (from the workspace), command, requires[], fallback_command,
+# fallback_requires[], params[], variants[], singleton (true), window (true),
+# warning, force_warning, primary, planned, optional, packages[], after_close,
+# stop ("close" = like the window's ✕, default | "ctrl-c"), help (ⓘ text).
+#
+# requires: { ros_exe = "pkg/exe" } | { launch = "pkg/file.py" } |
+#           { file = "path" } | { bin = "program" }
+# params:   { name, label, kind = path|file|number|choice, root, glob, marker,
+#             depth, optional, default, choices, format, min, max }
+#           used in the command as {name} (required) or {name?} (optional).
+# packages: colcon packages whose rebuild shows "restart to use new build".
+
+[[apps]]
+id = "mcs"
+name = "Mission Control Station"
+group = "operate"
+description = "Launch and supervise missions, E-STOP, safe shutdown."
+icon = "ship"
+cwd = "src/BlueBoat-SideScanSonar/BlueBoat-MCS"
+command = "python3 run.py"
+requires = [{ file = "src/BlueBoat-SideScanSonar/BlueBoat-MCS/run.py" }]
+primary = true
+# MCS imports the interface types at start; mission launches it starts read
+# the install afresh each time.
+packages = ["blueboat_interfaces"]
+force_warning = "Force-stopping MCS skips its safe shutdown (publish `default`) — the motors may stay in override. Use MCS's own Stop Mission first."
+
+[[apps]]
+id = "gcs"
+name = "BlueBoat GCS"
+group = "operate"
+description = "Live sonar mosaic, overlays, recording sessions, seabed images."
+icon = "radar"
+cwd = "src/BlueBoat-SideScanSonar/BlueBoat-SSS/blueboat_sss"
+command = "python3 -m blueboat_gcs.main"
+requires = [{ file = "src/BlueBoat-SideScanSonar/BlueBoat-SSS/blueboat_sss/blueboat_gcs/main.py" }]
+variants = [{ id = "sim", name = "GCS (built-in simulator)", args = "--sim" }]
+packages = ["blueboat_interfaces", "blueboat_perception"]
+
+[[apps]]
+id = "qgc"
+name = "QGroundControl"
+group = "operate"
+description = "ArduPilot ground station: parameters, calibration, firmware."
+icon = "plane"
+cwd = "."
+command = "./QGroundControl.AppImage"
+requires = [{ file = "QGroundControl.AppImage" }]
+warning = "Shares the MAVLink port (UDP 14550) with MAVROS — don't run it during a mission."
+
+[[apps]]
+id = "world_builder"
+name = "World Builder"
+group = "simulate"
+description = "Create and edit GPS-anchored Gazebo worlds over MCS paths."
+icon = "globe"
+cwd = "."
+command = "ros2 run blueboat_sss_sim world_builder"
+requires = [{ ros_exe = "blueboat_sss_sim/world_builder" }]
+packages = ["blueboat_sss_sim"]
+
+[[apps]]
+id = "gazebo_world"
+name = "Gazebo world viewer"
+group = "simulate"
+description = "Open a built world in Gazebo, without a mission."
+help = """Opens one World Builder world (~/worlds/<project>/<world>/) in Gazebo, through ros2 launch blueboat_sss_sim sim_world_launch.py — the scene only: no boat control, no sonar, no mission.
+
+Use it to look at a world you built. To run a mission in a world, launch it from MCS, which starts the full simulation.
+
+Gazebo opens in a few seconds. Stop ends it with Ctrl-C (about 3 s; Gazebo prints an "Interrupt" traceback, which is normal). Closing Gazebo's own window instead asks "Do you really want to exit?" first."""
+icon = "box"
+cwd = "."
+command = "ros2 launch blueboat_sss_sim sim_world_launch.py world_dir:={world}"
+requires = [{ launch = "blueboat_sss_sim/sim_world_launch.py" }]
+params = [{ name = "world", label = "World", kind = "path", root = "~/worlds", depth = 2, marker = "world.sdf" }]
+packages = ["blueboat_sss_sim", "blueboat_description"]
+# Gazebo's window answers a close with its own "Do you really want to exit?";
+# a viewer has nothing to save, so Stop ends the launch with Ctrl-C (≈3 s).
+stop = "ctrl-c"
+# if the Gazebo window is closed by hand, `ros2 launch` may linger: Ctrl-C it
+after_close = "ctrl-c"
+
+[[apps]]
+id = "sonar_simple"
+name = "Sonar driver (manual)"
+group = "sonar"
+description = "Runs only the real Omniscan driver, by hand — the GCS normally starts it."
+help = """Starts sss_node.py (ROS node /side_scan_sonar) on its own, through ros2 launch blueboat_sss SSS_simple_launch.py.
+
+What it does: connects over TCP to the two real Omniscan 450 SS on the boat (192.168.2.92 and .93, through the Base Station WiFi) and publishes their profiles on /side_scan_sonar/*. Pinging is OFF at start; nothing is processed, mosaicked or recorded.
+
+When to use it: bench tests of the sonar link without the GCS, or checking the raw topics (ros2 topic echo / hz).
+
+You usually don't need it: the GCS starts this same driver itself when you press START with "Sonar: Real", together with the processor and recording. Don't run both at once — two drivers would talk to the same sonars.
+
+Range: optional, in millimetres (default 20000 = 20 m). Stop sends Ctrl-C, the normal way to end a ros2 launch."""
+icon = "audio-waveform"
+cwd = "."
+command = "ros2 launch blueboat_sss SSS_simple_launch.py {range_length_mm?}"
+requires = [{ launch = "blueboat_sss/SSS_simple_launch.py" }]
+params = [{ name = "range_length_mm", label = "Range (mm) — default 20000 (20 m)", kind = "number", optional = true, min = 1000, max = 100000, format = "range_length_mm:={}" }]
+warning = "Needs the real sonars on the network. Don't run it while the GCS uses \"Sonar: Real\" — the GCS starts its own driver."
+window = false
+packages = ["blueboat_sss", "blueboat_interfaces"]
+
+[[apps]]
+id = "log_reviewer"
+name = "Log Reviewer"
+group = "analyse"
+description = "Review a run: position log, path, tracking errors."
+icon = "chart-line"
+cwd = "."
+command = "python3 src/BlueBoat-SideScanSonar/BlueBoat-Control/log_reviewer/run.py {csv?}"
+requires = [{ file = "src/BlueBoat-SideScanSonar/BlueBoat-Control/log_reviewer/run.py" }]
+params = [{ name = "csv", label = "Position log", kind = "file", root = "{data_root}/Robot_data", glob = "*-poslog.csv", depth = 2, optional = true }]
+# several reviews side by side
+singleton = false
+
+[[apps]]
+id = "aug_studio"
+name = "Dataset Aug Studio"
+group = "analyse"
+description = "Physics-informed augmentation of YOLO datasets (offline)."
+icon = "images"
+cwd = "src/BlueBoat-SideScanSonar/SSS-Dataset-Aug-Studio"
+command = "sss-aug-studio"
+requires = [{ bin = "sss-aug-studio" }]
+fallback_command = "python3 -m sss_aug_studio.app.main"
+fallback_requires = [{ file = "src/BlueBoat-SideScanSonar/SSS-Dataset-Aug-Studio/sss_aug_studio/app/main.py" }]
+optional = true
+
+[[apps]]
+id = "belief"
+name = "Belief"
+group = "planned"
+description = "Reads Perception's image records; the only input of the Replanner."
+icon = "brain"
+planned = true
+
+[[apps]]
+id = "replanner"
+name = "Replanner"
+group = "planned"
+description = "Reads Belief; generates every survey through Control's path update."
+icon = "route"
+planned = true
+
+# ------------------------------------------------------------- data cards
+# Read-only: the hub lists, sizes and opens; it never writes, moves or
+# deletes anything here (CM-7). Paths: ~, {workspace}, {data_root}
+# ($BLUEBOAT_DATA_DIR as ~/.bashrc sets it, else {workspace}/data).
+# The GCS keeps its own root: `data_root: ../../../../data/SSS_data` in its
+# config, relative to its cwd → {workspace}/data/SSS_data.
+
+[[data]]
+id = "svlog"
+name = "Sonar recordings"
+icon = "audio-waveform"
+description = ".svlog files and folders. Replay them from inside the GCS."
+tabs = [{ label = "SSS_data", path = "{workspace}/data/SSS_data" }]
+exclude = ["sessions", "merged_sessions"]
+
+[[data]]
+id = "gcs_sessions"
+name = "GCS sessions"
+icon = "layers"
+description = "One folder per recording session (waterfall, mosaic, seabed images)."
+tabs = [
+  { label = "sessions", path = "{workspace}/data/SSS_data/sessions" },
+  { label = "merged", path = "{workspace}/data/SSS_data/merged_sessions" },
+]
+
+[[data]]
+id = "robot"
+name = "Robot logs & run folders"
+icon = "map-pin"
+description = "Position logs, run bags and reports, one folder per run."
+tabs = [{ label = "Robot_data", path = "{data_root}/Robot_data" }]
+actions = [
+  { label = "Open in Log Reviewer", app = "log_reviewer", param = "csv", when = "file", glob = "*-poslog.csv" },
+  { label = "Open in Log Reviewer", app = "log_reviewer", param = "csv", when = "dir", contains = "*-poslog.csv" },
+]
+
+[[data]]
+id = "processed"
+name = "Processed robot logs"
+icon = "file-chart-column"
+tabs = [{ label = "Processed_Robot_data", path = "{data_root}/Processed_Robot_data" }]
+
+[[data]]
+id = "controllers"
+name = "Controller logs"
+icon = "gauge"
+description = "Controller .npy logs per controller type."
+tabs = [
+  { label = "LoS", path = "{data_root}/LoS_data" },
+  { label = "MPC", path = "{data_root}/MPC_data" },
+  { label = "PID", path = "{data_root}/PID_data" },
+]
+
+[[data]]
+id = "perception"
+name = "Perception"
+icon = "scan-eye"
+tabs = [
+  { label = "data", path = "{data_root}/Perception_data" },
+  { label = "models", path = "{data_root}/Perception_models" },
+  { label = "eval", path = "{data_root}/Perception_eval" },
+]
+
+[[data]]
+id = "datasets"
+name = "Datasets"
+icon = "database"
+tabs = [
+  { label = "Dataset_data", path = "{data_root}/Dataset_data" },
+  { label = "Tile_data", path = "{data_root}/Tile_data" },
+]
+
+[[data]]
+id = "worlds"
+name = "Worlds"
+icon = "globe"
+description = "World Builder output, one folder per world."
+tabs = [{ label = "worlds", path = "~/worlds" }]
+depth = 2
+actions = [
+  { label = "Open in Gazebo viewer", app = "gazebo_world", param = "world", when = "dir", marker = "world.sdf" },
+]
+
+[[data]]
+id = "trajectories"
+name = "Trajectories"
+icon = "route"
+description = "MCS pattern designer missions."
+tabs = [{ label = "trajectories", path = "~/.config/blueboat_mcs/trajectories" }]

@@ -13,6 +13,8 @@ setuptools
 scipy==1.17.1
 sympy==1.14.0
 transformations==2026.1.18
+# GPU backend of the SSS-Sim ray-cast sonar (raycast_backend: warp; CUDA via NVRTC)
+warp-lang==1.19.0
 lxml
 PySide6>=6.5
 opencv-python>=4.8

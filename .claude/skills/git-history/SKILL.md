@@ -97,3 +97,16 @@ companion (`ros/launch_manager.py`), the launch dialog's **Session** row (*Norma
 test's `perception ok` block and the MCS docs. Every existing `to_cli()`, launch target and
 sea companion is unchanged (pinned). No interface changed; BlueBoat-Control was not edited.
 BlueBoat-Perception itself (added 2026-10-16) is not frozen.
+**On 2026-11-09 the user ordered ray-cast model variants in MCS's Sonar model menu** ("select
+geometric, full ray-cast, ray-cast without X"; only what costs GPU time without a big change in how
+the image looks). Additions only: `core/sonar_variants.py` (lists the simulator's profiles that carry a
+top-level `variant:` block, YAML only, CM-3), `SimSpeedConfig.variant_dirs`,
+`LaunchParameters.sonar_profile` (emitted as `sonar_config:=<path>` after `real_time_factor:=`, only
+when set), the menu items with their tooltips, a hold sentence appended to the ray-cast hint, and the
+smoke test's variant block inside `sim speed ok`. The Geometric and Ray-cast items and every existing
+command line are unchanged (pinned by the existing asserts). BlueBoat-Control was not edited.
+**On 2026-11-10 the user ordered MCS's Slow-down above x1** ("also change MCS's slider"): `SimSpeedConfig.rtf_max`
+0.5 → 4.0, `slowdown_hint` says "faster than real time" above x1, the hold hint names x2–x4 for fast, the station
+clock's ratio caps 2.0 / 1.5 → `_RATIO_CAP` 5.0, and the SIM badge shows a requested factor above x1 (it printed
+"SIM x1"). The smoke test pins the new range, the hint and the badge; every command line is unchanged.
+BlueBoat-SSS-Sim's launch allows `real_time_factor` up to 4.0 to match. BlueBoat-Control was not edited.

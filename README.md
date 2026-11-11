@@ -1,5 +1,20 @@
 # BlueBoat — aspect-aware side-scan sonar survey (superproject)
 
+> ## 🚀 Start here: BlueBoat Hub
+>
+> **[`hub/`](hub/) is the desktop app that ties every module together.** One window to:
+> - launch, watch and stop every app: Mission Control Station, GCS, QGroundControl, World
+>   Builder, Gazebo viewer, Log Reviewer, Aug Studio;
+> - see each app's live terminal;
+> - build the workspace (`colcon build`);
+> - open the data folders.
+>
+> Every app still opens in its own window. Stopping an app closes it the way its own ✕ does,
+> so MCS still runs its safe shutdown.
+>
+> **Install:** follow [hub/INSTALL.md](hub/INSTALL.md) (`cd hub && ./install.sh`); it ends
+> as an icon on your Desktop. Details and how to add a module: [hub/README.md](hub/README.md).
+
 ## Project at a glance
 
 A BlueRobotics BlueBoat USV with two Cerulean Omniscan 450 SS runs autonomous, heading-aware

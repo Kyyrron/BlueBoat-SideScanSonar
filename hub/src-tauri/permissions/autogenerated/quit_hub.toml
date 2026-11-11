@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-quit-hub"
+description = "Enables the quit_hub command without any pre-configured scope."
+commands.allow = ["quit_hub"]
+
+[[permission]]
+identifier = "deny-quit-hub"
+description = "Denies the quit_hub command without any pre-configured scope."
+commands.deny = ["quit_hub"]

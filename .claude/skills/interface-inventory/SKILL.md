@@ -65,13 +65,15 @@ unless stated. Sources: the 2026-10-20 inventory of every node (Control by AST v
 `path_request_timeout`, `thrust_limit`, `data_dir`), `robot_interface`, `param_set` (retry and
 sequence timeouts), `path_generation`, `bag_replay` (anchor, `model_name`, `world_name`,
 `pose_rate_hz`, `start_paused`, `waterline_z`), `underwater_gps_logger`, `pid_sim` and
-`blueboat_controller`; the complete set is the `entries` list of
+`blueboat_controller`; `time_source` (`wall` | `ros`, 2026-11-07) on `master_control` and
+`pid_sim` (every simulation launch passes `ros`); the complete set is the `entries` list of
 `BlueBoat-Control/.claude/tools/interface_baseline.json` (gate:
 `interface_inventory.py --check`, 163 entries, exit 0 on 2026-10-20). Simulator:
 `sss_sim_node` (`scene_dir`, `sonar_config`, `publish_ground_truth`, `seed`, `predict_pose`,
-`pose_topic`, `odom_topic`), `sea_state_node` (`current*`, `waves*`, `schedule_file`, `seed`,
+`pose_topic`, `odom_topic`, `renderer`, `raycast_backend`), `sea_state_node` (`current*`, `waves*`, `schedule_file`, `seed`,
 `rate_hz`, `world_name`, `world_dir`, `depth_m`, `ramp_s`, `enable_waves`, …), `mavros_shim`
-(above) and the launch arguments `sea_*`, `quiet`, `auto_ping`, `headless` — documented in
+(above) and the launch arguments `sea_*`, `quiet`, `auto_ping`, `headless`,
+`sonar_renderer`, `real_time_factor` (2026-11-07: the ray-cast slow-down) — documented in
 `BlueBoat-SSS-Sim/blueboat_sss_sim/docs/topics.md`. Perception (`perception` node,
 `ros/perception_node.py:128-140`): `mode`, `dataset_name`, `dataset_path`, `world_dir`,
 `data_dir`, `record_log`, `join_timeout_s`, `detector`, `preprocess`, `detector_input_mapping`,
@@ -79,6 +81,10 @@ sequence timeouts), `path_generation`, `bag_replay` (anchor, `model_name`, `worl
 `calibration`, `sigma_*`, `footprint_row_step` and six topic-name parameters
 (`docs/topics.md` §6). `sss_node` and `sss_processor_node` declare only the six acquisition
 parameters; the GCS reads `config/default.yaml`, MCS declares none. There is **no ROS action
-server and no `/diagnostics` topic** in any module. In dataset mode with a `world_dir`,
+server and no `/diagnostics` topic** in any module. Perception's launch declares `use_sim_time`
+(MCS passes `true` for world runs: label wait and ground-truth bag on `/clock`); the GCS's
+`SSS_processing_launch.py` sets `use_sim_time` itself when a `/clock` publisher exists.
+MCS and the GCS subscribe `/clock` (`rosgraph_msgs/Clock`, BEST_EFFORT) for their sim-paced
+clocks. In dataset mode with a `world_dir`,
 Perception's launch also starts a separate `ros2 bag record` process
 (`perception_ground_truth_recorder`) for the two ground-truth topics.
