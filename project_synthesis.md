@@ -19,12 +19,15 @@ context to work on any part of the project.*
 >    path and blocks nothing. The "trained on real beach imagery only" rule, the beach dataset
 >    deliverable and the "classical proposer + CNN on 512 × 512 patches" description are
 >    replaced; §5.2 now describes the detector input as the code implements it.
-> 4. **Module chain (§5.1).** sonar module → Perception → Belief → Replanner → Control. Belief,
->    Replanner and Evaluation are planned, not built; Perception and the link guardian are
->    existing modules; the Aug Studio is optional.
+> 4. **Module chain (§5.1).** sonar module → Perception → Belief → Replanner → Control. Belief
+>    is built (2026-11-04; run under ROS on 2026-11-12, never yet with a real detector); the
+>    Replanner is built (2026-11-04; dev loop on Belief's own core and a first run under ROS on
+>    an isolated graph on 2026-11-12; never yet with Control's node, in Gazebo or on the boat);
+>    Evaluation is planned, not built; Perception and the link guardian are existing modules;
+>    the Aug Studio is optional.
 > 5. **"MAVLink mission swap" (§5.1, §7.5, §9 D5, §10)** replaced by Control's live path update
 >    (`/blueboat/update_path` and the progress / event topics): built, tested in Gazebo only,
->    not on water, no client yet.
+>    not on water; its one client, the Replanner, has not yet run against Control's node.
 > 6. **Sonar range (§8.5):** 20 m per side for every survey condition; the 30 m / 15 m passes
 >    are gone.
 > 7. **Add-only rule (§0):** Control and the Mission Control Station change by additions only.
@@ -203,7 +206,7 @@ BOAT (BlueBoat) — hardware and its own firmware only
 
 OPERATOR LAPTOP (via the BlueBoat Base Station WiFi) — the module chain
  sonar module ─► Perception ─► Belief ─► Replanner ─► Control ─► boat
- (seabed images  (detector,     (planned)  (planned)   (live path
+ (seabed images  (detector,     (built)    (built)     (live path
   + metadata)     per-image                            update)
                   records)
 ```
@@ -213,17 +216,19 @@ OPERATOR LAPTOP (via the BlueBoat Base Station WiFi) — the module chain
 | Sonar module (`blueboat_sss`, `blueboat_gcs`) | existing | Acquisition, slant-range correction, bottom tracking, `.svlog`; the GCS turns the stream into **seabed images + metadata** |
 | BlueBoat-Perception | existing (dummy detector by default; YOLO adapter built, not yet trained) | Seabed images → detector input → detector → calibration → detections for the GCS + **one record per image** for Belief; also builds simulated training datasets (dataset mode) |
 | Ground Control Station | existing | Operator display. Shows **only Perception's detections**; runs no detector |
-| Belief | **planned, not built** | Reads **only** Perception's per-image records, plus the mission's survey area and anchor. Sends **only** to the Replanner |
-| Replanner | **planned, not built** | Reads **only** Belief. Acts on its own, in simulation and on the boat. Generates **every survey type** (including the two-pass baseline and the plain boustrophedon) and sends it through Control's live path update |
-| Control (`blueboat_control`) | existing | Follows the path; owns the **live path update** service (`/blueboat/update_path`) and its progress / event topics. Built and tested in Gazebo; **not tested on water; no client yet** |
+| Belief | **built** (`BlueBoat-Belief`), offline-gated and run under ROS on 2026-11-12 (isolated graph, live in Gazebo, one real recording); no run with a real detector | Reads the processed pings, Perception's detections, odometry and GPS, and a survey-area file carrying the anchor (owner, 2026-11-04: the Belief brief governs Belief's design), plus optionally Perception's per-image records (which pings the detector searched). Sends `BeliefGrid` to the Replanner, and displays and `/diagnostics` to the operator |
+| Replanner | **built** (`BlueBoat-Replanner`, in `~/ros2_ws/install` since 2026-11-13): offline-gated; dev loop on Belief's own core; run under ROS on 2026-11-12 only on an isolated graph with made-up inputs; never with Control's node, in Gazebo or on the boat | Reads **only** Belief for target evidence (plus Control's progress and events, odometry and its mission file, which carry none). Acts on its own, in simulation and on the boat. Generates **every survey type** (including the two-pass baseline and the plain boustrophedon) and sends it through Control's live path update |
+| Control (`blueboat_control`) | existing | Follows the path; owns the **live path update** service (`/blueboat/update_path`) and its progress / event topics. Built and tested in Gazebo; **not tested on water**; its one client (the Replanner) has not yet run against it |
 | Mission Control Station | existing | Operator station: launch, supervise, E-STOP. It does not use the path update yet; a survey-mission launch mode is planned |
 | Link guardian | existing (not yet tested on the boat) | ArduPilot Lua script + laptop companion that brings the boat home if the link drops |
 | Evaluation framework | **planned, not built** | Conditions, metrics, campaigns (§7.3, §8.4) |
 | SSS-Dataset-Aug-Studio | optional | Offline augmentation of YOLO datasets; nothing depends on it |
 
-⚠ The **belief layer is the only object the replanner reads.** Detector changes, sensor
-changes, and planner changes interact only through it. Preserve this boundary. Belief carries
-the mission's survey area and anchor with it, so the Replanner needs no other input.
+⚠ The **belief layer is the only source of target evidence the replanner reads.** Detector
+changes, sensor changes, and planner changes interact only through it. Preserve this boundary.
+Belief carries the mission's survey area and anchor with it, so the Replanner needs no other
+target evidence; its mission areas come from the mission file it shares with Belief, and its
+other inputs (Control's path progress and events, odometry) carry none.
 
 ### 5.2 Data structures
 
@@ -298,10 +303,13 @@ per image:
 ```
 ⚠ Confidence only becomes a probability once calibrated (§8.2). The record carries no survey
 area, no anchor and no latitude / longitude (local ENU metres only); Belief takes those from
-the mission.
+its survey-area file.
 
-**Belief grid — multi-channel, world frame.** *Planned, not built. Reads only Perception's
-image records plus the mission's survey area and anchor.*
+**Belief grid — multi-channel, world frame.** *Built (`BlueBoat-Belief`). The channels below are
+the original requirement; the implemented contract `belief_grid/0` is a superset
+(`BlueBoat-Belief/blueboat_belief/docs/topics.md` §3: `p_background`, `p_target`, `coverage`,
+`n_looks`, `n_pings`, per-sector `aspect_counts` and `aspect_log_miss`, contacts with existence,
+position and look history).*
 ```
 per cell:
   p_target         float   P(target | observations)
@@ -314,10 +322,15 @@ Visualise `p_target` as `nav_msgs/OccupancyGrid` for free RViz support. Negative
 observations (cell sonified, nothing detected) must also update the posterior — that is what
 `n_observations` and `aspect_coverage` are for.
 
-**Replanner inputs** *(planned)*. Only the belief layer:
-- Candidate list: cells with `p_target > τ_high`
-- Coverage deficit: cells with `n_observations < n_min` or narrow `aspect_coverage`
-- The mission's survey area and anchor, carried by Belief.
+**Replanner inputs.** For target evidence, only the belief layer (`BeliefGrid`, contract
+`belief_grid/0`; the module's own `docs/CONTRACT_CONSUMED.md` says how each field is read):
+- Candidate list: the contacts, with their scores, detected and missed sectors
+- Coverage deficit: the sectors searched in each cell (`aspect_log_miss`) and the residual
+  coverage
+- The survey area and its anchor, carried by Belief.
+
+Operational inputs that carry no target evidence: the mission file (one WGS-84 polygon, which
+must lie inside Belief's area), Control's path progress and events, and odometry.
 
 **Replanner output.** Timed path samples `[t, x, y, yaw]` sent to Control's live path update
 service `/blueboat/update_path` (first path, or a replacement from a `change_point` on). Control
@@ -326,15 +339,16 @@ the Replanner. Control checks the update (continuity at the change point, speed,
 coherence, sample count) and answers `ok` or a refusal code; a refusal changes nothing.
 Progress is on `/blueboat/path_progress`, every answer and activation on
 `/blueboat/path_update_event`. Built and tested in Gazebo for the PID, LoS and MPC controllers;
-not tested on water; no client exists yet. Simulations of built worlds cannot yet run
-replanner-owned runs (open item in Control's backlog).
+not tested on water; its client is the Replanner, not yet run against Control's node.
+Simulations of built worlds cannot yet run replanner-owned runs (open item in Control's
+backlog).
 
 ### 5.3 Output artifacts
 
 | Artifact | Purpose | Generation |
 |---|---|---|
 | Acoustic mosaic | Geocoded SSS imagery, no overlay | On demand / post-mission; the GCS also draws a live one as an operator display |
-| Belief grid | Machine-readable P(target) heatmap | Live *(planned)* |
+| Belief grid | Machine-readable P(target) heatmap | Live (`/belief_map/belief_grid`, 1 Hz, latched) |
 | Annotated mosaic | Mosaic + detection boxes | Post-mission, for figures |
 
 ⚠ The world-frame mosaic is an operator display and a figure source. It feeds no detector.
@@ -485,8 +499,8 @@ citable than a single "we win by X%" number.
 
 Purpose: produce E6. Full stack running at the beach: live detection, live belief update,
 live replanning, live path update (Control's `/blueboat/update_path`). Feasibility proof, not
-a statistical result. Prerequisites that do not exist yet: the Belief and Replanner modules, a
-client in the Mission Control Station (a survey-mission launch mode), and a first water test
+a statistical result. Prerequisites that do not exist yet: a Replanner run beside Control's
+node and in Gazebo, a client in the Mission Control Station (a survey-mission launch mode), and a first water test
 of the path update itself (Control's protocol `PATH_UPDATE_REAL_WATER_TEST.md`).
 
 ### 7.6 Simulator-to-real check *(optional, later)*
@@ -597,9 +611,9 @@ from which heading.
 | D1 | SSS data pipeline — slant-range correction, bottom tracking, geocoding, seabed images (the "waterfall buffer") | **Built**; verified live in simulation; field validation partial — no recording by the current stack exists (`.claude/CLAUDE.md` §6 D10) |
 | D2 | Simulated detector datasets — made by Perception's dataset mode from the simulator's ground truth | Dataset mode **built** (29 classes, write-once, labelled); tile-dataset tool with the split by world **built** (2026-10-23); no simulated worlds built for it, no training run yet |
 | D3 | Detection module — YOLO model in BlueBoat-Perception | Perception pipeline **built**; default detector is a **placeholder**; YOLO adapter over tiles, training and evaluation tools **built** (2026-10-23); no trained model, comparison not run; calibration is the identity |
-| D4 | Belief layer — multi-channel Bayesian grid | **Planned, not built** (input contract exists: Perception's image records) |
-| D5 | Mission interface — path following and live path update | **Built**: path following, and the live path update service with its progress and event topics (Gazebo-tested, not on water, no client yet) |
-| D6 | Adaptive replanner — generates every survey type through the path update | **Planned, not built** |
+| D4 | Belief layer — multi-channel Bayesian grid | **Built** (`BlueBoat-Belief`): offline-gated, run under ROS on an isolated graph, live in Gazebo with the dummy detector and on one real recording; never with a real detector; scores uncalibrated |
+| D5 | Mission interface — path following and live path update | **Built**: path following, and the live path update service with its progress and event topics (Gazebo-tested, not on water; its client, the Replanner, not yet run against it) |
+| D6 | Adaptive replanner — generates every survey type through the path update | **Built** (`BlueBoat-Replanner`): offline-gated, dev loop on Belief's own core (preliminary), run under ROS on an isolated graph with made-up inputs; never with Control's node, in Gazebo or on the boat |
 | D7 | Evaluation framework — conditions, metrics, campaigns | **Planned, not built** |
 | D8 | Thesis manuscript — submission early January 2027 | Ongoing |
 | S1 | `blueboat_sss_sim` simulator package | **Built**, calibration ongoing |
@@ -723,12 +737,13 @@ classes), §8.2 (calibration ⚠, on held-out simulated worlds), §8.4 (metrics)
 in BlueBoat-Perception, trained on simulated datasets from its dataset mode; real water is not
 on its critical path.
 
-**Working on the belief layer?** §5.1 (it reads only Perception's image records plus the survey
-area and anchor, and sends only to the Replanner), §5.2 (multi-channel grid), §8.1 (what the
+**Working on the belief layer?** §5.1 (it reads the processed pings, detections, odometry, GPS
+and a survey-area file, optionally the image records, and sends `BeliefGrid` to the Replanner;
+the module's own `CLAUDE.md` and `docs/` are authoritative), §5.2 (multi-channel grid), §8.1 (what the
 replanner needs), negative observations must update the posterior.
 
-**Working on the replanner?** §5.1–§5.2 (reads only Belief; output through the live path
-update), §8.1 (three required rules ⚠), §8.3 (aspect rule), §7.3 (baseline is two-pass
+**Working on the replanner?** §5.1–§5.2 (reads only Belief for target evidence; output
+through the live path update; the module's own `CLAUDE.md` and `docs/` are authoritative), §8.1 (three required rules ⚠), §8.3 (aspect rule), §7.3 (baseline is two-pass
 orthogonal ⚠), §8.5 (20 m for every condition).
 
 **Working on the simulator?** §6 (two tiers), §6.3 (validate aspect response — go/no-go ⚠),

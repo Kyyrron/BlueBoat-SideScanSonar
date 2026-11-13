@@ -1,6 +1,6 @@
 # CLAUDE.md — BlueBoat Aspect-Aware SSS Survey (superproject)
 
-Root guidance for the superproject carrying six git submodules: **how the modules relate** —
+Root guidance for the superproject carrying eight git submodules: **how the modules relate** —
 merged interface contract, cross-module rules, workspace and git architecture. Not a backlog:
 open work lives only in each submodule's own `TODO.md`, never restated here.
 
@@ -38,7 +38,8 @@ BOAT — hardware + its own firmware only    THIS COMPUTER (operator laptop, ~/r
 └─ Water Linked USBL (.94)                 ├─ BlueBoat GCS             (mosaic, overlays, recording)
         ▲                                  ├─ SSS-Dataset-Aug-Studio   (offline, no ROS)
         │                                  ├─ BlueBoat-Perception      (detector — dummy default; YOLO over tiles, untrained — + image records)
-        └── BlueBoat Base Station (WiFi) ──┤  [Belief · Replanner · Evaluation]  planned, not built
+        │                                  ├─ BlueBoat-Belief          (belief map: pings + detections → BeliefGrid; built, no run with a real detector yet)
+        └── BlueBoat Base Station (WiFi) ──┤  [Replanner: built; not yet with Control's node, Gazebo or the boat · Evaluation: planned, not built]
             192.168.2.0/24                 └─ SIMULATION: blueboat_sss_sim serves the identical sonar
                                               interface, Gazebo owns hull dynamics
 ```
@@ -50,13 +51,32 @@ sonar module (seabed images + metadata) → Perception → Belief → Replanner 
 ```
 
 - The GCS shows **only Perception's detections** (`/sss_ai/detections`); it runs no detector.
-- **Belief** reads **only** Perception's per-image records (`/sss_ai/image_records`) plus the
-  mission's survey area and anchor, and sends **only** to the Replanner.
-- The **Replanner** reads **only** Belief, acts on its own (simulation and boat alike) and
-  generates **every survey type** through Control's live path update (`/blueboat/update_path`,
-  §4.1).
-- **Belief, Replanner and Evaluation are planned, not built.** No package, node or topic of
-  theirs exists. Perception and the link guardian exist; the Aug Studio is optional.
+- **Belief** reads the processed pings (`/sss_processor/processed`), Perception's detections
+  (`/sss_ai/detections`), odometry and GPS, plus a survey-area file with its anchor (owner,
+  2026-11-04: the Belief brief governs Belief's design). Since 2026-11-12 it also reads
+  Perception's per-image records (`/sss_ai/image_records`) when they are published, for one
+  purpose: which pings the detector really searched. It sends `BeliefGrid` to the Replanner, and
+  display grids, markers and `/diagnostics` to the operator; nothing else.
+- The **Replanner** reads Belief as its **only target evidence** (besides Control's path
+  progress and events, odometry and its mission file, which carry none), acts on its own
+  (simulation and boat alike) and generates **every survey type** through Control's live path
+  update (`/blueboat/update_path`, §4.1).
+- **Belief is built** (`BlueBoat-Belief`, packages `blueboat_belief_interfaces` and
+  `blueboat_belief`, both in `~/ros2_ws/install`): gated offline, and on 2026-11-12 run under
+  ROS on an isolated graph, live in Gazebo beside the sonar processor, the GCS and Perception,
+  and on one real recording. Never yet with a real detector (none is trained), so with the
+  dummy detector it reports zero coverage. What ran:
+  `BlueBoat-Belief/blueboat_belief/docs/VALIDATION_REPORT.md`.
+- **The Replanner is built** (`BlueBoat-Replanner`, package `blueboat_replanner`, in
+  `~/ros2_ws/install` since 2026-11-13): offline gate 278/0/0; its development loop runs on
+  BlueBoat-Belief's own core, its missions executed by the node's own executor (690 missions
+  + 150, preliminary, never E4); on 2026-11-12 its node ran under ROS on an isolated graph
+  beside Belief's node with made-up sonar, navigation and Control (not re-run on the
+  2026-11-13 code). Never yet with Control's real node, in Gazebo or on the boat. Its rows in
+  this file are written by its own sessions (owner, 2026-11-13). What ran and its weight:
+  `BlueBoat-Replanner/docs/REPORT.md`.
+  **Evaluation is planned, not built.** Perception and the link guardian exist; the Aug Studio
+  is optional.
 - The Mission Control Station does not use the path update yet; a survey-mission launch mode
   is the planned way (Control `docs/REQUESTS.md` R-1). A built-world simulation cannot yet run
   a replanner-owned run (R-3).
@@ -106,7 +126,9 @@ setup and test ladder: `link_guardian/README.md`.
 | **BlueBoat-SSS-Sim** | GPS-anchored Gazebo worlds (World Builder GUI over MCS anchored paths) + a drop-in replacement for the real sonar interface (two renderers: the calibrated geometric default and a GPU ray-cast run in a slowed simulation, §4.3) + the **sea state** (current/waves into Gazebo, `sea_state_node`) |
 | **SSS-Dataset-Aug-Studio** — *optional* | Physics-informed augmentation of YOLO datasets (offline, file-level only); nothing in the chain depends on it |
 | **Link guardian** (`link_guardian/`, not a submodule) | Connection-loss guardian: ArduPilot Lua script + laptop companion `guardian.py` (§1.1). Not yet tested on the boat |
-| **Belief · Replanner · Evaluation** | **Planned, not built** — the chain above; open requirements `project_synthesis.md` §5.2, §8.1, §8.4 |
+| **BlueBoat-Belief** — `blueboat_belief` + `blueboat_belief_interfaces` | The belief map (thesis deliverable D4, not discrepancy D4 of §6), built 2026-11-04; on 2026-11-12 built into `~/ros2_ws/install` and **run under ROS (isolated graph, live in Gazebo, one real recording), never yet with a real detector**. Reads `/sss_processor/processed`, `/sss_ai/detections`, `/blueboat/odom`, `/mavros/global_position/global`, optionally `/sss_ai/image_records` (which pings the detector searched), and a survey-area file (a world `metadata.yaml` or `blueboat_survey_area/1`). Publishes `/belief_map/belief_grid` (`BeliefGrid`, contract `belief_grid/0`, RELIABLE + TRANSIENT_LOCAL, 1 Hz), `/belief_map/query_belief`, display grids, contact markers and `/diagnostics`. Snapshots under `<root>/data/Belief_data/`. ROS-free deterministic core; offline replay of recorded inputs. Scores are uncalibrated: `p_exists` is not a probability until Perception calibrates; modelled coverage is a planning aid, not a metric for comparing survey policies |
+| **BlueBoat-Replanner** — `blueboat_replanner` | The aspect-aware replanner (thesis deliverable D6). Reads `BeliefGrid` as its only target evidence, plus `/blueboat/path_progress`, `/blueboat/path_update_event`, `/blueboat/odom` and a mission file (one WGS-84 polygon inside Belief's area). Generates every survey condition through one coverage generator (C1 single pass, C2 two-pass orthogonal = the baseline, C3 append-on-completion, C4 informative and its ablations) and changes the followed path only through `/blueboat/update_path`. Publishes `/replanner/plan`, `/replanner/decision`, `/replanner/status`; serves `/replanner/start`, `/replanner/stop`; run records under `<root>/data/Replanner_data/`. ROS-free deterministic core; gate 278/0/0. Dev loop on BlueBoat-Belief's own core, run by the node's executor (C2 frozen; 690 + 150 missions; preliminary): at the full budget no adaptive condition is distinguishable from C2, mid-mission and under a budget cut they are ahead, the aspect model shows no effect. Ran under ROS only on an isolated graph with made-up inputs; **never with Control's node, in Gazebo or on the boat**; built into `~/ros2_ws/install` (2026-11-13) |
+| **Evaluation** | **Planned, not built**. Open requirements `project_synthesis.md` §5.2, §8.4 |
 | **BlueBoat-Perception** — `blueboat_perception` | **The station's one detection source** (since 2026-10-16): the GCS's seabed images → detector input (`fixed_gray`, a fixed mapping of the raw dB) → detector (the station's former dummy, still the default; or since 2026-10-23 a YOLO model — Ultralytics YOLO11s / YOLO26s, imported lazily — run on 256 × 256 across-track tiles at native resolution and merged across tiles, `nms` / `greedy_nmm`; no trained weights yet) → calibration (identity) → `/sss_ai/detections` for the GCS map + one record per image (`/sss_ai/image_records`) for the future belief layer. ROS-free deterministic core, thin node, offline CLI (offline = live, byte-equal records); dataset mode: a YOLO dataset per world run, labelled from the simulator's ground truth (highlight + shadow boxes, the 29 World Builder classes), plus the archival ground-truth bag; offline tools (not installed): tile datasets split by world, YOLO training, evaluation on held-out worlds |
 
 ---
@@ -126,7 +148,12 @@ there (`OmniscanProfile`, `ProcessedSSSPing`, `RequestPath.srv`, `UpdatePath.srv
 no other package (`simCLAUDE.md` NC #8). `blueboat_perception` (`ament_python`) uses standard
 types only (`std_msgs`, `sensor_msgs`, `vision_msgs`), so it has no build-order constraint;
 the GCS imports its ROS-free core lazily for the replay window's Run AI (installed package,
-else the superproject checkout), and Perception imports nothing from the GCS. Two submodules are not colcon packages:
+else the superproject checkout), and Perception imports nothing from the GCS.
+`blueboat_belief_interfaces` (ament_cmake; `BeliefGrid`, `BeliefContact`, `QueryBelief`) is built
+before `blueboat_belief` (ament_python), which also needs `blueboat_interfaces` and `vision_msgs`:
+`colcon build --packages-select blueboat_belief_interfaces blueboat_belief`, from a shell that has
+not sourced the venv. `blueboat_replanner` (ament_python) needs `blueboat_interfaces` and
+`blueboat_belief_interfaces`: `colcon build --packages-select blueboat_replanner`. Two submodules are not colcon packages:
 `blueboat_gcs` and `BlueBoat-MCS` import `rclpy` from a sourced workspace at runtime and
 degrade to GUI-only without it; `SSS-Dataset-Aug-Studio` has no ROS dependency in any mode
 (its dev-only `tools/make_demo_dataset.py` puts `../BlueBoat-SSS-Sim/blueboat_sss_sim` on
@@ -146,7 +173,7 @@ pushing themselves, everywhere in this tree.
 
 ## 3. Git architecture
 
-The six module directories are git **submodules**, each an independent repository; root
+The eight module directories are git **submodules**, each an independent repository; root
 `git status` shows a submodule as modified without naming files — inspect inside it.
 `.gitmodules` paths are authoritative for the layout.
 
@@ -243,11 +270,19 @@ Studio never modifies an input dataset (`sssCLAUDE.md` NC #6, `ctrlCLAUDE.md` §
 re-applies a frame correction.** The conversion belongs at the source (`ctrlCLAUDE.md` N9,
 `mcsCLAUDE.md` N3 — two halves of one rule).
 
-**CM-9 — The belief layer is the only object the replanner reads.** Detector, sensor and
-planner changes interact only through it (`project_synthesis.md` §5.1 ⚠, `sssCLAUDE.md` #15).
-Belief reads only Perception's per-image records plus the mission's survey area and anchor,
-and sends only to the Replanner; the Replanner reads only Belief. Nothing in the current tree
-implements either — §6 D7.
+**CM-9 — The belief layer is the only source of target evidence the replanner reads.**
+Detector, sensor and planner changes interact only through it (`project_synthesis.md` §5.1 ⚠,
+`sssCLAUDE.md` #15). The Replanner reads only Belief (`BeliefGrid`) for target evidence; it also
+reads operational inputs that carry none: Control's path progress, events and answers,
+`/blueboat/odom`, its mission file and its configuration. It never reads detections, sonar data,
+simulation ground truth or `/sim/*` online.
+Belief's own inputs are the processed pings, Perception's detections, odometry and GPS, plus a
+survey-area file with its anchor (owner, 2026-11-04: the Belief brief governs Belief's design),
+and since 2026-11-12 Perception's per-image records as an optional companion, used only to know
+which pings the detector searched. Belief sends `BeliefGrid` to the Replanner, and displays and
+`/diagnostics` to the operator. Belief is built (`BlueBoat-Belief`); the Replanner's node has
+run under ROS only on an isolated graph beside Belief's node with made-up Control and sonar,
+never beside Control's node, in Gazebo or on the boat — §6 D7.
 
 **CM-10 — AI inputs are waterfall-domain and boat-relative, never world-frame mosaic crops:**
 world-frame patches distort near turns and make intensity aggregation ambiguous where cells
@@ -335,7 +370,7 @@ channels and feeding the watchdog.
 
 ## 6. Discrepancies against `project_synthesis.md`
 
-**Moved to `.claude/synthesis-discrepancies.md`** (D1–D10: where the modules and
+**Moved to `.claude/synthesis-discrepancies.md`** (D1–D11: where the modules and
 `project_synthesis.md` disagree, and which source to trust). Read it before relying on a
 `project_synthesis.md` §5 statement about what is built.
 
@@ -357,9 +392,11 @@ backlog — do not duplicate either here.
 | Augmentation families, intensity-domain policy, reproducibility contract, extension contract, release gates (the module is **optional**) | `SSS-Dataset-Aug-Studio/.claude/CLAUDE.md` · open items `SSS-Dataset-Aug-Studio/.claude/TODO.md` |
 | Live path update (the Replanner's entry point): contract, refusal codes, tests, first water test | `BlueBoat-Control/docs/PATH_UPDATE_INTERFACE.md`, `PATH_UPDATE_DESIGN.md`, `PATH_UPDATE_REPORT.md`, `PATH_UPDATE_REAL_WATER_TEST.md`; requests `docs/REQUESTS.md` |
 | Connection-loss guardian: design, setup, test ladder | `link_guardian/README.md` (superproject) |
-| Planned chain (Belief, Replanner, Evaluation) | `project_synthesis.md` §5.1–§5.2, §7.3, §8.1–§8.4 — no module exists |
+| Belief map: model specification, interface contract (`belief_grid/0`), what a consumer may rely on, driving the core offline, what was validated and how | `BlueBoat-Belief/.claude/CLAUDE.md` · open items `BlueBoat-Belief/.claude/TODO.md`; `BlueBoat-Belief/blueboat_belief/docs/MATH.md`, `topics.md`, `OFFLINE_CORE_API.md`, `VALIDATION_REPORT.md` |
+| Rest of the chain (Replanner, Evaluation) | `project_synthesis.md` §5.1–§5.2, §7.3, §8.1–§8.4; the Replanner's own repository `BlueBoat-Replanner/` (its `.claude/CLAUDE.md`). No Evaluation module exists |
 | Detector pipeline, detector input (fixed mapping, near-range mask, turn flags), YOLO over tiles, tile datasets / training / evaluation tools, image records, dataset mode, offline = live | `BlueBoat-Perception/.claude/CLAUDE.md` · open items `BlueBoat-Perception/.claude/TODO.md`; evidence `docs/PREPROCESSING_STUDY.md`, `docs/LIVE_CHECKS.md` |
 | Per-module test / lint / smoke gates, exact commands, what survives a fresh clone | skill `module-gates` (`.claude/skills/module-gates/SKILL.md`) |
+| Running and recording a simulated survey from the command line (the MCS launcher and the GCS driven offscreen; superproject tool, no package modified) | `tools/sim_record/README.md`, skill `sim-run-recording` |
 | Dated owner orders that opened the frozen Control / MCS (2026-09-28 to 2026-10-16) | skill `git-history` |
 | MAVROS boundary table, FCU endpoint, other served interfaces (§4.4, §4.7 detail) | skill `interface-inventory` |
 
@@ -367,7 +404,7 @@ backlog — do not duplicate either here.
 loads by itself only when the Read tool opens a file in its directory; Bash, Grep and Glob
 access never trigger it. So before changing anything under one of these paths (or scripting a
 change there), Read its `CLAUDE.md` first:
-- module roots: `<module>/.claude/CLAUDE.md`, all six submodules;
+- module roots: `<module>/.claude/CLAUDE.md`, all eight submodules;
 - `BlueBoat-Control/`: `blueboat_control/src/` (controller and thrust-path evidence),
   `blueboat_description/`, `log_reviewer/`;
 - `BlueBoat-SSS/`: `blueboat_sss/blueboat_gcs/` (GCS);

@@ -39,7 +39,9 @@ sonar module (seabed images + metadata) → Perception → Belief → Replanner 
 | `BlueBoat-SSS-Sim` — Gazebo worlds, sonar and sea-state simulation | existing |
 | `BlueBoat-Perception` — detector (dummy by default; YOLO over tiles, not yet trained), per-image records, simulated dataset mode, tile-dataset / training / evaluation tools | existing |
 | `SSS-Dataset-Aug-Studio` — dataset augmentation | optional |
-| Belief · Replanner · Evaluation | **planned, not built** |
+| `BlueBoat-Belief` — belief map: processed pings + detections → `BeliefGrid` (coverage, aspect history, contacts), the Replanner's only target evidence | built; run under ROS and live in Gazebo, never yet with a real detector |
+| `BlueBoat-Replanner` — aspect-aware replanner: generates every survey condition (single pass, two-pass orthogonal baseline, append-on-completion, informative) and changes the path mid-run through Control's live path update | built, in `~/ros2_ws/install`; dev loop on Belief's own core; run under ROS only on an isolated graph, never with Control's node, in Gazebo or on the boat |
+| Evaluation | **planned, not built** |
 
 Read first: `project_synthesis.md` (scope, evidence, architecture, rules) and
 `.claude/CLAUDE.md` (how the modules relate: interfaces, cross-module rules). Each submodule

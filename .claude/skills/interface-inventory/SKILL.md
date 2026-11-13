@@ -15,7 +15,7 @@ CM-1 (no renaming or retyping of an existing name) applies to every row here.
 | `/mavros/state` | `mavros_msgs/State` | in | `robot_interface`; MCS (only when `mavros_msgs` imports — absent in simulation); `sss_processor_node` (BEST_EFFORT 10, → `.svlog` HEARTBEAT, since 2026-10-27) |
 | `/mavros/imu/data` | `sensor_msgs/Imu` | in | `robot_interface`; `sss_processor_node` (→ `.svlog` ATTITUDE); GCS (BEST_EFFORT 10, seabed-image metadata only, never geometry; since 2026-10-16) |
 | `/mavros/local_position/odom` | `nav_msgs/Odometry` | in | `robot_interface` |
-| `/mavros/global_position/global` | `sensor_msgs/NavSatFix` | in | `robot_interface`, GCS, MCS — **BEST_EFFORT**; `lat==0 and lon==0` = no fix, discarded. In a Gazebo run of a GPS-anchored mission on a **stock world** (`Sim_launch`) **MCS is the only publisher** (fixes synthesised from sim odom, ~5 Hz, `status` left at **-2 / STATUS_UNKNOWN**), so only `-1` (STATUS_NO_FIX) means no fix — never gate on `status < 0`. In a **built-world** run (`full_mission_launch`, `with_mavros_shim` default on) the simulator's `mavros_shim` publishes it (~5 Hz, `STATUS_FIX`) and MCS disarms its own SimGps whenever `world_dir` is set (`mcs/gui/main_window.py:346-366`). In a **bag replay** `bag_replay` is the only publisher: the recorded fixes, unchanged but for the stamp (MCS's SimGps stays disarmed). |
+| `/mavros/global_position/global` | `sensor_msgs/NavSatFix` | in | `robot_interface`, GCS, MCS, Belief (`belief_map`, for its odom → map fit) — **BEST_EFFORT**; `lat==0 and lon==0` = no fix, discarded. In a Gazebo run of a GPS-anchored mission on a **stock world** (`Sim_launch`) **MCS is the only publisher** (fixes synthesised from sim odom, ~5 Hz, `status` left at **-2 / STATUS_UNKNOWN**), so only `-1` (STATUS_NO_FIX) means no fix — never gate on `status < 0`. In a **built-world** run (`full_mission_launch`, `with_mavros_shim` default on) the simulator's `mavros_shim` publishes it (~5 Hz, `STATUS_FIX`) and MCS disarms its own SimGps whenever `world_dir` is set (`mcs/gui/main_window.py:346-366`). In a **bag replay** `bag_replay` is the only publisher: the recorded fixes, unchanged but for the stamp (MCS's SimGps stays disarmed). |
 | `/mavros/global_position/compass_hdg` | `std_msgs/Float64` | in | MCS, GCS. Degrees **clockwise from north**; MCS converts `radians(90 - hdg)`. Preferred heading source; odom yaw the fallback |
 | `/mavros/rc/override` | `mavros_msgs/OverrideRCIn` | out | `robot_interface` at ~20 Hz, latest-wins |
 | `/mavros/local_position/pose` (`PoseStamped`), `/mavros/local_position/velocity_local` (`TwistStamped`), `/mavros/vfr_hud` (`VfrHud`) | as listed | in | `sss_processor_node` (BEST_EFFORT 10; the `.svlog` MAVLink envelopes — the subscription block of `SSSProcessorNode.__init__`); the GCS also takes `vfr_hud` |
@@ -80,8 +80,18 @@ sequence timeouts), `path_generation`, `bag_replay` (anchor, `model_name`, `worl
 `near_range_mask_m`, `turn_window_s`, `label_source`, `label_min_rows`, `label_wait_s`,
 `calibration`, `sigma_*`, `footprint_row_step` and six topic-name parameters
 (`docs/topics.md` §6). `sss_node` and `sss_processor_node` declare only the six acquisition
-parameters; the GCS reads `config/default.yaml`, MCS declares none. There is **no ROS action
-server and no `/diagnostics` topic** in any module. Perception's launch declares `use_sim_time`
+parameters; the GCS reads `config/default.yaml`, MCS declares none. Belief's `belief_map`
+declares every key of its `config/belief.yaml` as a flat `section.key` parameter; an unknown
+name or a wrong type stops it (exit 2). BlueBoat-Replanner's `replanner` node declares
+`mission_file`, `config_file`, `data_dir`, `belief_topic` (default `/belief_map/belief_grid`)
+and `tick_hz` (5.0); every planner setting lives in its `config/replanner.yaml` (strict: an
+unknown key raises). Its dev/simulation-only `replanner_emulator` node (`emulator_launch.py`,
+run instead of Perception) declares `world_dir`, `seed`, `class_info` (`none` | `true`),
+`calib_a`, `calib_b`, `range_m`, `resolution_m`, `sector_count`, `sector_origin_deg` and
+`look_timeout_s`. Neither launch file declares `use_sim_time` (both nodes use the wall clock;
+`BlueBoat-Replanner/docs/topics.md`). There is **no ROS action server** in any module, and
+**the only `/diagnostics` publisher is Belief's `belief_map`** (1 Hz: rejection counters, stats,
+alignment, latency; `BlueBoat-Belief/blueboat_belief/docs/topics.md` §9). Perception's launch declares `use_sim_time`
 (MCS passes `true` for world runs: label wait and ground-truth bag on `/clock`); the GCS's
 `SSS_processing_launch.py` sets `use_sim_time` itself when a `/clock` publisher exists.
 MCS and the GCS subscribe `/clock` (`rosgraph_msgs/Clock`, BEST_EFFORT) for their sim-paced

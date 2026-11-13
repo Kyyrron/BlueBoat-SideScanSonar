@@ -852,10 +852,14 @@ mod tests {
         let errs = validate(&cfg);
         assert!(errs.is_empty(), "{errs:#?}");
         let ids: Vec<&str> = cfg.apps.iter().map(|a| a.id.as_str()).collect();
-        for want in ["mcs", "gcs", "qgc", "world_builder", "gazebo_world", "sonar_simple", "log_reviewer", "aug_studio"] {
+        for want in ["mcs", "gcs", "qgc", "world_builder", "gazebo_world", "sonar_simple", "log_reviewer", "aug_studio", "belief", "replanner"] {
             assert!(ids.contains(&want), "missing {want}");
         }
-        assert!(cfg.apps.iter().filter(|a| a.planned).count() >= 2);
+        // Belief and the Replanner were ghosts until their packages were built; now real tiles
+        for id in ["belief", "replanner"] {
+            let a = cfg.apps.iter().find(|a| a.id == id).unwrap();
+            assert!(!a.planned && !a.command.is_empty(), "{id}");
+        }
         // the two launches the hub must never start itself
         for a in &cfg.apps {
             assert!(!a.command.contains("BlueBoat_launch.py"), "{}", a.id);

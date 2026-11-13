@@ -87,7 +87,8 @@ PID scenarios differ (LoS, MPC and the real-parameter row are identical) because
 tree changed the simulation branch's default PID gains (`outer_gains_x` 6.0 → 8.0,
 `inner_gains_u` 2.0 → 2.5 in `master_control.py`), a behaviour change that the add-only rule
 (above) does not allow without the harness showing identity. The path update itself has been
-demonstrated in Gazebo only, not on water, and has no client. MCS was not edited, so its
+demonstrated in Gazebo only, not on water, and has no client (2026-11-13: BlueBoat-Replanner is
+its client, not yet run against `master_control`). MCS was not edited, so its
 "Replanner mode" row is still a request (Control `docs/REQUESTS.md` R-1).
 **On 2026-10-16 the user ordered the BlueBoat-Perception companion in MCS** (additions only,
 compatible with Control's requested "Replanner mode" row): `PerceptionConfig`

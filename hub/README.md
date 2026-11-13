@@ -153,22 +153,25 @@ over the process tree below the tmux pane.
 ## Adding an app
 
 Edit `apps.toml`; the hub reloads it on save. A broken edit keeps the last good registry
-and shows the error at the top of the Apps view. Example: when Belief is built, replace
-its `planned = true` ghost with:
+and shows the error at the top of the Apps view. Example: the Belief tile, which replaced its
+`planned = true` ghost once the package was built (the Replanner's ghost was replaced the same
+way on 2026-11-13; a group with no tile left is hidden):
 
 ```toml
 [[apps]]
 id = "belief"                      # lowercase, digits, _
 name = "Belief"
-group = "planned"                  # or a new [[groups]] entry
-description = "Belief layer over Perception's image records."
+group = "operate"                  # or a new [[groups]] entry
+description = "The belief map: pings + detections -> BeliefGrid, the Replanner's only input."
 icon = "brain"                     # names in src/lib/icons.ts
 cwd = "."                          # from the workspace
-command = "ros2 launch blueboat_belief belief_launch.py {world?}"
+command = "ros2 launch blueboat_belief belief_launch.py area_file:={world}"
 requires = [{ launch = "blueboat_belief/belief_launch.py" }]   # greys the tile until built
-params = [{ name = "world", kind = "path", root = "~/worlds", depth = 2, marker = "world.sdf", optional = true, format = "world_dir:={}" }]
-packages = ["blueboat_belief"]     # drives "restart to use new build"
+params = [{ name = "world", label = "World (survey area)", kind = "path", root = "~/worlds", depth = 2, marker = "metadata.yaml" }]
+variants = [{ id = "sim", name = "Gazebo (sim time)", args = "use_sim_time:=true" }]
+packages = ["blueboat_belief", "blueboat_belief_interfaces"]   # drives "restart to use new build"
 window = false                     # no window: Stop sends Ctrl-C
+stop = "ctrl-c"
 ```
 
 Fields:

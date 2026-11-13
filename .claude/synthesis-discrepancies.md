@@ -47,14 +47,20 @@ Since 2026-10-20 the plan is the chain of §1: sonar module → Perception → B
 Control, and the §5.1 "initial CPP" and "mission manager" boxes are **folded into the
 Replanner**, which generates every survey type through Control's live path update.
 **BlueBoat-Perception owns the detector boundary:** `/sss_ai/detections` (the GCS map) and
-`/sss_ai/image_records` (one record per image, Belief's input contract,
-`BlueBoat-Perception/docs/topics.md` §4). Its default detector is still the dummy; the YOLO
+`/sss_ai/image_records` (one record per image, `BlueBoat-Perception/docs/topics.md` §4). Its default detector is still the dummy; the YOLO
 adapter over tiles is built (2026-10-23) but has no trained weights; calibration is identity (`calibrated: false`, so `confidence` is no
-probability — §8.2 ⚠). **Belief, Replanner and Evaluation are planned, not built, and
-unowned**; belief-grid channels, the three replanner rules (resolution, budget, abandonment)
-and the confidence-calibration requirement are governed by `project_synthesis.md` §5.2, §8.1,
-§8.2 until a module claims them. One fact to carry: the image records hold no survey area, no
-anchor and no latitude / longitude, so Belief takes those from the mission, as the chain says.
+probability — §8.2 ⚠). **Belief is built** (`BlueBoat-Belief`, 2026-11-04; run under ROS on 2026-11-12, never yet
+with a real detector). By owner decision (2026-11-04: the Belief brief governs Belief's design)
+it reads the processed pings, Perception's detections, odometry and GPS, plus a survey-area file
+that carries the anchor (the image records hold no area, anchor or latitude / longitude), and,
+since 2026-11-12, the image records as an optional companion for which pings the detector
+searched. Its belief-grid channels are `BlueBoat-Belief/blueboat_belief/docs/topics.md` §3
+(contract `belief_grid/0`), a superset of §5.2's list; `project_synthesis.md` §5 now states
+this. **The Replanner** (`BlueBoat-Replanner`) has claimed the three §8.1 rules (resolution,
+budget, abandonment; its `docs/MATH.md` §12, `core/policy/informative.py`). It reads `BeliefGrid`
+as its only target evidence, plus Control's progress and events, odometry and a mission file;
+its state is root §1. **Evaluation** is unclaimed; the §8.2 confidence-calibration requirement
+stays Perception's.
 
 **D8 — Mission swap: resolved 2026-10-20 (recorded 2026-10-19, Control `docs/REQUESTS.md`
 R-4).** The old §5.1 had the mission manager perform a "MAVLink mission swap" to ArduPilot. In
@@ -62,9 +68,10 @@ the implementation nothing goes to ArduPilot: `master_control` follows the path 
 and streams RC override (Control N6). `project_synthesis.md` §5.1, §5.2, §7.5, §9 D5 now name
 Control's live path update (`/blueboat/update_path`, `/blueboat/path_progress`,
 `/blueboat/path_update_event`; §4.1) as the mechanism. It is built and tested in Gazebo, **not
-on water, and has no client**; MCS does not use it yet (a survey-mission launch mode is the
-planned way); built-world simulations cannot yet run replanner-owned runs (Control R-3). The
-caller is the Replanner (D7), unbuilt.
+on water**; its one client, BlueBoat-Replanner (D7), has run only against a made-up server of
+the real service type on an isolated ROS graph, never against `master_control`. MCS does not
+use it yet (a survey-mission launch mode is the planned way); built-world simulations cannot yet
+run replanner-owned runs (Control R-3).
 
 **D9 — Detector family and input geometry: resolved 2026-10-20 (recorded 2026-10-19).** The
 old §5.1–§5.2 specified a "classical proposer + CNN classifier" on 512 × 512 patches every N
@@ -98,3 +105,11 @@ it:
 *More reliable:* the module TODOs. "Field-validated" applies to the July processor and to
 offline replays of SonarLink logs, not to the stack as it stands. The "waterfall buffer" of
 D1 exists as the GCS's seabed images.
+
+**D11 — Survey speed (recorded 2026-11-13; open).** `project_synthesis.md` §8.5 sets the boat
+speed at **1.0 m/s nominal**. The owner decided **0.5 m/s** for every Replanner condition on
+2026-11-04, and every Replanner number (the C2 budget B = 2111 s, the decision lead, the grid's
+lag) is at 0.5 m/s. Control advises ≤ 0.45 m/s in simulation and the simulated boat tops out
+near 0.78 m/s, so 1.0 m/s has never been flown. *More reliable:* 0.5 m/s, until the owner
+settles it (Replanner `docs/HANDOVER.md` §4, decision 4) and 0.5 m/s is shown to be achieved in
+Gazebo (Replanner `docs/LOCAL_CHECKLIST.md` L-K3).

@@ -1,8 +1,8 @@
 # BlueBoat Hub — app registry.
 #
 # Read at start and hot-reloaded on save; a broken edit keeps the last good
-# registry and shows the error in the hub. Adding an app (Belief, Replanner,
-# …) is an edit here, not code — see README.md "Adding an app".
+# registry and shows the error in the hub. Adding an app is an edit here,
+# not code — see README.md "Adding an app".
 #
 # The command lines are the owner's own launch lines from terminals.txt.
 # Every app runs as
@@ -55,6 +55,8 @@ id = "tools"
 name = "Tools"
 accent = "slate"
 
+# Holds `planned = true` ghost tiles; hidden while it has none (Evaluation
+# would go here before it is built).
 [[groups]]
 id = "planned"
 name = "Planned"
@@ -197,18 +199,50 @@ optional = true
 [[apps]]
 id = "belief"
 name = "Belief"
-group = "planned"
-description = "Reads Perception's image records; the only input of the Replanner."
+group = "operate"
+description = "The belief map: pings + detections -> BeliefGrid, the Replanner's only input."
+help = """Starts the belief_map node (package blueboat_belief) through ros2 launch blueboat_belief belief_launch.py, on the survey area of one built world (its metadata.yaml: anchor and limits).
+
+It reads /sss_processor/processed, /sss_ai/detections, /blueboat/odom, /mavros/global_position/global and, when Perception publishes them, /sss_ai/image_records. It publishes /belief_map/belief_grid (latched, 1 Hz), /belief_map/p_target and /belief_map/coverage (RViz), /belief_map/contacts and /diagnostics, and writes snapshots under <data root>/Belief_data/.
+
+Start it beside a running simulation ("Gazebo (sim time)") or a real run. With Perception's dummy detector the coverage stays zero: the dummy searches nothing. Scores are uncalibrated, so p_exists is not a probability.
+
+For the real boat with a survey-area file, launch it from a terminal: ros2 launch blueboat_belief belief_launch.py area_file:=<area.yaml> record_inputs:=true. Stop sends Ctrl-C; the node writes its final snapshot."""
 icon = "brain"
-planned = true
+cwd = "."
+command = "ros2 launch blueboat_belief belief_launch.py area_file:={world}"
+requires = [{ launch = "blueboat_belief/belief_launch.py" }]
+params = [{ name = "world", label = "World (survey area)", kind = "path", root = "~/worlds", depth = 2, marker = "metadata.yaml" }]
+variants = [{ id = "sim", name = "Gazebo (sim time)", args = "use_sim_time:=true" }]
+packages = ["blueboat_belief", "blueboat_belief_interfaces"]
+window = false
+stop = "ctrl-c"
 
 [[apps]]
 id = "replanner"
 name = "Replanner"
-group = "planned"
-description = "Reads Belief; generates every survey through Control's path update."
+group = "operate"
+description = "Reads Belief; changes the survey path through Control's path update."
+help = """Starts the replanner node (package blueboat_replanner) through ros2 launch blueboat_replanner replanner_launch.py, with one mission file: name, condition (C1, C2, C3, C4, C4_iso, C4_rand, C4_depth1), one WGS-84 polygon inside Belief's survey area, and the planning depth. The C2 freeze (config/c2_tuned.yaml) is applied to every mission.
+
+The node starts IDLE: it moves nothing until it is armed with
+    ros2 service call /replanner/start std_srvs/srv/Trigger {}
+from a terminal. The hub never sends that call. It then needs three things, or it fails after 60 s naming what is missing: a run in which Control holds and awaits a path (path_source:=replanner), a valid Belief grid (start the Belief tile first), and the /blueboat/update_path service.
+
+There is no launcher for such a run yet: MCS has no survey-mission mode (Control R-1), and a built-world simulation cannot run a replanner-owned run (R-3). Until then the run is composed by hand (BlueBoat-Replanner/docs/LOCAL_CHECKLIST.md, L-C and L-G).
+
+Mission files are looked up as ~/worlds/<project>/<world>/*mission*.yaml; for one elsewhere, launch from a terminal. The node uses the wall clock (no use_sim_time yet).
+
+Stopping this tile does NOT stop the boat: Control keeps following the last accepted path. To stop the survey first, call /replanner/stop (it truncates the path to a hold), or use MCS's E-STOP. Stop sends Ctrl-C; the node writes its end.json."""
 icon = "route"
-planned = true
+cwd = "."
+command = "ros2 launch blueboat_replanner replanner_launch.py mission_file:={mission}"
+requires = [{ launch = "blueboat_replanner/replanner_launch.py" }]
+params = [{ name = "mission", label = "Mission file", kind = "file", root = "~/worlds", glob = "*mission*.yaml", depth = 3 }]
+packages = ["blueboat_replanner", "blueboat_belief_interfaces", "blueboat_interfaces"]
+warning = "Starts idle; armed only by /replanner/start in a replanner-owned run. Stopping it does not stop the boat."
+window = false
+stop = "ctrl-c"
 
 # ------------------------------------------------------------- data cards
 # Read-only: the hub lists, sizes and opens; it never writes, moves or
