@@ -1,473 +1,647 @@
-# Target Families and Orderable Surrogates
- 
-## Filtering the ports/canals litter inventory into a buyable test-target set for surface-platform SSS
- 
-*Companion to `seabed_objects_ports_canals_15cm.md`. Compiled August 2026.*
-*Purpose: decide which real seabed objects are worth simulating, group them into acoustically
-meaningful families, and give a concrete shopping list of Japanese-orderable stand-ins.*
- 
----
- 
-## Table of contents
- 
-1. [How the list was filtered](#1-how-the-list-was-filtered)
-2. [Filtering result — what is kept, dropped and deferred](#2-filtering-result--what-is-kept-dropped-and-deferred)
-3. [The nine target families](#3-the-nine-target-families)
-   - [F1 — Upright rigid box](#f1--upright-rigid-box)
-   - [F2 — Large upright cylinder](#f2--large-upright-cylinder)
-   - [F3 — Dense solid block](#f3--dense-solid-block)
-   - [F4 — Open-frame / skeletal](#f4--open-frame--skeletal)
-   - [F5 — Elongated linear rigid](#f5--elongated-linear-rigid)
-   - [F6 — Tapered / conical](#f6--tapered--conical)
-   - [F7 — Toroid and low-profile compliant](#f7--toroid-and-low-profile-compliant)
-   - [F8 — Tangled compliant mass](#f8--tangled-compliant-mass)
-   - [F9 — Small hard threshold objects](#f9--small-hard-threshold-objects)
-4. [Matched pairs — the controlled contrasts worth building in](#4-matched-pairs--the-controlled-contrasts-worth-building-in)
-5. [Recommended purchase tiers](#5-recommended-purchase-tiers)
-6. [Rigging, ballasting, recovery, permissions](#6-rigging-ballasting-recovery-permissions)
-7. [Caveats on the surrogate mapping](#7-caveats-on-the-surrogate-mapping)
----
- 
-## 1. How the list was filtered
- 
-Four filters were applied, in this order. Nothing here relies on the `h_min ≈ 0.026·H` criterion or
-any other unvalidated envelope claim — those are hypotheses to be *tested* with these objects, not
-inputs to choosing them.
- 
-### 1.1 Geometric access filter (the one that removes the most)
- 
-The sonar cannot be placed arbitrarily close to a target. With a hard near-field floor around
-9–10 m slant range and altitude fixed at water depth, the vehicle needs roughly 9–10 m of
-*horizontal* standoff, on both sides if lines are to be run properly. In practice the water body must
-be **≳ 25–30 m wide** with clear water either side of the track.
- 
-Consequence: **the entire canal / urban-river / 用水路 section of the source list is geometrically
-inaccessible to this platform**, however rich it is in objects. Amsterdam-style canals (~15–25 m),
-Dōtonbori, and irrigation channels are all too narrow to image with a hull-mounted 450 kHz SSS at a
-usable range. Those object classes are only relevant where the *same object type* also occurs in an
-open port basin — which most of them do (bicycles, trolleys, cones, pipe, blocks, bottles). So the
-canal list is kept as an **object-type source**, not as a site type.
- 
-**Kept settings:** fishing-harbour basins, marina outer basins, port basins, quay aprons, nearshore
-anchorages — the 2–15 m band in §3 of the source document, which matches the Kasaoka / Shiraishi-jima
-/ Dōkai Bay operating envelope.
- 
-**Dropped settings:** canals, urban river beds, irrigation channels, and anything reached only by
-offshore trawl (the MOE bay surveys, Kuroda et al. offshore densities, all abyssal references).
- 
-### 1.2 Depth-band filter
- 
-| Band | Objects | Verdict |
-|---|---|---|
-| Intertidal / < 2 m | Quay-toe debris, beach-adjacent litter | Too shallow — hull draft plus near-field floor make this unusable; also swath collapses |
-| **2–8 m — the working band** | Fishing-port basins, marina basins, inner harbour aprons; most of §3.1 and §3.2 of the source list | **Primary.** Also the band with the largest tidal depth sweep at Kasaoka (~3 m), which is exactly the covariate the design wants |
-| 8–15 m | Commercial port basins, turning basins, deeper anchorages | Secondary — good for contrast runs, but access and permission are harder |
-| > 15 m | Offshore / bay-floor debris | Out of scope |
- 
-### 1.3 Size filter
- 
-Working rule, deliberately conservative and independent of any predicted envelope:
- 
-- **Along-track extent ≥ 30 cm** for a *primary* target. At 25 m slant range the along-track cell is
-  around 0.2 m, so 30 cm is only about 1.5 cells — this is already an aggressive floor, not a safe
-  one.
-- **30–50 cm objects are threshold probes**, not detection targets. Expect them to be marginal.
-- **≥ 20 cm of vertical relief** preferred for anything expected to cast usable shadow.
-- **20–30 cm objects retained only as deliberate near-floor controls** (cans, bottles) — their job
-  is to fail informatively.
-This drops from the source list: all fragments, 350 mL cans, cup-noodle containers, bento boxes,
-footwear, sports balls, helmets, flowerpots under 30 cm, and every film/bag/wrapper category (already
-excluded upstream).
- 
-### 1.4 Practicality filter (deployment and recovery from a small craft)
- 
-- **Must be liftable by two people from a RIB / small boat** — practical ceiling around 25–30 kg
-  wet, and it must fit through a hatch or over a gunwale.
-- **Must sink and stay put in tidal current** — hollow items need ballast, which is itself an
-  acoustic decision (see §6).
-- **Must be recoverable in full** — every object leaves the water at end of day. Nothing is
-  abandoned, both for legal reasons and because an unrecovered target contaminates later runs.
-- **Must be cheap enough to lose one.** Anything above roughly ¥10,000 per unit is a bad bet.
-This drops: sunken small craft, cars, refrigerators and washing machines, outboard motors, mooring
-blocks over ~30 kg, and full 200 L drums (the drum is kept, but as an *empty* shell — 23 kg — and
-only if a lift point is available).
- 
----
- 
-## 2. Filtering result — what is kept, dropped and deferred
- 
-### 2.1 Kept as primary target classes
- 
-| Source-list object | Setting / depth | Size | Family |
-|---|---|---|---|
-| 一斗缶 (18 L square tin) | Port basin, quayside, 2–8 m | 24 × 24 × 35 cm | F1 |
-| Fish crates (プラ製魚箱), EPS fish boxes | Fishing harbour, 2–8 m | ~50 × 35 × 20–25 cm | F1 |
-| Lead-acid batteries | Port basin | 24 × 17 × 20 cm | F1 |
-| Buckets, tubs, wash basins | Port + quayside | 25–40 cm dia. × 25–35 cm | F1 / F2 |
-| 20 L polytanks (ポリタンク) | Port basin, drifting-then-sinking | 34 × 24 × 46 cm | F1 |
-| Steel drums (200 L) | Port basin, industrial quays | 88 cm × 58 cm dia. | F2 |
-| Fire extinguishers, gas cylinders | Quayside | 50 cm / 60–120 cm | F2 |
-| Plastic and EPS buoys / floats | Fishing harbour | 20–60 cm dia. | F2 |
-| Octopus pots (タコ壺) | Fishing harbour, western Japan | 25–30 cm × 20 cm dia. | F2 |
-| Concrete rubble, blocks, bricks | Port basin, quay toe | 39 × 19 × 12 cm | F3 |
-| Anchors, chain piles, mooring blocks | Port basin, permanent | 40–100 cm | F3 |
-| Bicycles | Urban quays and city harbours | 170 × 60 × 100 cm | F4 |
-| Shopping baskets / trolleys | Urban quays | 40 × 30 × 25 cm / 100 × 60 × 100 cm | F4 |
-| Crab / whelk pots and traps | Fishing harbour | 60–120 × 40–60 cm | F4 |
-| Furniture (chairs, stools) | Quayside | 40–90 cm | F4 |
-| Wire drums, scaffolding, pipe | Working quays | 1–4 m / 40–80 cm dia. | F4 / F5 |
-| Conger-eel tube traps (アナゴ筒) | Fishing harbour | 60–100 × 10 cm dia. | F5 |
-| Wooden pallets and dunnage | Cargo quays | 110 × 110 × 14 cm | F5 |
-| Traffic cones, bollards, barricades | Quayside, promenade | 70 cm / 80–120 cm | F6 |
-| Tyres used as quay fenders | Fishing harbour, very common | 60–70 cm dia. × 20 cm | F7 |
-| Rubber boat fenders | Marina | 40–70 × 15–25 cm dia. | F7 |
-| Rope coils / mooring line bundles | Marina, harbour — the highest-frequency class | 30–100 cm across | F8 |
-| Net bundles, "net balls", trawl offcuts | Fishing harbour | 0.5–3 m tangled | F8 |
-| Glass bottles (一升瓶, 大瓶) | All settings, sink immediately | 31–40 cm | F9 |
-| PET bottles (2 L) | All settings, top item in Osaka Bay | 31 × 9 cm dia. | F9 |
- 
-### 2.2 Dropped
- 
-| Object | Reason |
+# Harbour seabed objects of interest — target set, evidence and simulation specification
+
+*Version 2, 2026-11-14. Supersedes version 1 ("Target Families and Orderable Surrogates", August 2026), which
+was written for a field campaign that will not take place. Version 1 stays on the owner's machine; its shopping
+list is summarised in Appendix B.*
+
+**What this document fixes**
+- **What the thesis means by "objects of interest".** Harbour seabed litter and obstructions of at least 0.5 m, in
+  the families that harbour operators actually meet (§1–§2).
+- **The simulator's object set.** It goes from 29 classes to 12 active classes, and the 22 others become legacy
+  (§3).
+- **Each class, precisely enough to build.** Geometry, materials, states, poses, burial, sizes and metadata (§4).
+- **How the litter is placed in a simulated harbour.** Densities, family mix, spatial pattern and burial (§5).
+- **Implementation instructions** for the code sessions (§6).
+- **Text and caveats** for the thesis (§7).
+
+**Evidence tags used throughout**
+
+| Tag | Meaning |
 |---|---|
-| All canal / 用水路 site classes | Geometric access — basin too narrow for 10 m standoff |
-| Sunken small craft, pontoons, cars | Unrecoverable; also a one-off opportunistic find, not a controllable target |
-| Home appliances, furniture over ~90 cm | Weight and recovery; washing machine ≈ F1 acoustically anyway, so nothing is lost |
-| Outboard motors, propellers, engine parts | Cost, weight, oil contamination risk |
-| Vinyl umbrellas | Below the size floor in every dimension that matters; thin ribs, near-zero cross-section |
-| Footwear, sports balls, helmets, small flowerpots | Below the 30 cm working floor |
-| 350 mL / 500 mL cans, cup-noodle containers | Below floor; the 2 L PET bottle already covers the small-hard probe role |
-| Prams, wheelchairs, suitcases, safes, filing cabinets | Canal-only in the source data; acoustically already covered by F1 and F4 |
-| All film, bag, wrapper, sheet, textile categories | Excluded upstream by the shape filter and correctly so |
- 
-### 2.3 Deferred / opportunistic
- 
-Objects worth **labelling if they show up in real survey data** but not worth deploying: sunken
-dinghies, chain piles, dredging spoil, quay-wall rubble aprons, agricultural gear. These belong in
-the clutter and false-positive analysis, not in the controlled target set.
- 
+| **[REF n]** | Read in source n of §9 |
+| **[PROJ]** | A project fact: our own recordings or reviews |
+| **[DERIVED]** | Computed here from referenced values; the computation is shown |
+| **[DESIGN]** | A modelling choice, with its reason. It is a parameter with a bracket, never a measurement |
+| **[UNCERTAIN]** | Not verified; check before relying on it |
+
 ---
- 
-## 3. The nine target families
- 
-Families are defined by **acoustic-geometric class**, not by litter taxonomy — because two objects
-that look nothing alike in a litter inventory (a battery and a fish crate) present the same thing to
-the sonar, while two objects in the same litter row (a solid-wall crate and a mesh crate) do not.
- 
-Each family below lists what it contains from the filtered set, what it tests, and orderable
-surrogates. Prices are indicative and pre-shipping.
- 
+
+## 1. Scope in one paragraph (for the thesis introduction)
+
+**The detection task.** The thesis detects man-made objects of at least about 0.5 m lying on the seabed of harbour
+basins 4.5–11 m deep, imaged by a hull-mounted 450 kHz side-scan sonar on a small USV.
+
+**Why this target set.** It is the overlap of three needs.
+1. **Port maintenance and hydrography.** Harbours and berths must be surveyed so that cubic features above 0.5 m
+   (IHO Exclusive Order) or above 1 m (Special Order) are detected [REF 1]. Side-scan sonar is the standard tool
+   for finding debris before dredging and port works [REF 2].
+2. **Environmental clean-up.** Harbour seabed clean-ups repeatedly lift a small, stable set of large items: tyres,
+   crates, shopping trolleys, metal scrap, nets and ropes, and derelict traps [REF 17–21]. Side-scan sonar is
+   already used operationally to find derelict traps and nets [REF 11–13] and dumped drums [REF 14].
+3. **Our sensor's physics.** At 20 m range the beam footprint along the track is about 0.17 m [DERIVED: 20 m ×
+   0.5°]. An object of 0.5 m spans about three footprints and about thirty range bins, which is the smallest size
+   with a usable signature.
+
+**What is excluded.** Small litter (bottles, cans, bags) dominates the item counts in most surveys [REF 6, 8, 22],
+but it is below this threshold. It enters the simulator as seabed clutter, not as a target.
+
 ---
- 
-### F1 — Upright rigid box
- 
-**Contains:** 一斗缶, fish crates, EPS fish boxes, 20 L polytanks, lead-acid batteries, shopping
-baskets (solid), suitcases, small appliances.
- 
-**What it tests.** Flat vertical faces of 20–50 cm. This is the *mirror* class: near broadside the
-face returns a strong specular flash; a few degrees off, the return collapses. Expect the sharpest
-aspect dependence of any family, and therefore the most direct test of whether multi-aspect revisit
-recovers targets that single-pass coverage drops. Vertical relief of 25–45 cm also makes this the
-family most likely to produce a usable shadow, so it doubles as the shadow-vs-highlight discriminator.
- 
-**Surrogates:**
- 
-| Object | Where to order | Why it is the right stand-in |
+
+## 2. Evidence review — who looks for what on harbour seabeds
+
+### 2.1 Port maintenance and hydrography
+
+- **IHO S-44, Edition 6.2.0 (October 2024)** [REF 1]:
+  - The **Exclusive Order** is meant for "harbours, berthing areas and critical areas of fairways and channels".
+    Its feature-detection requirement is "cubic features > 0.5 m".
+  - The **Special Order** is meant for areas "where underkeel clearance is critical". It requires "cubic features
+    > 1 m".
+  - **Order 1a** requires "cubic features > 2 m, in depths down to 40 m".
+  - A *significant feature* is a "feature that poses a potential danger to navigation".
+  - **Consequence:** in a harbour, an object of 0.5–1 m is by definition a feature a survey must detect. That is
+    the size floor of the thesis's targets.
+- **Dredging contractors** use side-scan sonar for the "detection and identification of underwater objects", such
+  as "debris, rocks, pipelines" [REF 2].
+- **Multibeam mapping of the Venice lagoon** [REF 3] (360 kHz, grids of 0.05–0.5 m, about 40 km² of channels).
+  - **Litter found:** wrecks, containers, rubber fenders and tyres, rip-rap debris and dock piles.
+  - **Density:** macro-litter averaged 7.5 items/km² over the channels, with a peak of 1,161 items/km² in the
+    urban Grand Canal.
+  - **Other footprints in the same survey:** keel and propeller grooves, propeller scour holes up to 120 × 80 ×
+    3.5 m in the cruise harbour, and dredging marks. These matter to session 02 as seabed texture.
+- **Side-scan mapping of Mangalia harbour, Romania** [REF 4] found debris, wrecks, metal frames, and a rock mound
+  near the main channel judged a risk to large ships.
+
+### 2.2 Environmental clean-up and derelict fishing gear
+
+**Derelict fishing gear (ALDFG)**
+- **Loss rates.** A global meta-analysis estimates that 8.6 % of all traps (19 % of pots and traps specifically),
+  5.8 % of gillnets and 29 % of lines are lost every year [REF 10].
+- **Derelict traps are found with side-scan sonar, routinely and at scale.**
+  - **Lower York River** [REF 11]: a 600 kHz hull-mounted side-scan sonar, run as 100 m swaths with 20 % overlap,
+    flagged 676 trap targets; 16 of 17 checked were traps (94 %). 82 % of the derelict traps removed were still
+    fishing.
+  - **Chesapeake programmes** [REF 12]: more than 28,000 pots were removed in Virginia over three years, and 5,700
+    in Maryland in one year. The pots are about 0.6 m cubes of galvanised or vinyl-coated wire, with two chambers.
+- **Derelict nets are harder** [REF 13].
+  - With a 300 kHz side-scan sonar, all 9 net targets checked by camera were nets or lines.
+  - But nets on sand "may be buried", leaving only the lead line visible.
+  - Crevices in rock walls produced false targets.
+  - Nets are a real target with a low expected detection rate and a high false-alarm risk.
+- **By count, ropes and lines dominate.**
+  - Ropes and textiles were about 42 % of the seafloor items in German sport-boat marinas [REF 6].
+  - Lines and ropes were 57.5 % of the items over 822,704 m² of Italian seabed filmed by ROV [REF 7].
+
+**Hazardous containers**
+- At a deep-sea dump site off Los Angeles, a wide-area side-scan survey by two AUVs over 150 km² identified more
+  than 74,000 debris targets [REF 14]. Drums and barrels are a documented side-scan target class.
+- Drums are rare in harbours but carry the highest hazard per item. They are kept for that reason.
+
+**Tyres**
+- **Toxicity.** Car-tyre rubber leaches zinc and organic additives (benzothiazole) into seawater. At high
+  concentrations the leachate killed marine copepods within 48 h [REF 15].
+- **Where harbour tyres come from.** Fender tyres fall in: 180 tyres were lifted from one small Cypriot fishing
+  shelter where "anglers use them as boat bumpers" [REF 18]. Tyres are also dumped.
+- **They show on side-scan.** Tyres "show clearly on flat, smooth seabed" on side-scan in Plymouth Sound, next to
+  lost anchors, cables, dumped fishing gear and ghost pots [REF 17].
+- **Our own data.** The July 2026 Shiraishi-jima harbour recordings contain a tyre that was barely visible
+  [PROJ]. The cause is confounded: altitude, aspect, and how strongly rubber and steel belts reflect.
+
+**Classification standard**
+- EU monitoring uses a joint list of litter categories [REF 9]. It lets our classes be mapped to a monitoring
+  category when the thesis reports results.
+
+### 2.3 What harbour seabed clean-ups and surveys actually find
+
+| Site and source | Method | Large items reported |
 |---|---|---|
-| **一斗缶 18 L, empty, unprinted** — 238 × 238 × 349 mm, tinplate, ~1.14 kg | [Amazon.co.jp — ビー・エヌ 一斗缶 18 L 生地缶](https://www.amazon.co.jp/%E3%83%93%E3%83%BC%E3%83%BB%E3%82%A8%E3%83%8C-%E4%B8%80%E6%96%97%E7%BC%B6-18%E3%83%AA%E3%83%83%E3%83%88%E3%83%AB%E7%BC%B6-%E7%94%9F%E5%9C%B0%E7%BC%B6/dp/B09HWZFHVQ) (~¥1,300–1,800) | Not a surrogate at all — this **is** the real object, a distinctly Japanese port-litter class, at exact JIS dimensions. Steel shell, four flat faces, 35 cm relief. Cheap enough to buy six and vary orientation. First thing to order. |
-| Same, lab-grade alternative — アズワン 18L, 235 × 235 × 340 mm, epoxy-lined | [Amazon.co.jp — アズワン 1-3798-01](https://www.amazon.co.jp/%E3%82%A2%E3%82%BA%E3%83%AF%E3%83%B3-As-One-18L-No-40%E5%86%85%E9%9D%A2%E3%82%A8%E3%83%9D%E3%82%AD%E3%82%B7%E3%82%B3%E3%83%BC%E3%83%88%E7%BC%B6/dp/B01N1TYVWB) (~¥1,760) | Same geometry with a documented spec sheet, useful if you want a traceable dimension in the paper. |
-| **Solid-wall folding container 50 L** — 530 × 366 × 320 mm, PP | [Amazon.co.jp — 松本産業 折りたたみコンテナ 50 L (50B)](https://www.amazon.co.jp/%E6%9D%BE%E6%9C%AC%E7%94%A3%E6%A5%AD-%E6%A5%AD%E5%8B%99%E7%94%A8-%E6%8A%98%E3%82%8A%E3%81%9F%E3%81%9F%E3%81%BF%E3%82%B3%E3%83%B3%E3%83%86%E3%83%8A-%E3%83%95%E3%82%BF%E7%84%A1%E3%81%97-50B/dp/B087WWWY58) (~¥2,000) | Direct stand-in for プラ製魚箱 / fish crate — the same footprint and the same polypropylene. Folds flat for transport to the site, which matters when you are carrying eight targets in a car. Pairs with the 一斗缶 as a **matched shape, contrasting material** test (see §4). |
-| Bulk 50 L box (rigid) — 160 kg rated, handles | [Amazon.co.jp — 取っ手付きコンテナボックス 50 L](https://www.amazon.co.jp/%E5%8F%96%E3%81%A3%E6%89%8B%E4%BB%98%E3%81%8D-160kg-%E5%8F%8E%E7%B4%8D%E3%83%9C%E3%83%83%E3%82%AF%E3%82%B9-%E6%8C%81%E3%81%A1%E9%81%8B%E3%81%B3%E7%B0%A1%E5%8D%98-%E3%82%AF%E3%83%AA%E3%83%BC%E3%83%B3%E3%83%9B%E3%83%AF%E3%82%A4%E3%83%88/dp/B0BTSBG828) | Thicker wall than the folding type; survives repeated deployment/recovery better. Integral handles are lift and rigging points. |
- 
-**Note.** A sealed air-filled 一斗缶 is acoustically the brightest thing on this list (steel/air
-interface) but will not sink. Externally ballasting with a concrete block on a short strop preserves
-the air fill; flooding the can does not. At 3–8 m the external pressure is only 0.3–0.8 bar, but thin
-tinplate can still buckle — inspect after each dive and treat a buckled can as a different target.
- 
+| Port of Thessaloniki [REF 5] | **USV + 455/800 kHz side-scan**, ROV ground truth | 56 targets in 120 × 160 m (≈ 29 per ha [DERIVED]); sizes peak at 0.6 and 1.5 m, 59 % between 0.5 and 0.7 m, 12.5 % over 1 m; metal pieces, **car tyres**, wires, colonised by biota |
+| Venice lagoon channels [REF 3] | Multibeam, 360 kHz | Wrecks, containers, **tyres and rubber fenders**, rip-rap debris, piles |
+| Plymouth Sound [REF 17] | Side-scan sonar | **Tyres** (car, truck, tractor), lost anchors, cables, dumped fishing gear, **ghost pots** |
+| Cherbourg harbour, 2023 [REF 20] | Divers | 86 items: **tyres**, glass, metal, plastic, **abandoned crates**, shopping trolleys, motorbikes |
+| Pomos fishing shelter, Cyprus, 2022 [REF 18] | Divers | About 1,500 kg, including **180 tyres** (used as fenders), old **nets**, metal, cans |
+| Marina Port de Mallorca, 2025 [REF 19] | Divers | 1,140 kg: supermarket trolleys, **tyres** |
+| Port of Arbatax, Sardinia, 2026 [REF 21] | Divers | About 600 kg: **tyres**, plastic |
+| 14 marinas and city ports, Germany and North Africa [REF 6] | Camera on a pole | 0.04–3.7 items/m² (mostly small); ropes and textiles about 42 % in sport-boat marinas |
+| Kagawa coast, Seto Inland Sea [REF 22] | Divers | Mostly household waste (bags, cans); **tyres** and appliances "occasionally"; much litter buried under sand and mud |
+| Shizuura fishing port, Numazu, 2024 [REF 23] | Divers | Much of the litter "buried in sludge" |
+
+**What the table shows**
+- **Tyres are the large item most consistently reported in harbours**, in every method.
+- **Crates, metal scrap, nets and ropes, and traps** recur.
+- **Shopping trolleys, bicycles and motorbikes** belong to city harbours and marinas rather than fishing harbours.
+- **Burial in harbour mud** is reported repeatedly.
+
+### 2.4 Japan
+
+- **The law.** The Act on the Promotion of Marine Debris Treatment (海岸漂着物処理推進法, 2009) was amended in June
+  2018 to cover **drifting and seabed litter** that hinders daily life or economic activity [REF 25].
+- **Who removes seabed litter.** In Okayama — the prefecture of our harbour data — the Ushimado fisheries
+  cooperative collects seabed litter while fishing, and reports that the amount is not falling [REF 24].
+- **Ghost gear.** WWF Japan, a town and its fishing cooperative ran a diver survey of ghost gear (nets, ropes,
+  buoys) off Nishi-Izu in 2023 [REF 26].
+- **Persistence.** Offshore trawl surveys around Japan found 81–2,926 items/km². Seafloor litter "retains its
+  condition for a long time (over 30 years)" [REF 8]. Litter therefore accumulates rather than turning over.
+- **Low-density plastics still sink.** About 70 % of the seabed litter recovered offshore was plastic lighter than
+  water (HDPE, LDPE, PP) [REF 29]. Fouling and trapped sediment sink low-density plastics; a polypropylene crate on
+  the seabed is not an anomaly.
+
+### 2.5 Synthesis: ranking the candidate objects
+
+Criteria, one per column:
+
+| Column | Question |
+|---|---|
+| Freq | Reported repeatedly in harbour surveys or clean-ups? |
+| Hazard | Environmental or navigation hazard? |
+| ≥ 0.5 m | Above the IHO Exclusive Order floor? |
+| SSS | Is there a side-scan precedent for finding it? |
+| Family | The acoustic family it covers |
+
+| Candidate | Freq | Hazard | ≥ 0.5 m | SSS | Family | Decision |
+|---|---|---|---|---|---|---|
+| Car or light-truck tyre | **High** [3, 5, 17–21] | Leachate [15] | Yes | Yes [5, 17] | F7 toroid | **Target T6** |
+| Wire trap or pot (derelict) | High in fishing areas [11, 12] | Ghost fishing [11] | Yes (0.6 m) | **Yes, at scale** [11, 12] | F4 open frame | **Target T4** |
+| Net or rope bundle | **Highest by count** [6, 7] | Ghost fishing; propellers | Often | Partial [13] | F8 compliant | **Target T7** |
+| Plastic crate or box | Medium [20] | Low | Yes | Our field box [PROJ] | F1 flat shell | **Target T1** (physics validated) |
+| 200 L drum | Low | **High** (contents) | Yes | Yes [14] | F2 cylinder | **Target T2** |
+| Concrete block, sinker, rubble | Medium [3, 4] | Navigation | Yes | Yes [4] | F3 dense block | **Target T3** |
+| Pipe, tube, metal bar | Medium (metal pieces, wires [5], cables [17]) | Navigation, fouling | Yes | Yes [5] | F5 elongated | **Target T5** |
+| Shopping trolley, bicycle, e-scooter, motorbike | Medium in city harbours [19, 20] | Low | Yes | — | F4 (like the trap) | Not a class: covered acoustically by T4; optional variant |
+| Lost anchor and chain | Medium [17] | Navigation | Yes | Yes [17] | F3/F5 compound | Legacy; chains kept as structure tethers |
+| Sunken boat or wreck | Low | Navigation | ≫ 1 m | Yes [3, 4] | Large hull | Out of scope: any survey finds it, so no replanning question |
+| Traffic cone | Low in harbours | Low | 0.7 m tall | — | F6 taper | Dropped (legacy) |
+| Bottle, can, PET, battery, 18 L tin, pail | **High** (small) [6, 8, 22] | Batteries | **No** | — | F9 / small F1–F2 | Clutter only (C2) or legacy |
+| Pallet, timber | Low on the seabed (wood floats) | Low | Yes | — | F4/F5 | Legacy |
+
+**The resulting set** has seven target classes, one per acoustic family. Together they span the axis the thesis
+tests:
+- **Strongly aspect-dependent:** T1 flat faces, T5 the pipe.
+- **Partly aspect-dependent:** T4 the lattice, T2 lying on its side.
+- **Nearly aspect-independent:** T2 upright, T3, T6, T7.
+
+The adaptive pipeline should gain most on the first group and least on the last. That is a testable prediction of
+E4.
+
 ---
- 
-### F2 — Large upright cylinder
- 
-**Contains:** 200 L steel drums, fire extinguishers, gas cylinders, pail cans, buckets, buoys and
-floats, octopus pots.
- 
-**What it tests.** The curved vertical surface gives a return that is **broad in azimuth but weak per
-unit area** — the opposite trade to F1. In principle a cylinder should be the least aspect-dependent
-rigid target in the set, which makes it the *control* against which F1's and F4's aspect behaviour is
-measured. If cylinders also turn out aspect-critical, the aspect argument needs rethinking.
- 
-**Surrogates:**
- 
-| Object | Where to order | Why it is the right stand-in |
+
+## 3. The object set v2
+
+| Role | Class (code name) | Family | Replaces (current CATALOG) | Why |
+|---|---|---|---|---|
+| **Validation** | `plastic_box`, fixed NAFCO instance | F1 | `plastic_box` | The only object measured in the field (beach, 2026-09-07); used by test B4 |
+| **Target T1** | `plastic_box`, size distribution | F1 flat shell | `plastic_box`, `crate_plastic`, `polytank` | Crates and containers [20]; same validated shell physics as the field box |
+| **Target T2** | `drum_200l` | F2 cylinder | `drum_200l`, `pail_20l`, `fire_extinguisher` | Hazard; side-scan precedent [14] |
+| **Target T3** | `concrete_block` (resized) | F3 dense block | `concrete_block`, `brick`, `tent_weight` | Rubble and sinkers; the "easy" reference |
+| **Target T4** | `trap_pot` (**new**) | F4 open frame | `mesh_crate`, `shopping_trolley`, `bicycle` | Derelict traps: frequent, harmful, found by side-scan at scale [11, 12] |
+| **Target T5** | `pipe_steel` (from `cylinder_metal`) | F5 elongated | `cylinder_metal`, `pipe_pvc`, `pallet_wood` | Metal pieces and pipes [5]; the narrowest aspect window |
+| **Target T6** | `tire_car` | F7 toroid | `tire_car`, `tire_bicycle` | The most consistently reported large item [3, 5, 17–21] |
+| **Target T7** | `net_bundle` (from `net_ball`) | F8 compliant | `net_ball`, `rope_coil`, `rope` | Most frequent by count [6, 7]; derelict gear |
+| **Structure S1** | `mooring_block` (**new**, session 02) | — | (terrain today) | Real blocks A1/A2; test B3 |
+| **Structure S2** | `chain` | — | `chain` | Tethers of blocks and buoys |
+| **Structure S3** | `mooring_pile` | — | `mooring_pile` | Pontoon and berth furniture |
+| **Clutter C1** | `debris` | — | `debris`, `anchor` | Metal scrap and rubble, the "metal pieces" of [5] |
+| **Clutter C2** | `small_litter` (**new**: bottles, cans, PET) | — | `bottle_glass`, `bottle_plastic`, `can` | Sub-threshold litter, as seabed texture and false-alarm source |
+| *Conditional* | `panel_upright`, `corner_reflector` | — | — | Only if a beach day happens (Appendix A) |
+
+**Legacy classes** (22), kept loadable but excluded from new worlds: `tin_18l`, `crate_plastic`, `polytank`,
+`pail_20l`, `fire_extinguisher`, `brick`, `tent_weight`, `anchor`, `bicycle`, `shopping_trolley`, `mesh_crate`,
+`pipe_pvc`, `cylinder_metal` (its geometry code is reused by `pipe_steel`), `pallet_wood`, `traffic_cone`,
+`tire_bicycle`, `rope_coil`, `net_ball` (reused by `net_bundle`), `rope`, `bottle_glass`, `bottle_plastic`, `can`.
+Old world folders reference these names, so they stay valid (NC #10). Active by their current name: `plastic_box`,
+`drum_200l`, `concrete_block`, `tire_car`, `chain`, `mooring_pile`, `debris`. New names: `trap_pot`, `pipe_steel`,
+`net_bundle`, `mooring_block`, `small_litter`.
+
+**Dropped families**
+- **F6, the cone.** Rare in harbours. It is not needed for the aspect axis.
+- **F9, small hard objects, as targets.** They are below the IHO floor and the resolution limit; they survive as
+  clutter class C2.
+
+**The matched material pairs of version 1** (steel against plastic pail, solid against mesh crate, and so on) were
+designed for a field campaign that will not happen. They are not needed for the headline. If a material contrast
+is wanted later, it can be a parameter sweep of one class.
+
+---
+
+## 4. Class specification cards (for the code sessions)
+
+**Conventions for every card**
+- Sizes in metres; U(a, b) = uniform between a and b.
+- **Burial** is the fraction of the object's height (or diameter, for lying cylinders) below the seabed.
+- **Yaw** is uniform over [0, 360°) unless stated.
+- **Acoustic constants** (density, sound speeds, absorption, reflection, layer transmission) come from session
+  01's materials and its `parameter_registry.md`. They are not repeated here.
+- **Fouling** is the ray-cast's 0–1 setting. Old litter is colonised by biota [5], so the default is
+  **U(0.2, 1)**, with U(0, 0.2) for "fresh" litter [DESIGN].
+- **Every instance writes ground truth:** family, class, material, state, dimensions, position, yaw, rest pose,
+  burial, fouling, the azimuths of every flat-face normal and cylinder axis, and `nominal_target: true|false`.
+
+### T1 / Validation — `plastic_box` (flat-faced plastic shell)
+
+| Item | Specification |
+|---|---|
+| Real objects | Fish crates, plastic storage containers, "abandoned crates" [20]; our NAFCO 68 L box [PROJ] |
+| Geometry | Open-top rectangular shell: four walls and a floor of thickness t; a rim lip of 10–20 mm; walls tapered outwards by a draft angle of 1–3° [DESIGN, an I3 input]; optional lid (P2) |
+| Validation instance | 0.716 × 0.425 × 0.323, t = 2.0 mm, flooded, upright [PROJ, measured] |
+| Target sizes | L ~ U(0.50, 0.75); W = L × U(0.55, 0.70); H ~ U(0.22, 0.35); t ~ U(2, 4) mm [DESIGN, spans fish crates and 40–70 L containers] |
+| Material | PP shell, elastic-layer physics from session 01 (V5) |
+| States | Flooded (default, 0.7); partly sediment-filled, 0–30 % of height (0.3) [DESIGN] |
+| Rest poses | Upright, open side up (0.5); inverted (0.3); on a side (0.2) [DESIGN] |
+| Burial | Sand U(0, 0.15); mud U(0, 0.4) [DESIGN] |
+| Face normals | Four walls; also the floor when on a side or inverted |
+| Expected behaviour | The sharpest aspect dependence (wall flashes), with a partly transparent shadow |
+
+### T2 — `drum_200l` (steel cylinder)
+
+| Item | Specification |
+|---|---|
+| Real objects | Oil and chemical drums; dumped barrels found by side-scan [14] |
+| Geometry | Cylinder of body diameter about 0.57 m, 0.585 m over two raised rolling hoops at about one third and two thirds of the height; height 0.89 m; rolled rims (chimes) at both ends; flat ends, one optionally open or holed. **These dimensions are [UNCERTAIN]**: read off a garbled vendor table [28]; check before freezing |
+| Wall | Steel 1.0–1.6 mm, "widely used" thicknesses per the foreword of JIS Z 1600:2017 [28] |
+| States | **Flooded** (default) or filled with sediment or product. **Not air-filled:** 200 L of air gives about 2 kN of buoyancy against roughly 0.2 kN of steel weight, so a sealed empty drum floats [DERIVED] |
+| Rest poses | Lying on its side (0.6) or upright (0.4) [DESIGN; bracket 0.3–0.9 lying] |
+| Burial | Lying: sand U(0, 0.2), mud U(0, 0.5) of the diameter. Upright: sand U(0, 0.1), mud U(0, 0.3) of the height [DESIGN] |
+| Axis metadata | Axis azimuth when lying; "vertical" when upright |
+| Expected behaviour | Upright: nearly aspect-independent, brightened by the object–seabed corner path (session 01, V4). Lying: a broadside glint, like a short pipe |
+
+### T3 — `concrete_block` (dense rough block)
+
+| Item | Specification |
+|---|---|
+| Real objects | Rubble, abandoned mooring sinkers, construction blocks [3, 4] |
+| Geometry | Rough rectangular block with chipped edges (random edge bevels of 0–30 mm) |
+| Sizes | L ~ U(0.5, 1.0); W ~ U(0.4, 0.8); H ~ U(0.2, 0.6) [DESIGN: at or above the IHO floor; today's range 0.3–0.8 is shifted up] |
+| Material | Concrete; roughness 2 mm, so diffuse |
+| Rest poses | Largest face down (0.8); otherwise (0.2) |
+| Burial | Sand U(0, 0.1); mud U(0, 0.3) [DESIGN] |
+| Expected behaviour | The "if we cannot see this, the run is bad" reference: little aspect dependence, a clear shadow |
+
+### T4 — `trap_pot` (wire-mesh trap; new class)
+
+| Item | Specification |
+|---|---|
+| Real objects | Derelict crab, fish and eel traps [11, 12] |
+| Geometry | Rectangular frame of 0.61 × 0.61 × 0.48 m (the 24 × 24 × 19 in Maryland-style pot [27]). Walls of hexagonal wire mesh with 1.5 in (38 mm) openings [27]. A horizontal divider makes two chambers [12]. Four entrance funnels (cones) on the lower chamber's sides. Ballast bars (rebar, about 10 mm) along the bottom edges. A zinc anode bar |
+| Japanese variants | 0.6–1.0 × 0.45–0.6 × 0.25–0.45 m [UNCERTAIN; check against local gear before use] |
+| Wire | Galvanised or vinyl-coated steel [12, 27]; wire diameter 1.5–2.0 mm [UNCERTAIN]. Mesh open area about 90 %, so a fill fraction of about 0.05–0.15 per panel [DERIVED from 38 mm hexagons and 2 mm wire] |
+| Material | Steel wire; vinyl coating acoustically negligible at 450 kHz [UNCERTAIN; session 01 to confirm] |
+| Rest poses | Upright (0.8); on a side (0.2) [DESIGN] |
+| Burial | Sand U(0, 0.2); mud U(0, 0.4), with sediment inside the lower chamber [DESIGN] |
+| Fouling | Default U(0.3, 1): old traps are heavily fouled [DESIGN] |
+| Face normals | The four side panels |
+| Expected behaviour | Thin-member glints that change with aspect; a weak, diluted shadow; complex texture. The family where a second look should help after the flat faces |
+| Optional variant | A shopping-trolley lattice for city-harbour worlds, as a geometry variant of the same class |
+
+### T5 — `pipe_steel` (elongated rigid)
+
+| Item | Specification |
+|---|---|
+| Real objects | Pipe sections, scaffold tubes, steel bars, "metal pieces, wires" [5]; cables [17] |
+| Geometry | Hollow cylinder, open at both ends and flooded |
+| Sizes | Diameter ~ U(0.10, 0.30); length ~ U(1.0, 3.0); wall 3–8 mm [DESIGN] |
+| Material | Steel |
+| Rest pose | Lying only |
+| Burial | Sand U(0, 0.3); mud U(0, 0.6) of the diameter [DESIGN] |
+| Axis metadata | Axis azimuth |
+| Expected behaviour | The narrowest specular window: bright at broadside, near-invisible a few degrees off. The cleanest test of the aspect argument |
+
+### T6 — `tire_car` (toroid, rubber over steel)
+
+| Item | Specification |
+|---|---|
+| Real objects | Car and light-truck tyres, used as fenders or dumped [17–21] |
+| Construction [16] | "Two steel belts … on top of the body plies, under the tread area". Steel bead bundles at both beads. Polyester body plies. Rubber everywhere else |
+| Sizes | Section width W ~ U(0.16, 0.25); outer diameter ~ U(0.55, 0.80). Worked examples [DERIVED]: outer diameter = rim + 2 × W × aspect ratio. A 165/65R14 gives 0.356 + 2 × 0.165 × 0.65 = 0.570 m; a 205/70R15 gives 0.381 + 2 × 0.205 × 0.70 = 0.668 m |
+| Material | Rubber over steel belts: session 01 brackets steel-belted against pure rubber |
+| States | Flooded, or partly filled with sediment |
+| Rest poses | Flat (0.85); on edge or leaning (0.15) [DESIGN] |
+| Burial | Sand U(0, 0.3); mud U(0, 0.6) of the section height [DESIGN] |
+| Expected behaviour | Low aspect dependence (no flat face). Its strength depends on the steel belts; the July harbour tyre was barely visible [PROJ] |
+| Optional variant (P2) | Tyre on a steel rim: a strong reflector inside the same outline |
+
+### T7 — `net_bundle` (tangled compliant mass)
+
+| Item | Specification |
+|---|---|
+| Real objects | Ghost nets, rope coils, mooring lines [6, 7, 13] |
+| Geometry | An irregular mass: a flattened random envelope of size L ~ U(0.5, 2.0), W ~ U(0.4, 1.5), H ~ U(0.1, 0.5). Inside it, a fibre volume fraction of 0.05–0.3 [DESIGN]. Optional lead line along one edge. A rope-coil variant: a torus of rope 12–16 mm thick, 0.3–0.8 m across |
+| Material | Sinking synthetic fibre (nylon, polyester) [UNCERTAIN on mix]; a lead line where present. Floating fibres (PP, PE) reach the seabed only when weighted or fouled. Acoustic parameters come from session 01, measured or bracketed |
+| Rest pose | Flattened; draping over other objects and structures is P2 |
+| Burial | Partial: on sand only the lead line may stay visible [13]. Sand U(0, 0.5); mud U(0, 0.7) [DESIGN] |
+| Expected behaviour | Weak, diffuse, aspect-independent; the most likely to be missed and to be confused with seabed texture |
+
+### S1–S3 — Structures (not litter; never counted as targets)
+
+| Class | Specification |
+|---|---|
+| `mooring_block` | Concrete, as surveyed in the real harbour: A1 about 4 m square and 2.8 m tall, A2 about 1.6 m tall [PROJ, review §B5.5]. A chain tether to its buoy |
+| `chain` | Studless steel links as discrete parts at the 450 kHz scale |
+| `mooring_pile` | As today: diameter 0.3–0.6 m, protruding 1.2–3.0 m above the seabed, concrete |
+
+### C1–C2 — Clutter (non-targets)
+
+| Class | Specification |
+|---|---|
+| `debris` | Metal scrap and rubble pieces of 0.2–1.2 m, rough. Mostly steel or concrete. It is "other litter": a detection on it is reported separately, not as a false positive (§5.6) |
+| `small_litter` | Bottles, cans and PET, 0.1–0.4 m (the old F9 geometries). **Recommended:** implement as a seabed layer of hard point-like scatterers rather than as individual objects, for rendering cost |
+
+---
+
+## 5. Harbour population model (for session 02)
+
+### 5.1 Density of sonar-size litter (targets plus `debris`)
+
+| Preset | Density | Anchor |
 |---|---|---|
-| **Steel pail can 20 L** — φ300 top / φ275 bottom × 370 mm | [Amazon.co.jp — ペール缶本体 20 L シルバー](https://www.amazon.co.jp/%E3%82%B5%E3%83%BC%E3%83%89%E3%83%BB%E3%82%B9%E3%83%86%E3%83%83%E3%83%97%E6%A0%AA%E5%BC%8F%E4%BC%9A%E7%A4%BE-%E3%83%9A%E3%83%BC%E3%83%AB%E7%BC%B6%E6%9C%AC%E4%BD%93-20%EF%BC%AC-%E3%82%B7%E3%83%AB%E3%83%90%E3%83%BC/dp/B007PBU1E2) or [ニス引きペール缶 20 L 870-54](https://www.amazon.co.jp/%E3%83%8E%E3%83%BC%E3%83%96%E3%83%A9%E3%83%B3%E3%83%89%E5%93%81-%E3%83%8B%E3%82%B9%E5%BC%95%E3%81%8D%E3%83%9A%E3%83%BC%E3%83%AB%E7%BC%B6-20L-%E3%83%9A%E3%83%BC%E3%83%AB%E7%BC%B6%E3%81%AE%E3%81%BF-870-54/dp/B08JQ5KV1H) (~¥1,500) | A scaled steel drum: same material, same shape, 1/10 the mass, one-person handling. Stands upright or lies down, giving two very different targets from one purchase. Buy several — [5-can set](https://www.amazon.co.jp/%E3%83%9A%E3%83%BC%E3%83%AB%E7%BC%B6-%E7%A9%BA%E7%BC%B6-%E3%82%AA%E3%82%A4%E3%83%AB%E7%BC%B6-20L-5%E7%BC%B6%E3%82%BB%E3%83%83%E3%83%88/dp/B0DZHBTZN4). |
-| **Plastic pail 20 L** — same envelope, PP/PE | [Amazon.co.jp — プラスチックペール缶 20 L](https://www.amazon.co.jp/%E3%83%97%E3%83%A9%E3%82%B9%E3%83%81%E3%83%83%E3%82%AF%E3%83%9A%E3%83%BC%E3%83%AB%E7%BC%B6-20L-%E5%86%8D%E7%94%9F%E5%AE%B9%E5%99%A8-%E5%8F%96%E3%81%A3%E6%89%8B%E4%BB%98%E3%81%8D-%E3%83%87%E3%82%B6%E3%82%A4%E3%83%B3%E9%81%B8%E6%8A%9E%E4%B8%8D%E5%8F%AF/dp/B085X2D1SM) (~¥900–1,500) | The single cleanest **material-contrast pair** available: identical geometry, steel vs plastic, ¥2,500 for the pair. Directly reproduces the USNA aluminium-vs-LDPE result in your own water. |
-| **200 L open-top steel drum** — 585 mm dia. × 890 mm, 23.2 kg | [MonotaRO — 空ドラム缶 200 L](https://www.monotaro.com/s/q-%E7%A9%BA%E3%83%89%E3%83%A9%E3%83%A0%E7%BC%B6%20200l/) (~¥10,000–15,000) | The real object from the source list, at real dimensions. Heavy — deploy once, image it for a whole tidal cycle, recover with a davit or a lifting strop. Best single "unmissable" reference target for calibrating a run. |
-| **ABC powder fire extinguisher, 10-型** — ~440–490 mm high, φ127–150 mm, ~4–5 kg | [Amazon.co.jp — 日本ドライ PAN-10AG](https://www.amazon.co.jp/%E6%97%A5%E6%9C%AC%E3%83%89%E3%83%A9%E3%82%A4-%E8%87%AA%E5%8B%95%E8%BB%8A%E7%94%A8%E3%83%BBABC%E7%B2%89%E6%9C%AB%E5%8A%A0%E5%9C%A7%E5%BC%8F10%E5%9E%8B%E6%B6%88%E7%81%AB%E5%99%A8-PAN-10AG-%E2%85%A0/dp/B0018AXZG2), or [MonotaRO — 消火器 ABC 10型](https://www.monotaro.com/k/store/%E6%B6%88%E7%81%AB%E5%99%A8%20ABC%2010%E5%9E%8B/) (~¥4,000–7,000) | Again the real object. Dense steel bottle, self-sinking without ballast, awkward small diameter — a good "small but bright" probe near the along-track resolution limit. Buy an expired/discharged unit if a local supplier will part with one. |
-| **Octopus pot (タコ壺)** — 25–30 cm, plastic or ceramic, cement-ballastable | [MonotaRO — 蛸壺 category](https://www.monotaro.com/k/store/%E8%9B%B8%E5%A3%BA/) · [せんぐ屋 — たこつぼ（重し入り）](https://www.senguya.jp/SHOP/takotubo_01.html) | Region-appropriate for the Seto Inland Sea and genuinely present on those seabeds. The せんぐ屋 version ships with ballast already cast in, so it is drop-and-go. Also a natural rough-surface, partially-hollow contrast to the smooth pail can. |
-| Water bucket / tub, 25–40 cm | Any home centre; [Amazon — ふた付バケツ #10, φ28 × 27.3 cm](https://www.amazon.co.jp/%E3%83%97%E3%83%A9%E3%82%B9%E3%83%81%E3%83%83%E3%82%AF%E3%83%9A%E3%83%BC%E3%83%AB%E7%BC%B6-20L-%E5%86%8D%E7%94%9F%E5%AE%B9%E5%99%A8-%E5%8F%96%E3%81%A3%E6%89%8B%E4%BB%98%E3%81%8D-%E3%83%87%E3%82%B6%E3%82%A4%E3%83%B3%E9%81%B8%E6%8A%9E%E4%B8%8D%E5%8F%AF/dp/B085X2D1SM) listing page carries several | Cheapest possible near-threshold cylinder. Expect it to be marginal; that is the point. |
- 
----
- 
-### F3 — Dense solid block
- 
-**Contains:** concrete blocks, bricks, rubble, mooring blocks, anchors.
- 
-**What it tests.** High impedance contrast, rough surface, no internal structure, no air. This should
-be the **easiest** family to detect and the least aspect-sensitive — the reference "if we cannot see
-this, the run is bad" target. It also doubles as universal ballast for every other family, so it is
-worth over-ordering.
- 
-**Surrogates:**
- 
-| Object | Where to order | Why it is the right stand-in |
+| Sparse | 2 per ha | Open basin; the Venice lagoon-wide mean is 0.075 per ha [REF 3] |
+| **Nominal** | **10 per ha** | Venice urban peak, 11.6 per ha [REF 3, DERIVED from 1,161 per km²] |
+| Dense | 30 per ha | Off the Thessaloniki port breakwater, about 29 per ha [REF 5, DERIVED] |
+
+- **Share of targets** among these: 0.5 [DESIGN; bracket 0.3–0.7].
+- **Size check.** Thessaloniki's detected targets are mostly 0.5–0.7 m, which matches the target sizes of §4.
+- **Scale check.** An E4 world of 0.6–1 ha at the nominal density holds 6–10 objects, the order the policy
+  comparison was planned around (about ten objects per run).
+
+### 5.2 Family mix — two modes
+
+**Realistic mode**: count weights for harbour worlds [DESIGN, informed by §2.3]:
+
+| Target | Weight | Reason |
 |---|---|---|
-| **JIS C種 concrete block, 390 × 190 × 100 mm, ~9.7 kg** | [Amazon.co.jp — コンクリートブロック 基本 4個セット](https://www.amazon.co.jp/%E3%82%B3%E3%83%B3%E3%82%AF%E3%83%AA%E3%83%BC%E3%83%88%E3%83%96%E3%83%AD%E3%83%83%E3%82%AF-%E5%9F%BA%E6%9C%AC-4%E5%80%8B%E3%82%BB%E3%83%83%E3%83%88-JIS%E5%B7%A5%E5%A0%B4%E8%A3%BD%E5%93%81-%E5%8E%9A%E3%81%BF100mm%C3%97%E6%A8%AA390mm%C3%97%E7%B8%A6190mm/dp/B089GLCTCP) (~¥2,000/4) | Exactly the object in the source list at exactly the quoted dimensions. Two hollow cores give it internal structure a solid brick lacks — realistic for real rubble. Stacking two or three builds a taller block with the same footprint, which is a free height sweep. |
-| Same in 120 mm thickness, ~10.9–12 kg | [Rakuten — 平野ブロック 390 × 190 × 120](https://item.rakuten.co.jp/hirano-block/1000150012/) · [ロイモール — 重量ブロック C種 12 cm](https://www3.roymall.jp/shop/g/grhc1-035104/) | Slightly deeper, otherwise identical — a controlled 2 cm relief step if you want one. |
-| Bulk ballast, 10-block pack | Same Amazon / Rakuten listings as above, sold in 2/4/10 packs | Buy ~15 blocks total. Every hollow target in F1, F2, F6 and F7 needs one or two, and blocks are the cheapest thing here per kilogram. |
- 
+| T6 tyre | 0.30 | Most consistently reported |
+| T4 trap | 0.15 | Fishing harbours |
+| T7 net or rope bundle | 0.15 | Most frequent by count, but often under 0.5 m |
+| T1 plastic box | 0.15 | Crates |
+| T3 concrete block | 0.10 | Rubble and sinkers |
+| T5 pipe | 0.10 | Metal pieces and pipes |
+| T2 drum | 0.05 | Rare, hazardous |
+
+No study gives the composition of sonar-size harbour litter by count. These weights are a stated assumption, swept
+in E5.
+
+**Balanced mode**: equal counts per target class. Use it for per-family results, so that each family has enough
+detection opportunities.
+
+### 5.3 Spatial pattern
+
+- **Mechanism.** Sinking litter "mostly stays near its emission point", while storms can move it up to about
+  4 km [REF 6]. Litter peaks near urban quays and harbour inlets [REF 3], slightly near a breakwater [REF 5], and
+  at river-mouth drop-offs [REF 22].
+- **Model** [DESIGN]: an inhomogeneous Poisson process,
+
+  λ(x) = λ_bg + Σ_k A_k · exp(−d_k(x) / L_k)
+
+  over the hotspot features k, with d_k the distance to the feature.
+  - **Hotspot features:** quay walls and fender lines; pontoons; mooring blocks and buoys; fishing berths;
+    slipways; drain and river outlets; breakwater toe.
+  - **Decay length:** L_k = 15 m [bracket 5–40 m].
+  - **Share within 30 m of a hotspot:** 0.7 [bracket 0.5–0.9].
+- **Class affinities** [DESIGN]:
+
+  | Class | Where it concentrates |
+  |---|---|
+  | Tyres | Along quay walls and fender lines (cf. tyres beside a harbour wall [17]; fender tyres [18]) |
+  | Traps, nets, crates | Fishing berths and mooring areas |
+  | Nets | Additionally snagged near structures |
+  | Drums, blocks, pipes | Working quays |
+  | `debris` | Everywhere, with extra weight near breakwaters and rip-rap |
+- **Spacing.** At least 3 m between targets, so that their echoes do not merge [DESIGN]. All objects inside the
+  depth domain; none on land (NC #13).
+
+### 5.4 Burial and sediment
+
+- **Evidence:** litter buried under sand and mud [REF 22], buried in sludge in a fishing port [REF 23], nets buried
+  on sand with only the lead line visible [REF 13].
+- **Model:** per-class ranges as in §4 [DESIGN]; mud gives deeper burial than sand. A burial preset scales all
+  ranges: low ×0.5, nominal ×1, high ×1.5, capped at 0.9.
+- **Burial above 0.7** marks the instance `effectively_buried: true`. It stays in the ground truth, but is excluded
+  from the detectable-target denominator and reported separately ("missed by any survey").
+
+### 5.5 Persistence
+
+Seafloor litter keeps its condition for decades [REF 8], so worlds model accumulated stock: there is no ageing
+process within a mission. Fouling (§4) stands for age.
+
+### 5.6 What counts as a detection, for E4 metrics
+
+| Detection matched to | Counted as |
+|---|---|
+| A T-class instance with `nominal_target: true` that is not effectively buried | True positive |
+| `debris` | "Other litter": real litter, reported separately, not a false positive |
+| `small_litter` or nothing | False positive |
+| A structure or the seabed | False positive (structures also reported separately) |
+
 ---
- 
-### F4 — Open-frame / skeletal
- 
-**Contains:** bicycles, shopping trolleys and baskets (wire), crab and whelk pots, chairs and stools,
-scaffolding assemblies, net frames, wire drums.
- 
-**What it tests.** **This is the family that produced the July wireframe-cube failure**, and the most
-scientifically interesting one. Silhouette fill fraction is low, so the shadow is diluted; the return
-is a sparse set of thin-member specular flashes whose geometry changes completely with aspect. If
-multi-aspect revisit has a detection benefit anywhere, it is here. It is also the family most likely
-to defeat a YOLO detector trained on AUV shipwreck imagery.
- 
-**Surrogates:**
- 
-| Object | Where to order | Why it is the right stand-in |
-|---|---|---|
-| **Mesh folding container 50 L** — 530 × 366 × 320 mm, open lattice walls | [Amazon.co.jp — 松本産業 brand store, model 50ABL メッシュ](https://www.amazon.co.jp/stores/%E6%9D%BE%E6%9C%AC%E7%94%A3%E6%A5%AD/page/98BB7F14-2B10-41BE-9A7D-ABE7C8287CA5) (~¥2,000) | The single most valuable purchase on this page. It is **dimensionally identical to the solid-wall 50B in F1** but with lattice walls, giving a controlled fill-fraction pair for the same footprint and material — a clean, publishable test of the fill-fraction hypothesis, for about ¥4,000 total. |
-| Transparent skeleton container — TRUSCO スケルコン 50 L, 530 × 366 × 336 mm, 2.28 kg | [kakaku.com — スケルコン TSK-C50B](https://search.kakaku.com/%E3%82%B3%E3%83%B3%E3%83%86%E3%83%8A%2050l/) (~¥3,000) | Third point on the same fill-fraction axis. |
-| **Second-hand bicycle** (frame + wheels) | Local recycle shop, Jimoty, or Mercari — *do not* order new; a ¥3,000–5,000 junk bike is the right purchase | Very-high-frequency object in the source list and the archetypal open frame: two large thin rings, a thin-tube triangle, one dense hub cluster. Steel frame preferred over aluminium. Needs a block or two to hold position. Recovery by rope through the frame is easy. |
-| **Crab / whelk pot, folding wire trap** | [MonotaRO — 雑漁具 (漁網/漁具) category](https://www.monotaro.com/s/c-135814/) | Real fishing-harbour object, coated wire frame, sold with enough weight to sit stably on the bottom. Cheap, stackable, several can be deployed in one trip. |
-| Steel folding chair / stool | Any home centre or Amazon (search 「パイプ椅子」) | Covers the furniture row. Thin-tube frame plus one flat plate: a hybrid of F4 and F1 in a single object, useful for testing what a detector latches onto. |
-| Steel scaffold tube + clamps, assembled into a 1 m cube | See F5 for the tube link; clamps via [MonotaRO — 単管パイプ 48.6](https://www.monotaro.com/s/q-%E5%8D%98%E7%AE%A1%E3%83%91%E3%82%A4%E3%83%97%2048.6/) | Rebuilds the July wireframe cube deliberately, in steel rather than whatever the original was, so the failure can be reproduced and attributed rather than assumed. Disassembles for transport. |
- 
+
+## 6. Implementation instructions (code sessions)
+
+### 6.1 Catalogue (`worldgen/objects.py` CATALOG)
+
+1. **Deprecate, never delete.** Add `legacy: true` to the 22 legacy classes of §3.
+   - Legacy classes are excluded from new-world generation, from the default composition, and from the World
+     Builder's default lists.
+   - Old world folders must still load and render identically. Add a smoke-test check.
+2. **New classes:**
+   - `trap_pot`: a compound of mesh panels, divider, funnels, ballast bars and anode;
+   - `net_bundle`: from `net_ball`, plus the rope-coil variant;
+   - `pipe_steel`: from `cylinder_metal`, hollow, lengths 1–3 m;
+   - `small_litter`: preferably a seabed scatterer layer;
+   - `mooring_block`: a structure, built by session 02.
+3. **Changed classes:**
+   - `plastic_box`: a size distribution, draft angle, states and poses; the NAFCO fixed instance kept as a preset
+     (`variant: nafco_68l`);
+   - `drum_200l`: rolling hoops, chimes, states, poses;
+   - `concrete_block`: new size range;
+   - `tire_car`: size from the tyre-code formula; steel belts and beads per session 01;
+   - all classes: poses and burial per §4.
+4. **`DEFAULT_COMPOSITION`** stays for legacy worlds. New worlds use the v2 composition: realistic or balanced mode
+   (§5.2).
+5. **Acoustics stay in session 01's material model.** This document only fixes geometry, states and placement.
+   There is no brightness setting anywhere (NC #17).
+
+### 6.2 World metadata (`metadata.yaml`, additive, schema v2)
+
+Per object, the ground-truth fields of §4, plus:
+- `effectively_buried`;
+- the hotspot feature it was drawn from, if any;
+- the composition mode.
+
+Per world: the density preset, the target share, the composition mode, the burial preset, the hotspot parameters.
+
+### 6.3 Campaign specification (example)
+
+```yaml
+objects:
+  set: v2                       # v2 classes only; legacy excluded
+  composition: realistic        # realistic | balanced
+  density_per_ha: 10            # 2 | 10 | 30 presets, or a value
+  target_share: 0.5
+  burial: nominal               # low | nominal | high
+  fouling: [0.2, 1.0]
+  hotspots: {decay_m: 15, share_within_30m: 0.7}
+  min_target_spacing_m: 3.0
+validation_instances:
+  - {class: plastic_box, variant: nafco_68l}   # beach and validation worlds only
+```
+
+### 6.4 Tests to add
+
+- Every v2 class builds at the extremes of its size range.
+- The pose and state frequencies match their specification within sampling error.
+- Burial is applied per sediment class.
+- Face-normal and axis metadata are correct for known yaws.
+- Legacy worlds load and render bit-identically.
+- For a seed, the campaign's composition and density come out as specified.
+
+### 6.5 Where this is used
+
+- **Session 02** implements §5–§6.
+- **Session 01's atlas** should use the v2 representatives: `plastic_box` (NAFCO), `pipe_steel`, `drum_200l`
+  upright and lying, `concrete_block`. Add `tire_car` and `trap_pot` once they exist.
+- **Session 05** reports test results per v2 class.
+
 ---
- 
-### F5 — Elongated linear rigid
- 
-**Contains:** PVC and steel pipe, rebar, scaffold poles, guardrail sections, timber and sleepers,
-pallets, conger-eel tube traps (アナゴ筒), garden-hose reels.
- 
-**What it tests.** The narrow-specular-lobe case. A long straight edge should be brilliant at
-broadside and near-invisible elsewhere — the most extreme aspect window in the whole set, and the
-cleanest possible test of the aspect argument, because orientation on the seabed is exactly
-controllable (lay it along a known bearing with RTK at both ends).
- 
-**Surrogates:**
- 
-| Object | Where to order | Why it is the right stand-in |
-|---|---|---|
-| **PVC pipe VU100, 1 m** — 114 mm OD, ~1 kg | [Amazon.co.jp — 塩ビパイプ VU100 1 m](https://www.amazon.co.jp/%E8%BE%B2%E6%A5%AD%E5%B1%8B-%E5%A1%A9%E3%83%93%E3%83%91%E3%82%A4%E3%83%97%EF%BC%B6%EF%BC%B5%EF%BC%91%EF%BC%90%EF%BC%90-%EF%BC%91%EF%BD%8D/dp/B00DPGDJKE) (~¥700–1,500); [0.5 m version](https://www.amazon.co.jp/%E3%83%93%E3%83%8B%E3%83%BC%E3%83%AB%E3%83%91%E3%82%A4%E3%83%97-VU100%EF%BC%88%E5%A4%96%E5%BE%84%E7%B4%84114%E3%83%9F%E3%83%AA%CE%A6%EF%BC%89%C3%97%E9%95%B7%E3%81%95-%E7%B4%840-5%EF%BD%8D%EF%BC%88%E7%B4%8450%EF%BD%83%EF%BD%8D-%E5%AE%9F%E5%AF%B8%E7%B4%84495%E3%83%9F%E3%83%AA%EF%BC%89-%E5%A1%A9%E3%83%93%E3%83%91%E3%82%A4%E3%83%97%E3%83%BB%E7%A1%AC%E8%B3%AA%E5%A1%A9%E5%8C%96%E3%83%93%E3%83%8B%E3%83%BC%E3%83%AB%E3%83%91%E3%82%A4%E3%83%97/dp/B0DFNWDTJY) | Literally the "PVC pipe" row of the source list. Sold in 0.25 / 0.5 / 1 / 2 m lengths from the same sellers, giving a **free length sweep** — 0.5 vs 1 vs 2 m at fixed diameter is a direct measurement of how specular-lobe width trades against detectability. Buy end caps and it doubles as a buoyant-vs-flooded contrast. |
-| **Steel scaffold tube (単管パイプ) 48.6 mm × 1.5 m, ~4.1 kg** | [MonotaRO — 単管パイプ 48.6](https://www.monotaro.com/s/q-%E5%8D%98%E7%AE%A1%E3%83%91%E3%82%A4%E3%83%97%2048.6/) (~¥1,500–2,500) | Same length class as the PVC pipe, far higher impedance contrast, self-sinking, and it is a real quayside object. The **PVC-vs-steel tube pair at matched length and near-matched diameter** is the second good material contrast in this catalogue. Also the building material for the F4 cube. |
-| Conger-eel tube trap (アナゴ筒), 60–100 cm | [MonotaRO — 雑漁具 category](https://www.monotaro.com/s/c-135814/); also Rakuten (search 「アナゴ筒」) | Region-real, and a nice edge case: a thin-walled tube open at both ends, which should behave differently from a capped pipe. |
-| Timber / sleeper, ~200 × 20 × 15 cm | Local home centre (transport by car; not worth shipping) | Low impedance contrast, may be near-neutrally buoyant when dry — a deliberately hard linear target and a useful counterpoint to the steel tube. |
-| Wooden pallet, JIS T11 1100 × 1100 × 140 mm | Local pallet supplier or free from a warehouse | Large footprint, tiny relief, open slats. Sits at the intersection of F4 and F5 and is a realistic port object. Needs heavy ballast — it floats. |
- 
+
+## 7. For the thesis
+
+### 7.1 Scope sentence
+
+> The detection targets are man-made objects of at least 0.5 m on harbour seabeds — the feature size the IHO
+> Exclusive Order requires harbour surveys to detect — drawn from the seven acoustic families that harbour surveys
+> and clean-ups most consistently report: tyres, derelict traps, net and rope bundles, plastic crates, drums,
+> concrete blocks and pipes.
+
+### 7.2 Arguments it supports
+
+- **Usefulness.** Port authorities need obstruction surveys [REF 1, 2]. Fisheries cooperatives and municipalities
+  remove seabed litter and derelict gear, in Japan under the 2018 amendment of the marine debris act [REF 24–26].
+- **Feasibility of the method.** Side-scan sonar already finds traps, tyres and drums operationally
+  [REF 5, 11, 14, 17]. A survey from a USV with a 455 kHz side-scan sonar in a port has been demonstrated
+  [REF 5].
+- **Why replanning matters.** The families differ in aspect dependence (§2.5), which is exactly what the replanner
+  exploits.
+
+### 7.3 Limitations to state
+
+1. **The family mix and densities are assumptions anchored on two sites** (Venice and Thessaloniki) and on
+   qualitative clean-up reports. They are swept, not claimed.
+2. **Objects are product-shaped.** Real litter is dented, fouled and partly filled with sediment. Fouling and
+   burial are modelled only as parameters; acoustic changes from fouling are bracketed, not measured.
+3. **Japanese harbour composition is undocumented** at sonar size; Japanese evidence is qualitative [REF 22–26].
+4. **Derelict-trap dimensions follow a US standard pot** [REF 12, 27]. Japanese trap geometry is unverified.
+5. **Drum dimensions are unverified** [REF 28].
+
 ---
- 
-### F6 — Tapered / conical
- 
-**Contains:** traffic cones, bollards, barricade feet, buoy cones.
- 
-**What it tests.** A cone has **no broadside** — its surface normal sweeps continuously, so there is
-never a large in-phase reflecting area at any aspect. The USNA capstone found their pyramid harder to
-detect than their cube of the same nominal size, which is exactly this effect. A cone is therefore the
-cheapest available "predicted-hard but not predicted-invisible" control, and a much better one than a
-plastic box because it fails for a *geometric* reason rather than a material one.
- 
-**Surrogates:**
- 
-| Object | Where to order | Why it is the right stand-in |
-|---|---|---|
-| **PE traffic cone, 700 mm, 380 mm base, ~0.85 kg** | [Amazon.co.jp — カラーコーン 赤 H700mm](https://www.amazon.co.jp/%E3%82%AB%E3%83%A9%E3%83%BC%E3%82%B3%E3%83%BC%E3%83%B3-%E8%B5%A4-H700mm/dp/B00LFFS772) (~¥500–900) | Identical to the object in the source list, at the exact standard Japanese dimensions. 70 cm of relief on a 38 cm base is a lot of height for very little acoustic cross-section — a genuinely informative failure if it fails. Needs ballast (hollow, buoyant). |
-| **Heavy PVC cone, 700 mm, 2.3 kg, thick-walled** | [Amazon.co.jp — 2 kg コーン 700 mm](https://www.amazon.co.jp/%E3%82%AB%E3%83%A9%E3%83%BC%E3%82%B3%E3%83%BC%E3%83%B3-2kg%E3%82%B3%E3%83%BC%E3%83%B3-%E3%82%AA%E3%83%AC%E3%83%B3%E3%82%B8-%E5%8D%98%E5%93%81-%E9%AB%98%E3%81%95%E7%B4%84700mm/dp/B00MEAC4M6) (~¥1,500) | Same geometry, ~3× the wall mass and a different polymer — a shape-matched material contrast within the family, and heavy enough to resist tidal current with only a light strop. Preferred if buying one. |
-| 20-cone bulk set | [Amazon.co.jp — セールコーン 700 mm 20本セット](https://www.amazon.co.jp/%E3%82%AB%E3%83%A9%E3%83%BC%E3%82%B3%E3%83%BC%E3%83%B3-%E3%82%BB%E3%83%BC%E3%83%AB%E3%82%B3%E3%83%BC%E3%83%B3-700mm-20%E6%9C%AC%E3%82%BB%E3%83%83%E3%83%88-%E8%B5%A4/dp/B01N033QEW) (~¥8,150) | If you ever want a **spatial density experiment** — a field of N identical targets at known spacing to measure detection probability directly rather than inferring it from a handful of objects — this is by far the cheapest way to get 20 identical targets. Also useful as surface markers. |
- 
+
+## 8. Version 1 → version 2, in brief
+
+- **Purpose:** a shopping list for a field campaign, replaced by an evidence-based target set for simulation.
+- **Families:** F1–F9 become seven targets (F6 dropped; F9 becomes clutter).
+- **Classes:** 29 classes become 12 active ones (22 legacy), plus 2 conditional ones (§3).
+- **New:**
+  - harbour evidence (§2);
+  - the population model (§5);
+  - detection accounting (§5.6);
+  - implementation instructions (§6).
+
 ---
- 
-### F7 — Toroid and low-profile compliant
- 
-**Contains:** car and truck tyres, motorcycle tyres, rubber boat fenders.
- 
-**What it tests.** The July disappearing-tyre case. Rubber has poor impedance contrast against water,
-a tyre lying flat has almost no relief, and the toroidal shape has no flat face. This family is the
-**predicted-hard control the design explicitly wants** — its job is to be marginal and intermittent,
-and to demonstrate that the pinger-based ground truth can distinguish "the target moved" from "the
-detector failed". Tyres are also genuinely one of the highest-frequency objects in Japanese fishing
-harbours, so this is not a contrived control.
- 
-**Surrogates:**
- 
-| Object | Where to order | Why it is the right stand-in |
-|---|---|---|
-| **Used car tyre, 14-inch class (~60 cm dia. × 18 cm)** | Free or near-free from any local tyre shop / ガソリンスタンド — ask for 廃タイヤ. If you must order: [Amazon.co.jp — 中古タイヤ 165/65R14, 4本セット](https://www.amazon.co.jp/%E3%80%90%E4%B8%AD%E5%8F%A4%E3%82%B9%E3%82%BF%E3%83%83%E3%83%89%E3%83%AC%E3%82%B9%E3%82%BF%E3%82%A4%E3%83%A4%E3%80%91BS-%E3%83%96%E3%83%AA%E3%82%B6%E3%83%83%E3%82%AF-65R14-4%E6%9C%AC%E3%82%BB%E3%83%83%E3%83%88-W14241216034/dp/B0DTTZ599N) | The real object. Prefer a **collection of identical tyres** over one, so that "invisible" can be shown to be reproducible rather than a one-off. Local disposal yards will usually give these away, which is both cheaper and more sustainable than shipping four. |
-| Tyre **mounted on a steel wheel** | Same shops; ask for a wheel-and-tyre assembly | Critically useful: rim + tyre is the same silhouette with a large steel disc inside. If the bare tyre vanishes and the wheeled tyre does not, the material hypothesis is confirmed in one afternoon with one photograph. Order this if you order nothing else in F7. |
-| Tyre stood **on edge** and staked | No purchase — a deployment variant | Converts a 18 cm-relief object into a 60 cm-relief object with zero change of material. The cheapest height sweep available anywhere in this catalogue. |
-| Rubber boat fender, 40–70 cm | Marine chandlers (せんぐ屋, Rakuten — search 「ボートフェンダー」) | Real marina object; hollow, buoyant, needs ballast. Lower priority than tyres — same acoustic story, more money. |
- 
+
+## 9. References
+
+How each was read: **[full]** = full text extracted; **[page]** = web page or abstract record only; **[draft]** = an
+official pre-publication file.
+
+1. IHO (2024). *S-44 Standards for Hydrographic Surveys*, Edition 6.2.0, October 2024. IHO-hosted file
+   https://iho.int/uploads/user/pubs/Drafts/S-44_Edition_6.2.0_Proposed.pdf [draft — check the final text before
+   quoting].
+2. IADC (2015). *Facts About: Underwater Surveys*. International Association of Dredging Companies.
+   https://www.iadc-dredging.com/wp-content/uploads/2016/07/facts-about-underwater-surveys.pdf [full].
+3. Madricardo, F., Foglini, F., Campiani, E., Grande, V., Catenacci, E., Petrizzo, A., Kruss, A., Toso, C., &
+   Trincardi, F. (2019). Assessing the human footprint on the sea-floor of coastal systems: the case of the Venice
+   Lagoon, Italy. *Scientific Reports* 9:6615. doi:10.1038/s41598-019-43027-7 [full].
+4. Lazăr, A. V., Bugheanu, A. D., Ungureanu, G. V., & Ionescu, A. D. (2013). Side-scan sonar mapping of
+   anthropogenically influenced seafloor: a case-study of Mangalia Harbor, Romania. *Geo-Eco-Marina* 19, 59–64.
+   https://journal.geoecomar.ro/geo-eco-marina/article/view/04_2013 [page].
+5. Papatheodorou, G., Kosmopoulou, A., Fakiris, E., Geraga, M., Dimas, X., Maurommatis, N., Christodoulou, D.,
+   Kouvara, K., & Xirotagarou, P. (2021). Benthic megalitter detection using unmanned surface vehicle (USV) and
+   Automatic Target Detection: a case study in the Port of Thessaloniki, Thermaikos Gulf. *CEST2021*, paper
+   CEST2021_00599.
+   https://cms.gnest.org/sites/default/files/Proceedings/cest2021_00599/cest2021_00599.pdf [full].
+6. Schernewski, G., Escobar Sánchez, G., Wandersee, P., Lange, X., Haseler, M., & Nassour, A. (2023). Marine
+   macro-litter (plastic) pollution of German and North African marina and city-port sea floors. *Applied Sciences*
+   13(20), 11424. doi:10.3390/app132011424 [full].
+7. Angiolillo, M., Di Lorenzo, B., Bo, M., Fortibuoni, T., Canese, S., Cau, A., Bavestrello, G., Tunesi, L., &
+   Toma, M. (2026). From shallow to deep water: a large-scale assessment of seafloor marine macrolitter in the
+   Italian seas by ROV-imaging. *Marine Pollution Bulletin* 230, 119809. doi:10.1016/j.marpolbul.2026.119809
+   [full]. Offshore, 40–2,129 m: used for composition only.
+8. Kuroda, M., Uchida, K., Tokai, T., Miyamoto, Y., Mukai, T., Imai, K., Shimizu, K., Yagi, M., Yamanaka, Y., &
+   Mituhashi, T. (2020). The current state of marine debris on the seafloor in offshore area around Japan.
+   *Marine Pollution Bulletin* 161, 111670. doi:10.1016/j.marpolbul.2020.111670 [full].
+9. Fleet, D., Vlachogianni, T., & Hanke, G. (2021). *A Joint List of Litter Categories for Marine Macrolitter
+   Monitoring*. EUR 30348 EN, JRC. doi:10.2760/127473 [page].
+10. Richardson, K., Hardesty, B. D., & Wilcox, C. (2019). Estimates of fishing gear loss rates at a global scale:
+    a literature review and meta-analysis. *Fish and Fisheries* 20(6), 1218–1231. doi:10.1111/faf.12407 [full].
+11. Havens, K. J., Bilkovic, D. M., Stanhope, D., Angstadt, K., & Hershner, C. (2008). The effects of derelict blue
+    crab traps on marine organisms in the lower York River, Virginia. *North American Journal of Fisheries
+    Management* 28, 1194–1200. doi:10.1577/M07-014.1 [full].
+12. VIMS Center for Coastal Resources Management. *Marine Debris Location & Removal — Fact Sheet* (undated web
+    page). https://ccrm.vims.edu/marine_debris_removal/fact_sheet.html [page].
+13. Natural Resources Consultants (2011). *Deepwater Sidescan Sonar and Camera Surveys for Derelict Fishing Nets
+    and Rockfish Habitat*. Report to the Northwest Straits Foundation.
+    https://Fisheries.noaa.gov/s3/dam-migration/deepwater_nets_surveys_dnr.pdf [full].
+14. Merrifield, S. T., Celona, S., McCarthy, R. A., Pietruszka, A., Batchelor, H., Hess, R., Nager, A., Young, R.,
+    Sadorf, K., Levin, L. A., Valentine, D. L., Conrad, J. E., & Terrill, E. J. (2023). Wide-area debris field and
+    seabed characterization of a deep ocean dump site surveyed by autonomous underwater vehicles. *Environmental
+    Science & Technology* 57(46), 18162–18171. doi:10.1021/acs.est.3c01256 [page].
+15. Halsband, C., Sørensen, L., Booth, A. M., & Herzke, D. (2020). Car tire crumb rubber: does leaching produce a
+    toxic chemical cocktail in coastal marine systems? *Frontiers in Environmental Science* 8.
+    doi:10.3389/fenvs.2020.00125 [full].
+16. Gent, A. N., & Walter, J. D. (eds.) (2006). *The Pneumatic Tire*. NHTSA, report DOT HS 810 561 (chapter 1 by
+    B. E. Lindenmuth) [full, chapter 1].
+17. The SHIPS Project. *1000 Tyres Project* — survey pages. https://1000tyres.org.3hconsulting.com/search.html
+    [page].
+18. Cyprus Mail (2022-11-01). Over 1,500 kilos of rubbish removed from Pomos harbour [page].
+19. Afloat.ie (2025-11-15). Mallorca marina lifts 1.1 tonnes of rubbish from seabed [page].
+20. EMSA. *Clean Harbour Cherbourg Project (France)* (2023 edition) [page].
+21. L'Unione Sarda (2026-05-16). Arbatax: tires and plastic among the 600 kg of waste recovered from the port's
+    seabed [page].
+22. Kagawa Prefecture, Environment Management Division. *潜水士調査* (diver survey of seabed litter), year not
+    stated. https://www.pref.kagawa.lg.jp/documents/10760/sensuido_1.pdf [full].
+23. PADI Japan blog (2024). Shizuura fishing port underwater clean-up, 3 June 2024.
+    https://blog.padi.com/jp/?p=540380 [page].
+24. Okayama Prefecture Marine Litter Countermeasures Promotion Council (2026-08). *今日からできる海ごみゼロアクション*.
+    https://www.pref.okayama.lg.jp/uploaded/attachment/419760.pdf [full].
+25. EIC Net, environmental glossary: 海岸漂着物処理推進法 (2009; amended June 2018).
+    https://eic.or.jp/ecoterm/?act=view&serial=4569 [page].
+26. Ryukyu Shimpo / Kyodo (2023-08-28). WWF Japan ghost-gear survey off Nishi-Izu [page].
+27. Lee Fisher Fishing. *Blue Crab Trap 24″ × 24″ × 19″H*, product page (1.5″ hex mesh, galvanised or vinyl-coated
+    wire) [page].
+28. Nippon Steel Drum Co. Open-head drum specification page (en-A2.pdf; table garbled) [page, UNCERTAIN]. JSA,
+    *JIS Z 1600:2017 Open head steel drums*, preview (foreword: 1.0–1.6 mm plate widely used) [page].
+29. Ministry of the Environment / Tokyo University of Marine Science and Technology (March 2025). FY2024 survey of
+    floating and seabed litter in offshore waters, summary report. https://www.env.go.jp/content/000415172.pdf
+    [full].
+
+**Project sources:** the simulator review of 2026-11-12 (`simulator_analysis.md`); the July 2026 Shiraishi-jima
+harbour recordings; the 2026-09-07 beach box; version 1 of this document (August 2026); `project_synthesis.md`.
+
 ---
- 
-### F8 — Tangled compliant mass
- 
-**Contains:** rope coils and mooring-line bundles, net balls and trawl offcuts, garden-hose coils,
-cable.
- 
-**What it tests.** Rope and textile were 42 % of items in marina surveys — by frequency this is
-arguably the most important family in the whole inventory, and it is the one least represented in AUV
-shipwreck-derived training data. Acoustically it is the opposite of F1: a **diffuse, rough,
-many-scatterer volume** with no specular face at all. Expect a weak but broadly aspect-independent
-return and a fuzzy, unstable outline — a distinct detector signature worth characterising in its own
-right, and a likely source of false positives against sediment texture.
- 
-**Surrogates:**
- 
-| Object | Where to order | Why it is the right stand-in |
-|---|---|---|
-| **PP/nylon mooring rope, 12–16 mm × 20–30 m, coiled to ~50 cm** | Any chandler or home centre; MonotaRO and Amazon both stock (search 「クレモナロープ 16mm」 / 「PPロープ」) | The literal object. Coil size is a free variable: the same rope coiled to 30, 50 and 80 cm gives a controlled size sweep of a single physical object, which no other family offers. Sinking types (クレモナ / nylon) preferred over floating PP. |
-| **Fishing net offcut, balled** | [MonotaRO — 漁網 / 雑漁具 category](https://www.monotaro.com/s/c-135814/); or offcuts free from a local fishing co-op | Net balls are called out explicitly in the source list. A co-op will usually hand over scrap netting, and the "compacted ball of indeterminate shape" caveat in the source document is best addressed by using genuinely scrap material rather than new. |
-| Garden-hose coil, 30–60 cm dia. | Any home centre | Cheap, dense, holds its shape better than rope — a mid-point between F8 and F5. |
- 
-**Rigging note.** Compliant targets change shape between deployments. Photograph and measure each one
-on deck before every drop and log the configuration, or the family becomes uninterpretable.
- 
----
- 
-### F9 — Small hard threshold objects
- 
-**Contains:** glass bottles (一升瓶 39.8 cm, beer 大瓶 31 cm), 2 L PET bottles, cans.
- 
-**What it tests.** These sit at or below the along-track resolution cell at working ranges and are
-included **as deliberate predicted-invisible controls** — objects whose non-detection is a
-measurement, not a failure. Glass has the better impedance contrast of the two and sinks
-unballasted; PET is near-neutral and needs filling. Both are among the highest-frequency real seabed
-items in Japanese waters, so their detectability floor is operationally meaningful, not academic.
- 
-**Surrogates:**
- 
-| Object | Where to order | Why it is the right stand-in |
-|---|---|---|
-| **一升瓶 (1.8 L sake bottle), 39.8 cm × ~10.5 cm dia.** | Free from any liquor store or restaurant; also sold empty on Rakuten (search 「一升瓶 空瓶」) | The tallest single item in this family and distinctly Japanese. Sinks when filled with water, no ballast needed. Glass–water contrast is modest but real. |
-| Beer 大瓶 (633 mL), 31 cm | Same | Second point on a length axis with the same material and diameter class. |
-| **2 L PET bottle**, 31 × 9 cm | Any convenience store | Top seabed item in Osaka Bay per the source document. Fill with sand for a hard target, with water for a near-invisible one — one object, two experiments. |
- 
-**Design rule.** Deploy these in a known cluster with RTK-fixed corners rather than singly. A cluster
-that produces one blob rather than four contacts is itself a resolution measurement.
- 
----
- 
-## 4. Matched pairs — the controlled contrasts worth building in
- 
-The single biggest weakness of an ad-hoc target set is that every object differs from every other in
-several ways at once, which is exactly the "one independent variable per phase" problem the July
-campaign ran into. Five pairs in this catalogue vary **one** thing:
- 
-| Pair | Variable isolated | Cost |
-|---|---|---|
-| 一斗缶 (steel) vs 50 L folding container (PP), similar envelope | Material, at roughly matched box geometry | ~¥3,500 |
-| Steel pail can 20 L vs plastic pail can 20 L | Material, at *identical* geometry | ~¥2,500 |
-| 50 L solid-wall container vs 50 L mesh container | Fill fraction, identical envelope and material | ~¥4,000 |
-| PVC VU100 tube vs steel 単管 tube, both ~1 m | Material, at matched length and near-matched diameter | ~¥3,500 |
-| Bare tyre vs tyre on steel rim | Internal reflector, identical silhouette | ~free |
-| PVC pipe at 0.5 / 1 / 2 m | Length, at fixed diameter and material | ~¥3,000 |
-| Concrete block ×1 / ×2 / ×3 stacked | Height, at fixed footprint and material | ~¥1,000 |
-| Tyre lying flat vs standing on edge | Relief, at fixed material and mass | free |
- 
-Seven controlled contrasts for under ¥20,000 total, each answerable in a single afternoon of paired
-passes. This is the cheapest possible route to a defensible detectability characterisation.
- 
----
- 
-## 5. Recommended purchase tiers
- 
-### Tier 1 — buy first (~¥15,000, covers all nine families at one point each)
- 
-1. 一斗缶 18 L × 2 — F1
-2. Steel pail can 20 L × 1 **and** plastic pail can 20 L × 1 — F2 + material pair
-3. Concrete blocks × 10 — F3 + universal ballast
-4. Mesh folding container 50 L × 1 **and** solid folding container 50 L × 1 — F4 + fill-fraction pair
-5. PVC pipe VU100 1 m × 2, plus one 0.5 m and one 2 m — F5 + length sweep
-6. Heavy PVC traffic cone 700 mm × 2 — F6
-7. Used car tyres × 3, one on a rim — F7 (free locally)
-8. Sinking rope 16 mm × 30 m — F8
-9. 一升瓶 × 2, 2 L PET × 2 — F9 (free)
-### Tier 2 — add once Tier 1 has produced first results
- 
-- Steel 単管 tube 1.5 m × 2 (completes the F5 material pair)
-- Fire extinguisher, 10-型 (dense small cylinder)
-- Octopus pot with cast-in ballast × 2 (region-real, drop-and-go)
-- Junk bicycle × 1 (the flagship F4 object)
-- Crab/whelk folding pot × 2
-- Scrap net ball from a local co-op
-### Tier 3 — only if the campaign schedule allows
- 
-- 200 L empty steel drum (needs lifting gear, permission, and a plan)
-- 20-cone bulk set for a spatial-density / detection-probability field
-- Wooden pallet and sleeper (transport-limited, car only)
----
- 
-## 6. Rigging, ballasting, recovery, permissions
- 
-**Ballast changes the acoustics, so log it.** Every hollow target needs weight. Two options, and they
-are not equivalent:
- 
-- **External ballast** — object strapped to a concrete block on a 20–30 cm strop. Preserves any
-  internal air, keeps the object's own acoustic properties intact, but adds a second target to the
-  scene. Preferred for the material-contrast pairs, since the block is common to both arms and
-  cancels out.
-- **Internal flooding / sand fill** — no extra object in the scene, but changes the target's internal
-  impedance completely. Fine for F9 and for anything where the shell dominates.
-Record which was used, per object, per deployment. A can that was air-filled on Tuesday and flooded
-on Thursday is two different targets.
- 
-**Rigging.** Every object leaves the water. Rig each with a marked recovery line to a small subsurface
-float, or to a numbered surface buoy set well clear of the survey lines so it does not appear in the
-imagery. Take an RTK fix at the moment of release, and note that the object does not land where it
-was released — it kites. The USBL pinger on the instrumented target exists precisely to resolve this,
-and after the July tyre episode at least one object per session should carry it.
- 
-**Position discipline.** Log the *bearing* each elongated target was laid on, not just its position.
-For F5 and F1 the seabed orientation is the independent variable of the whole aspect experiment, and
-it is unrecoverable after the fact.
- 
-**Permissions and environment.** Deploying objects on a fishing-harbour bed requires the harbourmaster's
-and usually the fishing cooperative's agreement. Frame it as a recoverable, same-day, fully-inventoried
-deployment with a written object list and count-in/count-out. Nothing plastic, buoyant or fragmenting
-should be left even briefly unattended. Concrete blocks, steel cans and glass bottles are the easiest
-to justify; tyres, netting and PET the hardest, despite being the most realistic.
- 
----
- 
-## 7. Caveats on the surrogate mapping
- 
-1. **Real objects are not product-shaped.** The source document says this and it is the main limit
-   here: a new 一斗缶 is a clean rectangular prism, and a real one on a harbour floor is dented,
-   partly buried, biofouled and half-full of sediment. Everything in this catalogue systematically
-   over-estimates detectability for that reason.
-2. **Biofouling and sediment interaction are not simulated at all.** A target deployed for two hours
-   is acoustically nothing like one that has been down for two years. The source document's note that
-   fouling can double an acoustic footprint while hiding an object optically cuts directly against
-   any inference from these trials to real-litter surveys.
-3. **The family scheme is a hypothesis, not a result.** It groups objects by what *should* matter —
-   flat face, curved face, fill fraction, taper, material, compliance. Whether those axes actually
-   predict detector behaviour is the thing being tested. If two families turn out to be
-   indistinguishable in the data, that is a finding, and the scheme should be collapsed accordingly.
-4. **Frequency-of-occurrence and detectability are not correlated.** The most common real objects
-   (rope, film, PET, small fragments) are among the hardest to detect, and the most detectable
-   (drums, blocks, metal cans) are relatively rare. A detector trained and evaluated on this target
-   set will over-report the easy classes. Any operational claim must be weighted by the density
-   figures in §3.3 and §4 of the source document, not by per-object detection rates.
-5. **Nothing here validates the resolution or shadow models.** These objects are the instrument for
-   testing those models. If the measurements contradict the geometric predictions, the measurements
-   win.
----
- 
-*End of target families and surrogates.*
+
+## Appendix A — Conditional beach-day kit (only if a beach day happens)
+
+Its purpose is to narrow the flash bracket (R1 of the frozen acceptance criteria) by measuring it.
+
+| Item | Use |
+|---|---|
+| The NAFCO boxes we already own | Validation class |
+| `panel_upright` | A flat board standing vertical (for example plywood or a steel sheet of about 0.9 × 0.6 m, braced), at a known heading. Passes every 2° within ±10° of broadside, at fixed gain and range, two passes per heading |
+| `corner_reflector` | A trihedral of 0.2–0.3 m, to measure the beam pattern directly |
+
+- Add both classes to the simulator only if the day is confirmed.
+- Before the day, write an amendment to the frozen acceptance criteria defining the new test.
+
+## Appendix B — Version 1's shopping list, condensed
+
+Version 1 listed orderable surrogates for all nine families: the 18 L tin, PP containers solid and mesh, steel and
+plastic pails, JIS concrete blocks, PVC and steel tubes, cones, used tyres, rope, bottles. It also listed matched
+material pairs, rigging and ballast rules, and permissions advice for fishing harbours. The full version stays on
+the owner's machine. Of that list, only the NAFCO boxes (owned) and the Appendix A kit are relevant now.
