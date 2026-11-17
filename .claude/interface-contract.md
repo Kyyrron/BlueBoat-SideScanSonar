@@ -80,11 +80,11 @@ both).
 | `/side_scan_sonar/ground_truth/contacts` | `std_msgs/String` (JSON) | `sss_sim_node` → offline analysis (`mission_metrics --source jsonl` on a dump); BlueBoat-Perception's dataset labels (dataset mode in a world only, since 2026-10-16) | default 10 | **Simulation-only, additive.** Empty under the ray-cast renderer (no contacts yet). Schema: `BlueBoat-SSS-Sim/blueboat_sss_sim/docs/topics.md`. `ghost`/`via` mark a multipath image of the same `object_id` — aggregate on `(object_id, via)`; both default to direct when absent. `shadow_bins` and `visible` are read off the rendered visibility mask (a training label measures the image), so a consumer using them as a flat-bottom *height* estimator must invert the geometry itself. |
 | `/side_scan_sonar/ground_truth/sensor` | `std_msgs/String` (JSON) | `sss_sim_node` → offline analysis (`analysis/sea_validation.py`, the Gazebo sea gate); BlueBoat-Perception's dataset labels (dataset mode in a world only) | default 10 | **Simulation-only, additive** (2026-10-08). Every ping cycle: the vehicle pose at the ping time and the transducer pose each side was rendered from (the lever arm rotated by the full attitude). Schema: `BlueBoat-SSS-Sim/blueboat_sss_sim/docs/topics.md`. |
 | `/side_scan_sonar/ground_truth/run_info` | `std_msgs/String` (JSON) | `sss_sim_node` → the GCS (`core/sim_run_info.py`, stored as a session's `metadata.json["simulation"]`) | RELIABLE, TRANSIENT_LOCAL, depth 1 at both ends (CM-4) | **Simulation-only, additive (2026-11-11).** The run's provenance: renderer, profile path + sha256, world digest, seeds, acquisition, build stamp, whether the installed simulator is its source tree. `ground_truth/sensor` gained `run_id` and `range_scale` the same day (true slant range → imaged range, `1500 / c` under the ray-cast); BlueBoat-Perception's `core/sim_labels.py` multiplies its label ranges by it. Schema: BlueBoat-SSS-Sim `docs/topics.md` |
-| `/sss_processor/processed` | `blueboat_interfaces/ProcessedSSSPing` | `sss_processor_node` → GCS, BlueBoat-Belief | BEST_EFFORT, depth **200** at the GCS, depth 50 at Belief | Slant-range corrected, water column removed; sign of `*_y` = side (**+y port, −y starboard**). |
+| `/sss_processor/processed` | `blueboat_interfaces/ProcessedSSSPing` | `sss_processor_node` → GCS, BlueBoat-Belief | BEST_EFFORT, depth **200** at the GCS, depth 50 at Belief | Slant-range corrected, water column removed; sign of `*_y` = side (**+y port, −y starboard**). `transducer_x_offset` = the transducers' fore/aft arm from the row's pose (−0.345 m since 2026-11-15, was 0.0): a consumer places the samples from `pose + R(yaw)·(arm, 0)` (§4.3). |
 | `/sss_processor/log/enable` | `std_msgs/Bool` | GCS (Record ON/OFF) → `sss_processor_node` | default | |
 | `/sss_ai/seabed_image` | `sensor_msgs/Image` 32FC1 | GCS → BlueBoat-Perception | RELIABLE, KEEP_LAST 32, VOLATILE (both ends, CM-4) | **Since 2026-10-16.** Every seabed image, recording or not: the raw float dB (= the session's `_world.npz:intensity_db`). `header.frame_id` = the image key `"<stream_id>/<image_id>"`, not a TF frame. Contract: `BlueBoat-Perception/docs/topics.md`. |
 | `/sss_ai/seabed_image/png` | `sensor_msgs/Image` mono8 | GCS → BlueBoat-Perception | same | The display PNG, byte-equal to the saved one. |
-| `/sss_ai/seabed_image/metadata` | `std_msgs/String` (JSON envelope) | GCS → BlueBoat-Perception | same | The picture metadata (schema 5) in an envelope carrying the key. |
+| `/sss_ai/seabed_image/metadata` | `std_msgs/String` (JSON envelope) | GCS → BlueBoat-Perception | same | The picture metadata (schema 5) in an envelope carrying the key. Its `georef` is convention 2, or convention 3 since 2026-11-15 when the pings carry the fore/aft arm (`lever_arm_m.x`, §4.3). |
 | `/sss_ai/seabed_analysis` | `std_msgs/String` (JSON) | GCS → *(no consumer in the current tree)* | default | Image metadata, **never pixels**. Schema = the picture metadata's: **5 since 2026-10-16** (4 before). `detections` is always `[]`; the detections are on `/sss_ai/detections`. |
 | `/sss_ai/detections` | `vision_msgs/Detection2DArray` | **BlueBoat-Perception → GCS**, BlueBoat-Belief (RELIABLE, depth 50). Dev and simulation only: BlueBoat-Replanner's `replanner_emulator` (`emulator_launch.py`) publishes it **instead of** Perception, never beside it | default (RELIABLE, 10) | **The station's one detection source** (owner's order, 2026-10-16): one array per image, possibly empty. Every map marker, waterfall marker and `detections.csv` row comes from here; the GCS runs no detector. uid = `2_000_000 + 16·image_id + k`, restarting with `image_id` at every START. Since 2026-10-23 only detections with `confidence >= map_min_confidence` (0.10) are published here; the image record keeps all, same uids; ≤ 999 per image. |
 | `/sss_ai/image_records` | `std_msgs/String` (JSON, `blueboat_perception/image_record/1`) | BlueBoat-Perception → BlueBoat-Belief (optional companion since 2026-11-12), offline analysis | RELIABLE, KEEP_LAST 100, VOLATILE (both ends, CM-4) | One per image, with or without detections (`detections: []` = searched, nothing found; `null` = no pixels). Offline over the session = live: byte-equal canonical JSON minus `provenance` / `source`. **Belief reads four things from it and nothing else:** the row span (`time.t_min_s` / `t_max_s`), whether the detector searched the image (`processing.detector.status == "ran"` and `detections` not `null`), `processing.detector.dummy`, `processing.calibration.calibrated`. It never takes a detection from a record. Belief works without the topic (`BlueBoat-Belief/blueboat_belief/docs/MATH.md` §8). |
@@ -168,17 +168,57 @@ brightness, ever. Evidence: `simCLAUDE.md` NC #4/#6/#15/#17,
 **Transducer lateral offset — agreed at 0.285 m** (BR-101447 hull spacing / 2; checked
 2026-10-16): `TRANSDUCER_Y_OFFSET_PORT_M / _STBD_M` in `sss_processor_node.py` (since SSS
 `994a74b`), mirrored in the GCS's `core/svlog.py`, and `mount_y_abs_m: 0.285` in the
-simulator's `config/default_sonar.yaml`. **Submersion agreed at 0.22 m (2026-11-02), fore/aft still disagrees:** field-calibration
+simulator's `config/default_sonar.yaml`. **Submersion agreed at 0.22 m (2026-11-02):** field-calibration
 pass 3 measured the installation (rear-most hull holes, the same for every corpus):
 `sensor_depth_m` **0.22** in the simulator and `TRANSDUCER_SUBMERSION_M` **0.22** in
-`sss_processor_node` / the GCS's `core/svlog.py` (both moved the same day). Fore/aft: the
-simulator's `mount_x_m` is **−0.345** (the drawing, vs the hull centre); the processor's
-`TRANSDUCER_X_OFFSET_M` stays 0.0 and no georeference uses a fore/aft arm. That arm is
-relative to the navigation fix (−0.60 m measured on the pool corpus with the GPS near the
-bow), so it belongs in a per-session setting; planned in `~/calib/pass3/GCS_PLAN.md` item 4. The seabed pictures
-georeference with it since 2026-10-16 (georef convention 2, schema 5). `simTODO.md` closed
+`sss_processor_node` / the GCS's `core/svlog.py` (both moved the same day). The seabed pictures
+georeference with the lateral offset since 2026-10-16 (georef convention 2, schema 5). `simTODO.md` closed
 its old 0.20 / 0.0 disagreement item on 2026-10-19. The simulator's render fixture,
 frozen at 0.20 m, was rebaselined that day; re-rendering at 0.20 reproduced it bit for bit.
+
+**Transducer fore/aft arm — agreed at −0.345 m (2026-11-15), adopted, not measured.** + forward
+of the pose `/blueboat/odom` reports, so 0.345 m aft.
+- **Where it lives:** `mount_x_m` in the simulator's `config/default_sonar.yaml` (the drawing:
+  rear-most hull mounting holes against the hull centre); `TRANSDUCER_X_OFFSET_M` in
+  `sss_processor_node.py`, the default of its node and launch parameter `transducer_x_offset_m`,
+  published unchanged in every `ProcessedSSSPing.transducer_x_offset` (the pose and the `*_y`
+  values do not move); mirrored in the GCS's `core/svlog.py` (config
+  `alignment.transducer_x_offset_m`, used for replay and session rebuild; a live ping carries the
+  processor's value). BlueBoat-SSS `tests/test_fore_aft_arm.py` holds the three together.
+- **A consumer places a ping from `pose + R(yaw)·(arm, 0)`.** The GCS does since 2026-11-15:
+  mosaic, swath line, waterfall click, and the seabed pictures, which then say georef
+  **convention 3** (`lever_arm_m.x` = the arm; same keys, schema still 5; a picture built from
+  pings without an arm stays convention 2).
+- **BlueBoat-Belief does since 2026-11-15** (CR-BEL-1; Belief `DESIGN.md` D-12). It places
+  samples, contact-look ranges and detection poses from the transducers' point, with the arm of
+  each ping. It keeps the turn gate, the frozen-pose detector and the odom → map fit on the
+  navigation pose. Its grids state the arm in `model_params_json.transducer_x_offset`
+  (`/diagnostics`: `summary.transducer_x_offset_min_m` / `_max_m`). With an arm of 0 nothing
+  moves. On the simulated session `b3a_sea_validation`, re-placed, the two opposite passes over
+  each of four tyres went from 0.68–0.70 m apart to ≤ 0.023 m (GCS side, session 06: 0.70–0.72 m
+  before, 0.01–0.03 m after).
+- **BlueBoat-Perception does not yet** (CR-PER-2 of
+  `~/ros2_ws/sim_runs/sim_acceptance/06_sss/handoff_06.md`; Belief `REQUESTS.md` R-8): its
+  detections are 0.345 m along-track off, the sign following the heading, i.e. 0.69 m between
+  two opposite passes. Belief takes them as they come, so until then a contact sits 0.345 m
+  from the grid evidence of the same pass.
+- **The Replanner's look predictor** places a planned look from the navigation pose. The arm
+  shifts the swath along-track only; the lateral range is unchanged.
+- **Old recordings:** `transducer_x_offset_m:=0.0` (processor) and
+  `alignment.transducer_x_offset_m: 0.0` (GCS) re-process a recording as it was placed before
+  2026-11-15. Belief: `ping: {transducer_x_offset_source: config, transducer_x_offset_m: <arm>}`
+  in its `config:=` / `cli/replay --config` file. A bag recorded before 2026-11-15 carries 0.0 in
+  the field even where the simulator rendered from −0.345 m: −0.345 re-places it, and 0.0
+  reproduces it.
+- **Status:** the value is the simulator's, recorded as adopted in
+  `~/ros2_ws/sim_runs/sim_acceptance/owner_measurements.yaml`. On the real boat the arm counts
+  from the navigation fix (−0.60 m measured on the pool corpus with the GPS near the bow): open.
+- **Deployment:** after a change of the constant, rebuild `~/ros2_ws/install`
+  (`colcon build --packages-select blueboat_sss`); the GCS and Belief take a live ping's arm from
+  the message, so a stale installed processor silently keeps the old value (Belief's
+  `/diagnostics` then shows `summary.transducer_x_offset_*` = 0.0). Belief's own change is in the
+  source tree only until `colcon build --packages-select blueboat_belief_interfaces
+  blueboat_belief`: the installed node of 2026-11-12 places from the navigation pose.
 
 **Ping rate — VERIFIED, corrected 2026-10-27:** period `max(msec_per_ping, 2R/c + ~3 ms)`.
 The corpus's `max(50 ms, 2R/c + ~3 ms)` (the spec sheet's "20 pings/s up to 30 m") is
@@ -281,7 +321,7 @@ boat-relative grid).
 | Frame on the wire | `/blueboat/manual_target` **world**; `/blueboat/pinger_coordinates` and `/controller_target` **body**; `/monitoring_data` **world in every branch**. `master_control` converts the manual target via `inRobotFrame()` before `solve_LoS()` and passes the pinger vector through, so both are robot-frame at the solver — correct by design. |
 | MAVROS twist | `/mavros/local_position/odom` has `child_frame_id: base_link`: `twist` is body-frame, `pose` world-frame. `robot_interface` re-expresses **pose** into a boot-relative frame and passes **twist** through untouched. |
 | Gazebo generation | ROS 2 **Jazzy** + Gazebo **Harmonic** (Fortress not installed). `blueboat_sss_sim` emits `gz-sim-*` names throughout. `blueboat_description` is still Fortress-named (`ignition-gazebo-*-system`) and loads only through Harmonic's deprecated-name shim, which warns per plugin and is removed in gz-sim 9 — the port is a post-v1.0 item. |
-| TF | `project_synthesis.md` §5.2 specifies `map → odom → base_link → sss_link` with lever-arm offsets. **No module publishes or consumes that tree, and no module reads TF at all.** TF is published **in simulation and bag replay only**, by two things, neither on a real-robot run: the external `pose_to_tf` node that `blueboat_description/launch/upload_rov_launch.py` starts (a single `world → blueboat/base_link` for RViz) and `robot_state_publisher` (`state_publisher_launch.py:22`: `/tf` and `/tf_static` from the URDF). Geometry is handled per-module; the lever-arm point surfaces as the transducer-offset disagreement (§4.3). |
+| TF | `project_synthesis.md` §5.2 specifies `map → odom → base_link → sss_link` with lever-arm offsets. **No module publishes or consumes that tree, and no module reads TF at all.** TF is published **in simulation and bag replay only**, by two things, neither on a real-robot run: the external `pose_to_tf` node that `blueboat_description/launch/upload_rov_launch.py` starts (a single `world → blueboat/base_link` for RViz) and `robot_state_publisher` (`state_publisher_launch.py:22`: `/tf` and `/tf_static` from the URDF). Geometry is handled per-module; the lever-arm point surfaces as the transducer offsets of §4.3 (one set of values since 2026-11-15; the GCS and Belief apply the fore/aft arm, Perception does not yet). |
 
 ### 4.7 Other served interfaces (added 2026-10-20)
 

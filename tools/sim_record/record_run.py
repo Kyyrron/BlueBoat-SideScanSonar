@@ -14,6 +14,8 @@ What it does, in order (details: README.md next to this file):
   6. at the last waypoint (or a stall, ``--stop-after-s``, ``--max-wall-min``, Ctrl-C): Record OFF, STOP,
      ``default`` on /blueboat/input_str, the launcher's own stop;
   7. ``<out>/<name>/run.json`` + logs; the session is where the GCS wrote it (``--session-name`` renames it).
+     Since 2026-11-16 (CR-03-4) run.json also copies the simulator's run_info: sim_config, thrust_gain, the sea
+     schedule's SHA-256, the simulator's commit and dirty flag, plus a digest of the installed Control files.
 
 Standard library only; the two drivers run in the workspace environment (``~/ros2_ws/env.sh``).
 """
@@ -56,6 +58,66 @@ def running() -> list[str]:
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+RUN_INFO_DIR = Path.home() / ".cache/blueboat_sss_sim/runs"   # sss_sim_node's run_info_dir default
+CONTROL_INSTALL = WS / "install/blueboat_control"
+
+
+def tree_digest(root: Path) -> dict | None:
+    """SHA-256 over every regular file under ``root`` (sorted relative path + file SHA-256), or None.
+
+    The exact Control code on this machine (owner, 2026-11-16: the files as they are, not git)."""
+    root = Path(root)
+    if not root.is_dir():
+        return None
+    h, n = hashlib.sha256(), 0
+    for p in sorted(q for q in root.rglob("*") if q.is_file() and not q.is_symlink()):
+        h.update(f"{p.relative_to(root).as_posix()}\0{sha256(p)}\n".encode())
+        n += 1
+    return {"path": str(root), "sha256": h.hexdigest(), "files": n}
+
+
+def find_run_info(dirs, since: float, world: Path) -> Path | None:
+    """The simulator's run_info file of this run: the newest one written since ``since`` for ``world``.
+
+    Sound because this tool refuses to start beside another simulation."""
+    best = None
+    for d in dirs:
+        for f in Path(d).expanduser().glob("*.json"):
+            try:
+                if f.stat().st_mtime < since:
+                    continue
+                doc = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            ctx = doc.get("simulation_context") or {}
+            named = {str(Path(w).expanduser().resolve()) for w in
+                     (ctx.get("world_dir"), (doc.get("world") or {}).get("dir")) if w}
+            if str(Path(world).resolve()) in named and (best is None or f.stat().st_mtime > best.stat().st_mtime):
+                best = f
+    return best
+
+
+def sim_fields(doc: dict | None, path: Path | None = None) -> dict:
+    """The run-configuration keys of a run record (CR-03-4, additive 2026-11-16), from the simulator's
+    run_info. A value the run_info does not carry is None, never inferred."""
+    doc = doc or {}
+    ctx = doc.get("simulation_context") or {}
+    git = (doc.get("build") or {}).get("git") or {}
+    dirty = git.get("dirty_files")
+    return {
+        "run_info": ({"file": str(path) if path else None, "run_id": doc.get("run_id"),
+                      "event": doc.get("event"), "has_context": bool(ctx)} if doc else None),
+        "sim_config": ctx.get("sim_config"),
+        "thrust_gain": (ctx.get("simulation_interface") or {}).get("thrust_gain"),
+        "sea_schedule": ctx.get("sea_schedule"),
+        "sea_schedule_sha256": ctx.get("sea_schedule_sha256"),
+        "simulator_commit": git.get("commit"),
+        "simulator_dirty": (dirty > 0) if isinstance(dirty, int) else None,
+        "simulator_dirty_files": dirty if isinstance(dirty, int) else None,
+        "simulator_running_digest": (doc.get("source_check") or {}).get("running_digest"),
+    }
 
 
 def resolve_sensor(name: str) -> tuple[str, str]:
@@ -126,6 +188,7 @@ def main() -> int:
         raise SystemExit(f"the installed simulator is not the source tree ({prov_line}); rebuild, or --allow-stale")
     out.mkdir(parents=True)
     t0 = time.time()
+    control_code = tree_digest(CONTROL_INSTALL)              # the Control files this launch runs
 
     def say(s: str) -> None:
         line = f"{time.strftime('%H:%M:%S')} {s}"
@@ -247,6 +310,18 @@ def main() -> int:
             "process_died": r"process has died"}.items()},
         "left_running": running(),
     }
+    # additive (2026-11-16, CR-03-4): how the simulator was configured, from its own run_info
+    info_dirs = [RUN_INFO_DIR] + [Path(x.split(":=", 1)[1]) for x in extra
+                                  if x.startswith("run_info_dir:=") and x.split(":=", 1)[1]]
+    info_file = find_run_info(info_dirs, t0, world)
+    try:
+        info_doc = json.loads(info_file.read_text()) if info_file else None
+    except (OSError, ValueError):
+        info_doc = None
+    run.update(sim_fields(info_doc, info_file))
+    run["control_code"] = control_code
+    if info_doc is None:
+        say("no simulator run_info found for this run: the run-configuration fields are null")
     (out / "run.json").write_text(json.dumps(run, indent=1))
     if session and session.exists():
         (session / "recorder_run.json").write_text(json.dumps(run, indent=1))

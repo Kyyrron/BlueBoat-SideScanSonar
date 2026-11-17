@@ -38,7 +38,8 @@ lines or opt-in diagnostics (§4.3).
 
 **D6 — TF tree.** §5.2's `map → odom → base_link → sss_link` with lever-arm offsets: **no
 module consumes TF and none of those four frames exists** (§4.6 TF); the lever-arm point
-surfaces as the transducer-offset disagreement (§4.3).
+surfaces as the transducer offsets of §4.3 (one set of values since 2026-11-15, the fore/aft
+arm adopted, not measured; the GCS and Belief apply it, Perception does not yet).
 
 **D7 — Interface boundary, partly claimed (2026-10-16; chain re-stated 2026-10-20).** The
 detector, the belief layer (multi-channel Bayesian grid: `p_target`, `n_observations`,

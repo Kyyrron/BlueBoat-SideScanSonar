@@ -66,6 +66,23 @@ images, the range changes actually applied, the cross-track error of the boat ag
 recording, wall time, GPU peak, the count of `render failed` / `behind the sim clock` lines in the
 launch log, and anything left running.
 
+**Run configuration (additive, 2026-11-16, CR-03-4).** `run.json` also copies the simulator's own run
+record (`run_info`, which `sss_sim_node` writes to `~/.cache/blueboat_sss_sim/runs/<run_id>.json`).
+The tool takes the newest such file written during the run for this world:
+
+| Key | From |
+|---|---|
+| `run_info` | `{file, run_id, event, has_context}` of that file, or `null` if none was found |
+| `sim_config` | `run_info.simulation_context.sim_config` |
+| `thrust_gain` | `simulation_context.simulation_interface.thrust_gain`; `null` with a context present means no `thrust_gain:=` override was passed, so `simulation_interface`'s default applied |
+| `sea_schedule`, `sea_schedule_sha256` | `simulation_context.sea_schedule`, `.sea_schedule_sha256` |
+| `simulator_commit`, `simulator_dirty`, `simulator_dirty_files` | `run_info.build.git`, the installed simulator's build stamp |
+| `simulator_running_digest` | `run_info.source_check.running_digest` |
+| `control_code` | `{path, sha256, files}`: a SHA-256 over every file of `~/ros2_ws/install/blueboat_control` (what the launch runs), computed at launch. It is a digest of the files as they are, not git |
+
+A value the `run_info` does not carry (an older simulator, no run context) is `null`, never inferred.
+Records written before this change simply lack these keys.
+
 ## Sensors
 
 `--sensor` is `geometric`, a profile file, or the short name of a ray-cast variant
