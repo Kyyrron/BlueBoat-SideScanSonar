@@ -39,7 +39,7 @@ lines or opt-in diagnostics (§4.3).
 **D6 — TF tree.** §5.2's `map → odom → base_link → sss_link` with lever-arm offsets: **no
 module consumes TF and none of those four frames exists** (§4.6 TF); the lever-arm point
 surfaces as the transducer offsets of §4.3 (one set of values since 2026-11-15, the fore/aft
-arm adopted, not measured; the GCS and Belief apply it, Perception does not yet).
+arm adopted, not measured; the GCS, Belief and Perception apply it; Perception since `0d55d76`, 2026-11-15).
 
 **D7 — Interface boundary, partly claimed (2026-10-16; chain re-stated 2026-10-20).** The
 detector, the belief layer (multi-channel Bayesian grid: `p_target`, `n_observations`,
@@ -69,10 +69,12 @@ the implementation nothing goes to ArduPilot: `master_control` follows the path 
 and streams RC override (Control N6). `project_synthesis.md` §5.1, §5.2, §7.5, §9 D5 now name
 Control's live path update (`/blueboat/update_path`, `/blueboat/path_progress`,
 `/blueboat/path_update_event`; §4.1) as the mechanism. It is built and tested in Gazebo, **not
-on water**; its one client, BlueBoat-Replanner (D7), has run only against a made-up server of
-the real service type on an isolated ROS graph, never against `master_control`. MCS does not
-use it yet (a survey-mission launch mode is the planned way); built-world simulations cannot yet
-run replanner-owned runs (Control R-3).
+on water**; its one client, BlueBoat-Replanner (D7), ran against a made-up server of the real
+service type on an isolated ROS graph (2026-11-12) and once against `master_control` in Gazebo
+(2026-11-18: a C2 development run in a built world, the first path accepted and flown to its
+end). MCS does not use it yet (a survey-mission launch mode is the planned way); built-world
+simulations host replanner-owned runs since 2026-11-18 (`full_mission_launch.py
+path_source:=replanner`, Control R-3, an owner order before the simulator's freeze tag).
 
 **D9 — Detector family and input geometry: resolved 2026-10-20 (recorded 2026-10-19).** The
 old §5.1–§5.2 specified a "classical proposer + CNN classifier" on 512 × 512 patches every N

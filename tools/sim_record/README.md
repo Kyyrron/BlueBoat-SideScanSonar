@@ -79,9 +79,31 @@ The tool takes the newest such file written during the run for this world:
 | `simulator_commit`, `simulator_dirty`, `simulator_dirty_files` | `run_info.build.git`, the installed simulator's build stamp |
 | `simulator_running_digest` | `run_info.source_check.running_digest` |
 | `control_code` | `{path, sha256, files}`: a SHA-256 over every file of `~/ros2_ws/install/blueboat_control` (what the launch runs), computed at launch. It is a digest of the files as they are, not git |
+| `path_source` | (2026-11-18, R-3) the last `path_source:=` of `--extra`, else `mission`: the value `full_mission_launch.py` passes to `master_control`. The simulator's run context does not carry it |
 
 A value the `run_info` does not carry (an older simulator, no run context) is `null`, never inferred.
 Records written before this change simply lack these keys.
+
+## Replanner-owned runs (2026-11-18, R-3)
+
+`--extra path_source:=replanner` makes `master_control` hold at the spawn pose until the Replanner's first
+accepted `/blueboat/update_path`. The recorder still deploys the MCS path (`full_mission_launch.py` requires a
+`trajectory_file`), but nothing follows it, so the GCS side runs with `--follow replanner`:
+
+- the boat "leaves" once it is 1 m from its pose at the deploy; no first path within
+  `--first-path-timeout-s` (600 simulated s) of the deploy ends the run as `no_first_path`;
+- progress is the distance travelled (`boat_track.csv` column `travelled_m`, cross-track `nan`); a stall is
+  90 simulated s with less than 1 m travelled;
+- the end is the Replanner's latched `/replanner/status`: `done` or `stopped_holding` (then 3 s) →
+  `completed`; `failed` or `run_ended` → `replanner_<state>`. `--stop-after-s` and `--max-wall-min` work as
+  before;
+- `gcs_summary.json` gains `follow`, `travelled_m` (in place of `path_covered_m`) and `replanner_final`
+  (`state`, `reason`, `status_messages`); `path_length_m` is `null`;
+- `--range-at` and `--record-from-m` are refused (they are distances along the deployed path).
+
+The recorder never starts Belief or the Replanner and never calls `/replanner/start`: the operator does, after
+the log says "path deployed" (Replanner `docs/LOCAL_CHECKLIST.md` L-G). Without `path_source:=replanner` the
+recorder behaves exactly as before.
 
 ## Sensors
 

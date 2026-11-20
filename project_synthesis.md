@@ -22,7 +22,7 @@ context to work on any part of the project.*
 > 4. **Module chain (§5.1).** sonar module → Perception → Belief → Replanner → Control. Belief
 >    is built (2026-11-04; run under ROS on 2026-11-12, never yet with a real detector); the
 >    Replanner is built (2026-11-04; dev loop on Belief's own core and a first run under ROS on
->    an isolated graph on 2026-11-12; never yet with Control's node, in Gazebo or on the boat);
+>    an isolated graph on 2026-11-12; once in Gazebo beside Control's node (a C2 development run in a built world, 2026-11-18); never on the boat);
 >    Evaluation is planned, not built; Perception and the link guardian are existing modules;
 >    the Aug Studio is optional.
 > 5. **"MAVLink mission swap" (§5.1, §7.5, §9 D5, §10)** replaced by Control's live path update
@@ -217,7 +217,7 @@ OPERATOR LAPTOP (via the BlueBoat Base Station WiFi) — the module chain
 | BlueBoat-Perception | existing (dummy detector by default; YOLO adapter built, not yet trained) | Seabed images → detector input → detector → calibration → detections for the GCS + **one record per image** for Belief; also builds simulated training datasets (dataset mode) |
 | Ground Control Station | existing | Operator display. Shows **only Perception's detections**; runs no detector |
 | Belief | **built** (`BlueBoat-Belief`), offline-gated and run under ROS on 2026-11-12 (isolated graph, live in Gazebo, one real recording); no run with a real detector | Reads the processed pings, Perception's detections, odometry and GPS, and a survey-area file carrying the anchor (owner, 2026-11-04: the Belief brief governs Belief's design), plus optionally Perception's per-image records (which pings the detector searched). Sends `BeliefGrid` to the Replanner, and displays and `/diagnostics` to the operator |
-| Replanner | **built** (`BlueBoat-Replanner`, in `~/ros2_ws/install` since 2026-11-13): offline-gated; dev loop on Belief's own core; run under ROS on 2026-11-12 only on an isolated graph with made-up inputs; never with Control's node, in Gazebo or on the boat | Reads **only** Belief for target evidence (plus Control's progress and events, odometry and its mission file, which carry none). Acts on its own, in simulation and on the boat. Generates **every survey type** (including the two-pass baseline and the plain boustrophedon) and sends it through Control's live path update |
+| Replanner | **built** (`BlueBoat-Replanner`, in `~/ros2_ws/install` since 2026-11-13): offline-gated; dev loop on Belief's own core; run under ROS on 2026-11-12 on an isolated graph with made-up inputs; once in Gazebo beside Control's node (a C2 development run in a built world, 2026-11-18); never on the boat | Reads **only** Belief for target evidence (plus Control's progress and events, odometry and its mission file, which carry none). Acts on its own, in simulation and on the boat. Generates **every survey type** (including the two-pass baseline and the plain boustrophedon) and sends it through Control's live path update |
 | Control (`blueboat_control`) | existing | Follows the path; owns the **live path update** service (`/blueboat/update_path`) and its progress / event topics. Built and tested in Gazebo; **not tested on water**; its one client (the Replanner) has not yet run against it |
 | Mission Control Station | existing | Operator station: launch, supervise, E-STOP. It does not use the path update yet; a survey-mission launch mode is planned |
 | Link guardian | existing (not yet tested on the boat) | ArduPilot Lua script + laptop companion that brings the boat home if the link drops |
@@ -339,9 +339,9 @@ the Replanner. Control checks the update (continuity at the change point, speed,
 coherence, sample count) and answers `ok` or a refusal code; a refusal changes nothing.
 Progress is on `/blueboat/path_progress`, every answer and activation on
 `/blueboat/path_update_event`. Built and tested in Gazebo for the PID, LoS and MPC controllers;
-not tested on water; its client is the Replanner, not yet run against Control's node.
-Simulations of built worlds cannot yet run replanner-owned runs (open item in Control's
-backlog).
+not tested on water; its client is the Replanner, run against Control's node once, in Gazebo
+(2026-11-18, a C2 development run). Simulations of built worlds run replanner-owned runs since
+2026-11-18 (`full_mission_launch.py path_source:=replanner`, Control R-3).
 
 ### 5.3 Output artifacts
 
@@ -613,7 +613,7 @@ from which heading.
 | D3 | Detection module — YOLO model in BlueBoat-Perception | Perception pipeline **built**; default detector is a **placeholder**; YOLO adapter over tiles, training and evaluation tools **built** (2026-10-23); no trained model, comparison not run; calibration is the identity |
 | D4 | Belief layer — multi-channel Bayesian grid | **Built** (`BlueBoat-Belief`): offline-gated, run under ROS on an isolated graph, live in Gazebo with the dummy detector and on one real recording; never with a real detector; scores uncalibrated |
 | D5 | Mission interface — path following and live path update | **Built**: path following, and the live path update service with its progress and event topics (Gazebo-tested, not on water; its client, the Replanner, not yet run against it) |
-| D6 | Adaptive replanner — generates every survey type through the path update | **Built** (`BlueBoat-Replanner`): offline-gated, dev loop on Belief's own core (preliminary), run under ROS on an isolated graph with made-up inputs; never with Control's node, in Gazebo or on the boat |
+| D6 | Adaptive replanner — generates every survey type through the path update | **Built** (`BlueBoat-Replanner`): offline-gated, dev loop on Belief's own core (preliminary), run under ROS on an isolated graph with made-up inputs; once in Gazebo beside Control's node (a C2 development run in a built world, 2026-11-18); never on the boat |
 | D7 | Evaluation framework — conditions, metrics, campaigns | **Planned, not built** |
 | D8 | Thesis manuscript — submission early January 2027 | Ongoing |
 | S1 | `blueboat_sss_sim` simulator package | **Built**, calibration ongoing |
@@ -645,7 +645,7 @@ ground truth standing in.
 | Single-site data caps generalisation | State plainly in limitations. Do not overreach elsewhere. |
 | Headline result is simulation-derived | Phrase as model-conditional throughout (§4.1). Lead the limitations chapter with it. |
 | Aspect-window widths not measurable at scale | Sensitivity sweep; report the range over which conclusions flip, including if they flip inside the plausible range. |
-| Live path update corner cases (first use on water; built-world simulation cannot yet run replanner-owned runs) | Control's refusal codes leave the boat on its current path; Gazebo tests exist; follow the real-water test protocol before relying on it. Fallback: replan only between runs. |
+| Live path update corner cases (first use on water; replanner-owned runs in built worlds only since 2026-11-18, one C2 development run so far) | Control's refusal codes leave the boat on its current path; Gazebo tests exist; follow the real-water test protocol before relying on it. Fallback: replan only between runs. |
 | Weather / schedule slip on field campaigns | Simulation is the defensible basis for the evaluation, given calibration is in place; nothing in the headline result waits on a field day. |
 
 ---

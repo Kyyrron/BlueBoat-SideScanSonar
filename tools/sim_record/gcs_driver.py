@@ -9,6 +9,13 @@ through the signals its own buttons emit:
   -> along the path, "Apply range" at each --range-at distance
   -> end of the path (or --stop-after-s, a stall, the wall limit, flag ABORT) -> Record OFF -> STOP.
 
+``--follow replanner`` (additive, 2026-11-18, R-3: a replanner-owned run, ``path_source:=replanner``): the
+deployed MCS path is not what the boat flies, so progress is the distance the boat travels and the end is the
+Replanner's own ``/replanner/status``: ``done`` / ``stopped_holding`` -> completed, ``failed`` / ``run_ended`` ->
+``replanner_<state>``; a stall is 90 simulated s with less than 1 m travelled after the boat left, and no first
+path within ``--first-path-timeout-s`` of the deploy is ``no_first_path``. This driver never starts the
+Replanner (the operator calls ``/replanner/start``). ``--follow mission`` (default) is the code path as before.
+
 The session is written by the GCS itself, where the GCS writes it: ``<cwd>/../../../../data/SSS_data/sessions``
 (its ``data_root``), so the working directory chooses the data root. The boat is followed on ``/blueboat/odom``
 (a subscription on the GCS's own node; the App is not modified). Writes ``<out>/gcs_summary.json``.
@@ -36,6 +43,9 @@ END_RADIUS_M = 2.5          # the last waypoint counts as reached inside this ra
 END_SETTLE_S = 3.0          # ... after this much more simulated time
 STALL_S, STALL_M = 90.0, 1.0   # simulated seconds without this much progress = a stall
 SEARCH_AHEAD_M = 15.0       # progress is searched this far ahead of the last position (the path may cross itself)
+LEAVE_M = 1.0               # --follow replanner: the boat has left once this far from its pose at the deploy
+REPLANNER_END = ("done", "stopped_holding")      # --follow replanner: a finished run
+REPLANNER_STOP = ("failed", "run_ended")         # --follow replanner: a run that will not finish
 
 
 def main() -> int:
@@ -45,7 +55,15 @@ def main() -> int:
     ap.add_argument("--max-wall-s", type=float, default=7200.0)
     ap.add_argument("--stop-after-s", type=float, default=0.0, help="simulated seconds after the boat leaves")
     ap.add_argument("--record-from-m", type=float, default=0.0, help="Record ON this far along the path")
+    ap.add_argument("--follow", choices=("mission", "replanner"), default="mission",
+                    help="mission: progress along the deployed path (default); replanner: a replanner-owned "
+                         "run, ended by /replanner/status")
+    ap.add_argument("--first-path-timeout-s", type=float, default=600.0,
+                    help="--follow replanner: simulated s after the deploy without the boat leaving = no_first_path")
     a = ap.parse_args()
+    if a.follow == "replanner" and (a.range_at or a.record_from_m > 0):
+        raise SystemExit("--range-at / --record-from-m are distances along the deployed path: "
+                         "not with --follow replanner")
     out = a.out
     out.mkdir(parents=True, exist_ok=True)
     plan = sorted((float(s), float(r)) for s, r in (x.split(":") for x in a.range_at))
@@ -110,6 +128,22 @@ def main() -> int:
 
     node.create_subscription(Odometry, config.topics.odom, on_odom, qos_profile_sensor_data)
 
+    replanner = {"state": None, "reason": None, "n": 0}
+    if a.follow == "replanner":                # the Replanner's latched status (its topics.md)
+        from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+        from std_msgs.msg import String
+
+        def on_status(m) -> None:
+            try:
+                d = json.loads(m.data)
+            except ValueError:
+                return
+            replanner.update(state=d.get("state"), reason=d.get("reason"), n=replanner["n"] + 1)
+
+        node.create_subscription(String, "/replanner/status", on_status, QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST, depth=1))
+
     pings = {"n": 0}
     signals.sonar_ping.connect(lambda _p: pings.update(n=pings["n"] + 1))
     acq.start()
@@ -147,6 +181,51 @@ def main() -> int:
                 window.toolbar.stop_clicked.emit()
             st.update(phase="stopping", t=time.time(), status=status)
 
+    def running_replanner(now: float) -> None:
+        """--follow replanner: progress = distance travelled, the end = the Replanner's status."""
+        t, x, y = boat["t"], boat["x"], boat["y"]
+        state = replanner["state"]
+        if st["recording"] and st["session"] is None and window.recording.session_dir:
+            st["session"] = str(Path(window.recording.session_dir).resolve())
+            say(f"session {st['session']}")
+        if st["t_leave"] is None:
+            if float(np.hypot(x - st["anchor"][0], y - st["anchor"][1])) > LEAVE_M:
+                st.update(t_leave=t, prog_t=t, prog_s=0.0, last_xy=(x, y), dist=0.0)
+                say(f"the boat leaves at sim t {t:.1f} s (Replanner state {state})")
+            elif state in REPLANNER_STOP:
+                say(f"the Replanner ended before the boat left: {state} ({replanner['reason']})")
+                finish(f"replanner_{state}")
+            elif t - st["t_deploy"] > a.first_path_timeout_s:
+                say(f"the boat did not leave within {a.first_path_timeout_s:.0f} simulated s "
+                    f"(Replanner state {state}, {replanner['n']} status messages)")
+                finish("no_first_path")
+            return
+        lx, ly = st["last_xy"]
+        st["dist"] += float(np.hypot(x - lx, y - ly))
+        st["last_xy"] = (x, y)
+        s = st["dist"]
+        st["track"].append((round(t - st["t_leave"], 2), round(x, 2), round(y, 2), round(s, 2),
+                            float("nan"), int(st["recording"])))
+        if s > st["prog_s"] + STALL_M:
+            st.update(prog_s=s, prog_t=t)
+        if st["t_end"] is None and state in REPLANNER_END:
+            st["t_end"] = t
+            say(f"Replanner {state} at sim t {t - st['t_leave']:.1f} s ({replanner['reason']})")
+        if st["t_end"] is not None and t - st["t_end"] >= END_SETTLE_S:
+            finish("completed")
+        elif state in REPLANNER_STOP:
+            say(f"Replanner {state}: {replanner['reason']}")
+            finish(f"replanner_{state}")
+        elif a.stop_after_s and t - st["t_leave"] >= a.stop_after_s:
+            finish("stop_after")
+        elif t - st["prog_t"] > STALL_S and st["t_end"] is None:
+            say(f"less than {STALL_M:.0f} m travelled in {STALL_S:.0f} simulated s at {s:.1f} m "
+                f"(Replanner state {state})")
+            finish("stall")
+        elif int(now) % 60 == 0 and now - st["t"] >= 1.0:
+            st["t"] = now
+            say(f"{s:.0f} m travelled, Replanner {state}, {pings['n']} pings, sim t {t - st['t_leave']:.0f} s")
+
     def tick() -> None:
         now, ph = time.time(), st["phase"]
         if ph not in ("adopt", "stopping", "quit"):
@@ -179,6 +258,16 @@ def main() -> int:
                 say("DEPLOY")
                 (out / "DEPLOY").touch()
                 st.update(phase="wait_deploy", t=now)
+        elif ph == "wait_deploy" and a.follow == "replanner":
+            if (out / "DEPLOYED").exists() and boat["n"]:
+                st.update(phase="running_replanner", t_deploy=boat["t"], anchor=(boat["x"], boat["y"]))
+                say(f"path deployed (not followed: path_source replanner); waiting for the boat to leave "
+                    f"on the Replanner's first path, sim t {boat['t']:.1f} s")
+            elif now - st["t"] > 60:
+                say("path not deployed after 60 s")
+                finish("no_deploy")
+        elif ph == "running_replanner":
+            running_replanner(now)
         elif ph == "wait_deploy":
             if (out / "DEPLOYED").exists() and boat["n"]:
                 load_path()
@@ -233,7 +322,7 @@ def main() -> int:
             tr = np.array(st["track"], float) if st["track"] else np.zeros((0, 6))
             rec = tr[tr[:, 5] > 0] if len(tr) else tr
             per_m = ([rec[np.floor(rec[:, 3]) == k, 4].mean() for k in np.unique(np.floor(rec[:, 3]))]
-                     if len(rec) else [])
+                     if len(rec) and a.follow == "mission" else [])
             summary = {
                 "status": st["status"], "session": st["session"], "pings": pings["n"],
                 "svlogs": [f for f in files if f.endswith(".svlog")],
@@ -248,12 +337,18 @@ def main() -> int:
                 # wherever the simulation runs slowly
                 "cross_track_recorded_m": ({"p50": round(float(np.percentile(per_m, 50)), 2),
                                             "p90": round(float(np.percentile(per_m, 90)), 2),
-                                            "max": round(float(rec[:, 4].max()), 2)} if len(rec) else None),
+                                            "max": round(float(rec[:, 4].max()), 2)} if len(per_m) else None),
                 "wall_s": round(time.time() - st["t0"], 1)}
+            if a.follow == "replanner":            # additive keys (2026-11-18, R-3)
+                summary.update(follow="replanner", path_length_m=None,
+                               travelled_m=summary.pop("path_covered_m"),
+                               replanner_final={"state": replanner["state"], "reason": replanner["reason"],
+                                                "status_messages": replanner["n"]})
             (out / "gcs_summary.json").write_text(json.dumps(summary, indent=1))
             if len(tr):
                 np.savetxt(out / "boat_track.csv", tr, fmt="%.2f", delimiter=",",
-                           header="sim_t_s,x,y,along_path_m,cross_track_m,recording", comments="")
+                           header=("sim_t_s,x,y,along_path_m,cross_track_m,recording" if a.follow == "mission"
+                                   else "sim_t_s,x,y,travelled_m,cross_track_m,recording"), comments="")
             say(f"summary written: {summary['status']}, {summary['pings']} pings, {summary['seabed_images']} images")
             window.close()
             QTimer.singleShot(2000, app.quit)

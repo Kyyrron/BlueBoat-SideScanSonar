@@ -16,6 +16,9 @@ What it does, in order (details: README.md next to this file):
   7. ``<out>/<name>/run.json`` + logs; the session is where the GCS wrote it (``--session-name`` renames it).
      Since 2026-11-16 (CR-03-4) run.json also copies the simulator's run_info: sim_config, thrust_gain, the sea
      schedule's SHA-256, the simulator's commit and dirty flag, plus a digest of the installed Control files.
+     Since 2026-11-18 (R-3) also ``path_source``: ``--extra path_source:=replanner`` makes the run replanner-owned
+     (the boat holds until the Replanner's first path, which the operator starts), and the GCS side then ends the
+     run on ``/replanner/status`` instead of the deployed path (``gcs_driver.py --follow replanner``).
 
 Standard library only; the two drivers run in the workspace environment (``~/ros2_ws/env.sh``).
 """
@@ -175,6 +178,12 @@ def main() -> int:
     if not (world / "metadata.yaml").is_file() or not traj.is_file():
         raise SystemExit(f"world or trajectory not found: {world} / {traj}")
     renderer, profile = resolve_sensor(a.sensor)
+    # additive (2026-11-18, R-3): who owns the path; the last path_source:= wins, as in ros2 launch
+    path_source = next((x.split(":=", 1)[1] for x in reversed(a.extra) if x.startswith("path_source:=")),
+                       "mission")
+    if path_source == "replanner" and (a.range_at or a.record_from_m > 0):
+        raise SystemExit("--range-at / --record-from-m are distances along the deployed path: "
+                         "not with path_source:=replanner")
     out = a.out.expanduser().resolve() / a.name
     if out.exists():
         raise SystemExit(f"{out} exists: choose another --name")
@@ -247,6 +256,8 @@ def main() -> int:
                 "--stop-after-s", str(a.stop_after_s), "--record-from-m", str(a.record_from_m)]
         for r in a.range_at:
             args += ["--range-at", r]
+        if path_source == "replanner":
+            args += ["--follow", "replanner"]
         if a.ground_truth_bag:                               # the command of blueboat_perception's launch file
             bag = subprocess.Popen(env_cmd(out, "ros2", "bag", "record", "-o", str(out / "ground_truth_bag"),
                                            "--use-sim-time", "--topics", *GROUND_TRUTH_TOPICS),
@@ -320,6 +331,7 @@ def main() -> int:
         info_doc = None
     run.update(sim_fields(info_doc, info_file))
     run["control_code"] = control_code
+    run["path_source"] = path_source                     # additive (2026-11-18, R-3)
     if info_doc is None:
         say("no simulator run_info found for this run: the run-configuration fields are null")
     (out / "run.json").write_text(json.dumps(run, indent=1))
