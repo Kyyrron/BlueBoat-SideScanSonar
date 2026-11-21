@@ -1,161 +1,114 @@
 # BlueBoat Hub
 
-One desktop app that starts, watches and stops every app of the BlueBoat project, builds the
-ROS workspace and opens the data folders.
+One desktop app to start, watch and stop every BlueBoat app, build the ROS workspace and open
+the data folders.
 
-It is a **launcher, not a container**. Each app keeps opening its own window on the desktop.
-Inside the hub, the app's tile turns into that app's **live terminal**.
+The Hub is a **launcher**. Each app still opens its own window. In the Hub, the app's tile
+turns into its **live terminal**.
 
-- **Process backend: tmux.** Every app runs in its own detached session on a private
-  socket (`tmux -L blueboat-hub`). Apps survive the hub being closed, crashed or rebuilt.
-  When the hub opens again, the running apps reappear as terminals, with their history.
-- **Stack.** Tauri 2 (Rust backend, system WebKitGTK), Svelte 5 + TypeScript, and xterm.js.
-  Fonts are bundled; nothing is fetched at runtime (the field laptop is offline).
-- **Location.** `hub/` in the superproject. It is not a submodule and not a colcon package
-  (`COLCON_IGNORE`). It touches no submodule (CM-3), writes nothing under the data folders
-  (CM-7), sends no robot command, and never starts `BlueBoat_launch.py` /
-  `full_mission_launch.py`. MCS owns missions, E-STOP and the CM-15 safe shutdown.
-
-> **Just want to install it?** Follow **[INSTALL.md](INSTALL.md)**: five steps, and it ends as
-> an app on your Desktop.
-
-## Setup (once)
-
-User-local toolchains, plus the system libraries WebKitGTK needs:
-
-```bash
-# Rust (user-local)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal -c clippy -c rustfmt
-# Node 22 LTS (user-local)
-curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | PROFILE=/dev/null bash
-. ~/.nvm/nvm.sh && nvm install 22
-# system libraries (sudo)
-sudo apt install libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
-  build-essential libssl-dev libayatana-appindicator3-dev librsvg2-dev
-```
-
-`tmux` (≥ 3.3) is already installed at `/usr/bin/tmux`.
+- Every app runs in its own **tmux** session (socket `tmux -L blueboat-hub`). Apps keep
+  running if the Hub is closed or crashes; when the Hub opens again they reappear with their
+  history.
+- Built with Tauri 2 (Rust, WebKitGTK), Svelte 5 + TypeScript and xterm.js. Nothing is
+  fetched from the internet at runtime (fonts are bundled).
+- It is not a submodule and not a colcon package (`COLCON_IGNORE`).
+- It sends no robot command and never starts a mission launch itself. Missions, E-STOP and
+  the safe shutdown belong to MCS.
 
 ## Install
 
+Step by step: **[INSTALL.md](INSTALL.md)**. In short:
+
 ```bash
+sudo apt install tmux libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+  build-essential libssl-dev libayatana-appindicator3-dev librsvg2-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal -c clippy
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | PROFILE=/dev/null bash
+. ~/.nvm/nvm.sh && nvm install 22
+
 cd ~/ros2_ws/src/BlueBoat-SideScanSonar/hub
-./install.sh          # release build → ~/.local/bin, .desktop entry, icon
-./install.sh --clean  # same, then delete src-tauri/target (≈2 GB)
+./install.sh
 ```
 
-Then open *BlueBoat Hub* from the app grid. Right-click its dock icon → *Pin to Dash*.
+The workspace `~/ros2_ws` must have been built once (with `env.sh` and `.venv`).
 
-The hub is started from the desktop, not from a sourced shell. Each app command builds its own
-environment (next section).
+| Command (in `hub/`) | Does |
+|---|---|
+| `./install.sh` | Build and install (also after a `git pull`) |
+| `./install.sh --clean` | Same, then delete `src-tauri/target` (about 2 GB) |
+| `./install.sh --no-desktop-icon` | Install without the Desktop shortcut |
+| `./install.sh --uninstall` | Remove the Hub (apps already running keep running in tmux) |
 
-### Development
+Installed, all in your home folder:
 
-```bash
-. ~/.nvm/nvm.sh
-npm install
-npx tauri dev                                        # hot-reloading frontend
-cargo build --features tauri/custom-protocol \
-  --manifest-path src-tauri/Cargo.toml               # debug binary serving dist/ (run `npm run build` first)
+- `~/.local/bin/blueboat-hub`
+- `~/.local/share/applications/blueboat-hub.desktop` (app grid)
+- `~/Desktop/blueboat-hub.desktop` (Desktop icon)
+- icons in `~/.local/share/icons/hicolor/`
+
+Open it from the Desktop or the app grid. Start it from the desktop, not from a sourced shell:
+each app builds its own environment.
+
+## Use
+
+| View | What it holds |
+|---|---|
+| **Apps** | One tile per app, grouped. *Launch* turns the tile into its terminal. *Focus* raises the app's window. Restart, Stop, Collapse, Maximize are on the card (Esc leaves Maximize). With 3+ apps, *Tile terminals* shows them side by side. A greyed tile names what is missing (for example "isn't built yet — run Build"). |
+| **Data** | Read-only folder cards: count, size, newest entries. Clicking an entry opens it: a run folder or `*-poslog.csv` in the Log Reviewer, a world folder in the Gazebo viewer, anything else with `xdg-open`. Rescanned every 30 s and on window focus. |
+| **Build** | `source /opt/ros/jazzy/setup.bash && colcon build` in its own tmux session, with per-package progress. Asks first if apps are running (never stops them). Afterwards, cards of apps using a rebuilt package say *restart to use new build*. |
+| **Logs** | Each session's output, in `~/.local/state/blueboat-hub/logs/` (newest 20 per app). |
+| **Settings** | Theme, terminal font size, where everything lives, X11 or Wayland mode. |
+
+Keyboard:
+
+| Keys | Action |
+|---|---|
+| `Ctrl K` | Command palette (launch, stop, focus, build, open) |
+| `Ctrl B` | Build all |
+| `Ctrl 1` … `Ctrl 9` | Show the n-th terminal |
+| `Ctrl Shift F` | Search the terminal |
+| `Ctrl Shift C` / `Ctrl Shift V` | Copy / paste |
+
+## How Stop works (safety)
+
+**Stop = closing the app's window, exactly like its ✕ button.** The Hub sends
+`_NET_CLOSE_WINDOW` to the app's windows. It does not kill the process.
+
+Why: the apps shut down cleanly when their window closes. MCS runs its safe shutdown
+(`default` before any node stops) and asks first if a mission is running. The GCS ends its
+recording and stops pinging. A plain kill would skip this, and with MCS the thrusters could
+stay in override.
+
+- **The app may say no** (MCS: "Mission running…"). The card waits, with *Keep running*.
+  Nothing escalates on its own.
+- **Force stop.** After 10 s a *Force stop…* button appears, behind a confirmation. It sends
+  Ctrl-C. *Kill session…* (`tmux kill-session`) needs a second confirmation.
+- **Apps without a window** (sonar driver, Belief, Replanner), or any app when no window is
+  found: Stop sends Ctrl-C, the normal way to stop `ros2 launch`.
+- **Gazebo viewer:** Stop sends Ctrl-C straight away (`stop = "ctrl-c"`). If its window is
+  closed by hand and `ros2 launch` still runs 2 s later, the Hub sends Ctrl-C
+  (`after_close = "ctrl-c"`).
+- **Dialogs are never closed** (closing one would answer "Cancel").
+- **Quitting the Hub with apps running** asks: *Quit hub* (apps keep running), *Stop all and
+  quit*, or *Cancel*.
+
+## Configuration: `apps.toml`
+
+Every tile, group and data card is defined in `apps.toml`. The Hub reloads it on save. A
+broken edit keeps the last good version and shows the error at the top of the Apps view.
+
+Every app runs as:
+
+```
+bash -ic '<print the command>; cd ~/ros2_ws && source env.sh && cd <cwd> && exec <command>'
 ```
 
-### Gates
+`bash -ic` (interactive) runs `~/.bashrc` as a terminal does, so ROS and the acados variables
+for the MPC controller are set. The template is `[defaults] template` in `apps.toml`.
 
-```bash
-cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test
-cd .. && npm run check && npm run build
-```
+### Adding an app
 
-## How apps are run
-
-Every tile in `apps.toml` runs as:
-
-```
-bash -ic 'printf "$ <command>"; cd ~/ros2_ws && source env.sh && cd <cwd> && exec <command>'
-```
-
-- **Why `bash -ic` (interactive), not `bash -lc`.** A non-interactive shell stops at line 6
-  of `~/.bashrc`. That skips `ACADOS_SOURCE_DIR` / `LD_LIBRARY_PATH` (used by the MPC
-  controller) and the `/opt/ros/jazzy` source. With `-i`, an app sees exactly what a
-  terminal sees.
-- **The template lives in `apps.toml [defaults]`**, not in code.
-- **`env.sh` activates `.venv` relative to `~/ros2_ws`**, so the `cd` comes first.
-
-Each session's output is also written by tmux to `~/.local/state/blueboat-hub/logs/<app>-<stamp>.log`.
-The newest 20 logs per app are kept, and the **Logs** view lists them.
-
-## Stop semantics (and why)
-
-**Stop = asking the app's window to close, exactly like clicking its ✕.** The hub sends
-`_NET_CLOSE_WINDOW` (EWMH) to the app's top-level windows. It finds them by `_NET_WM_PID`
-over the process tree below the tmux pane.
-
-- **Why.** The apps do their own shutdown in `closeEvent`:
-  - MCS publishes `default` and runs the CM-15 sequence before any node dies, and asks
-    first when a mission is running (`BlueBoat-MCS/mcs/gui/main_window.py:870`);
-  - the GCS ends a recording, disables pinging and waits for its exports.
-
-  A `SIGTERM` (Python's default) kills the process **without** `closeEvent`, so for MCS
-  the motors could stay in override.
-- **The app may refuse.** MCS asks "Mission running…". The card then shows *waiting for
-  the app to close…* with *Keep running*. **No timer escalates.**
-- **Force stop.** After 10 s a *Force stop…* button appears, behind a confirmation (MCS's
-  text warns about skipping the safe shutdown). Stage 1 sends Ctrl-C to the pane; *Kill
-  session…* (`tmux kill-session`) needs a second confirmation.
-  - Checked live on 2026-11-11: Ctrl-C reaches MCS's `closeEvent` (`signal(SIGINT,
-    app.quit)`, then Qt 6 closes the windows; the log shows `ROS executor stopped`, exit
-    0). With a mission running, the same `closeEvent` asks first. That case was not
-    exercised.
-- **Windowless apps.** `sonar_simple` (`window = false`), or any app when no window is
-  found (Wayland), is stopped with Ctrl-C. That is the polite stop of `ros2 launch`.
-- **`stop = "ctrl-c"`** (Gazebo viewer): Stop sends Ctrl-C straight away. Gazebo answers a
-  window close with its own "Do you really want to exit?", and a viewer has nothing to
-  save; `ros2 launch` then ends cleanly in about 3 s.
-- **`after_close = "ctrl-c"`** (Gazebo viewer): once the Gazebo window is gone, if
-  `ros2 launch` still runs 2 s later, Ctrl-C ends it.
-- **Dialogs are never closed.** Closing a confirmation dialog would answer "Cancel".
-  A window counts as a dialog only if `WM_TRANSIENT_FOR` points at another *managed*
-  window. Qt points a parentless `QDialog` (World Builder's main window) at its unmapped
-  client leader; that window is still closed.
-- **Hub quit with apps running** asks: *Quit hub* (default; apps keep running and the hub
-  re-attaches next time), *Stop all and quit* (polite stop of each, then quit when none
-  are left), or *Cancel*.
-
-## The window
-
-- **Apps.** Tiles grouped as in `apps.toml`.
-  - *Launch* morphs a tile into its terminal card. *Focus* raises the app's window;
-    Restart, Stop, Collapse and Maximize are on the card (Esc leaves the maximized view).
-  - With 3+ apps running, *Tile terminals* shows them side by side.
-  - An exited card keeps the output and offers Restart / Dismiss.
-  - Tiles whose entry point is missing are greyed, with the reason ("blueboat_sss_sim
-    isn't built yet — run Build").
-- **Data.** Read-only folder cards: count, size, newest item, newest 10 entries.
-  - Clicking an entry opens it with the right tool: a run folder or `*-poslog.csv` opens
-    in the **Log Reviewer**, a world folder in the **Gazebo viewer**, anything else
-    with `xdg-open`.
-  - Missing folders show as "not created yet". Scans run every 30 s and on window focus.
-- **Build.** `source /opt/ros/jazzy/setup.bash && colcon build` (as `BlueBoat-MCS/build.sh`)
-  in its own tmux session `build`, shown in the bottom drawer.
-  - The per-package progress strip is parsed from colcon's output.
-  - If apps are running, the hub asks first; it never stops them.
-  - After a build, cards of running apps that use a rebuilt package show *restart to use
-    new build*.
-- **Logs, Settings.** Session logs; theme (system / dark / light), terminal font size, and
-  where everything lives.
-- **Keyboard.**
-  - `Ctrl K` — command palette (launch / stop / focus / build / open).
-  - `Ctrl B` — build all.
-  - `Ctrl 1…9` — the n-th terminal.
-  - `Ctrl Shift F` — search the terminal.
-  - `Ctrl Shift C / V` — copy / paste.
-
-## Adding an app
-
-Edit `apps.toml`; the hub reloads it on save. A broken edit keeps the last good registry
-and shows the error at the top of the Apps view. Example: the Belief tile, which replaced its
-`planned = true` ghost once the package was built (the Replanner's ghost was replaced the same
-way on 2026-11-13; a group with no tile left is hidden):
+Example (the Belief tile):
 
 ```toml
 [[apps]]
@@ -164,7 +117,7 @@ name = "Belief"
 group = "operate"                  # or a new [[groups]] entry
 description = "The belief map: pings + detections -> BeliefGrid, the Replanner's only input."
 icon = "brain"                     # names in src/lib/icons.ts
-cwd = "."                          # from the workspace
+cwd = "."                          # relative to the workspace
 command = "ros2 launch blueboat_belief belief_launch.py area_file:={world}"
 requires = [{ launch = "blueboat_belief/belief_launch.py" }]   # greys the tile until built
 params = [{ name = "world", label = "World (survey area)", kind = "path", root = "~/worlds", depth = 2, marker = "metadata.yaml" }]
@@ -174,61 +127,58 @@ window = false                     # no window: Stop sends Ctrl-C
 stop = "ctrl-c"
 ```
 
-Fields:
-
 | Field | Meaning |
 |---|---|
-| `requires` | `{ ros_exe = "pkg/exe" }`, `{ launch = "pkg/file.py" }`, `{ file = "path" }` or `{ bin = "program" }`, checked on the filesystem. `fallback_command` + `fallback_requires` are used when `requires` fails (Aug Studio: `sss-aug-studio` → `python3 -m sss_aug_studio.app.main`). |
-| `params` | `kind = path \| file \| number \| choice`. Written as `{name}` (required) or `{name?}` (optional) in `command`. Values are checked (inside `root`, `marker` / `glob`, number range) and shell-quoted before substitution. |
-| `variants` | `{ id, name, args }`, appended to the command (GCS `--sim`). |
-| `singleton` | `true` by default. A second launch focuses the running window; `false` allows several (Log Reviewer). |
-| `window` | `false` for CLI apps. |
-| `warning` | Badge on the tile. |
-| `force_warning` | Text in the Force-stop dialog. |
-| `after_close = "ctrl-c"` | See *Stop semantics*. |
-| `stop = "ctrl-c"` | Stop sends Ctrl-C instead of closing the window. See *Stop semantics*. |
+| `requires` | `{ ros_exe = "pkg/exe" }`, `{ launch = "pkg/file.py" }`, `{ file = "path" }` or `{ bin = "program" }`. `fallback_command` + `fallback_requires` are used when `requires` fails. |
+| `params` | `kind = path \| file \| number \| choice`. Used in `command` as `{name}` (required) or `{name?}` (optional). Values are checked and shell-quoted. |
+| `variants` | `{ id, name, args }`, appended to the command (for example GCS `--sim`). |
+| `singleton` | `true` by default: a second launch focuses the running window. |
+| `window` | `false` for command-line apps. |
+| `stop`, `after_close` | `"ctrl-c"`: see *How Stop works*. |
+| `warning`, `force_warning` | Badge on the tile; text in the Force-stop dialog. |
 | `help` | Text behind the tile's ⓘ button. |
-| `primary` | Wide tile. |
-| `optional` | Badge. |
-| `planned` | Ghost tile, no launch. |
+| `primary`, `optional`, `planned` | Wide tile; badge; ghost tile that cannot launch. |
+| `packages` | colcon packages whose rebuild shows *restart to use new build*. |
 
-Path placeholders: `~`, `{workspace}`, `{data_root}` (`$BLUEBOAT_DATA_DIR` as `~/.bashrc`
-sets it, else `{workspace}/data`), `{superproject}`.
+Path placeholders: `~`, `{workspace}`, `{data_root}` (`$BLUEBOAT_DATA_DIR`, else
+`{workspace}/data`), `{superproject}`. Data cards are `[[data]]` entries in the same file.
 
-Data cards are `[[data]]` entries in the same file. Each has `tabs`, `depth`, `exclude`, and
-`actions` that send an entry to an app parameter.
+## Development
+
+```bash
+. ~/.nvm/nvm.sh
+npm install
+npx tauri dev                       # hot-reloading frontend
+```
+
+Checks before a change is done:
+
+```bash
+cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test
+cd .. && npm run check && npm run build
+```
+
+## Layout
+
+| Path | What |
+|---|---|
+| `apps.toml` | App registry (tiles, groups, build command, data cards) |
+| `install.sh` | Build and install script |
+| `src/` | Frontend (Svelte, TypeScript) |
+| `src-tauri/` | Backend (Rust): tmux, X11 window control, data scans |
+| `tmux.conf` | Settings of the Hub's tmux server |
+| `INSTALL.md` | Step-by-step install guide |
 
 ## Known limits
 
-- **Window control is X11-only** (`x11rb`, EWMH). In a Wayland session Stop falls back to
-  Ctrl-C and Focus is unavailable. The Settings view shows which mode is active.
-- **GCS sessions live in `data/SSS_data/sessions/`**, not in `<data_root>/sessions/`. The
-  GCS has its own `data_root` (`../../../../data/SSS_data`, relative to its cwd); the
-  cards follow it.
-- **A missed SIGCHLD.** Seen once on this machine: the hub's tmux server missed a SIGCHLD,
-  leaving the app a zombie and its pane dead without an exit status. When a dead pane has
-  no status, the hub sends its *own* tmux server a SIGCHLD (harmless: it only makes tmux
-  reap its children). An exit is reported once its code is known, or after 3 s.
-- **Terminal rendering.** xterm.js 6 dropped its canvas renderer, so without WebGL the
-  terminals use the DOM renderer.
-- **Blank window (NVIDIA).** If the hub window comes up blank, set
-  `WEBKIT_DISABLE_DMABUF_RENDERER=1` in the `.desktop` `Exec=` line. It was not needed
-  on this laptop (RTX 4060 + AMD iGPU, X11).
-- **"Restart to use new build" for MCS.** It tracks only `blueboat_interfaces`. Mission
-  launches started from MCS read the install afresh each time.
-
-## Requests (for the app owners — the hub does not change them)
-
-- **GCS** — open a `.svlog` replay from the command line (e.g. `--replay <file>`), so the
-  Data view's *Sonar recordings* entries could open in the GCS directly. Today the entry
-  opens its folder.
-- **MCS** — a headless "safe quit" (CLI flag or ROS service) that runs the same CM-15 exit
-  sequence as its window close. Window close is the only polite path today, and it needs
-  X11.
-- **World Builder** — handle SIGINT: `signal.signal(SIGINT, …)` plus a short `QTimer`
-  heartbeat, as MCS does. Today a Ctrl-C (the hub's Wayland / force-stop fallback) is
-  deferred until Python next runs. On 2026-11-11 it surfaced as a `KeyboardInterrupt`
-  (exit 254) only when the start dialog closed.
-- **Aug Studio** — install the package into the workspace venv (`pip install -e
-  SSS-Dataset-Aug-Studio`) so `sss-aug-studio` is on PATH. The hub uses the
-  `python3 -m sss_aug_studio.app.main` fallback meanwhile.
+- **Window control needs X11.** In a Wayland session Stop falls back to Ctrl-C and Focus does
+  not work. Choose *Ubuntu on Xorg* at login.
+- **Blank window** (some NVIDIA setups): add `WEBKIT_DISABLE_DMABUF_RENDERER=1` to the
+  `Exec=` line of the `.desktop` file (see INSTALL.md).
+- **GCS sessions** are in `~/ros2_ws/data/SSS_data/sessions/`, not `<data_root>/sessions/`
+  (the GCS has its own data root).
+- **MCS "restart to use new build"** tracks only `blueboat_interfaces`. Missions started from
+  MCS read the install fresh each time.
+- **Aug Studio** runs through its fallback `python3 -m sss_aug_studio.app.main` until the
+  package is installed in the venv (`pip install -e SSS-Dataset-Aug-Studio`).
+- Without WebGL the terminals use xterm.js's slower DOM renderer.

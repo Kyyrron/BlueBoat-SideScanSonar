@@ -29,6 +29,7 @@ after a move are marked "(2026-11-18)" in place.*
 | `README.md` "The ray-cast sensor" (state of 2026-11-07 to 11-11) | `README.md` (rewritten to the frozen state) and `docs/HISTORY.md` (the dated facts) |
 | — (new) | `docs/HISTORY.md`, `docs/TUTORIAL.md` (repository root, not installed) |
 | `blueboat_sss_sim/docs/**` | **unchanged**: installed by `setup.py` and cited by the frozen code |
+| — (new, 2026-11-21, session 14) | `docs/population/POPULATION_MODEL.md`, `docs/population/EVIDENCE.md`, `docs/population/figures/` (repository root, not installed); `blueboat_harbour_population/` (the second package); `blueboat_sss_sim/blueboat_sss_sim/builder/CLAUDE.md` gained a section on Screen 5's Mission-like mode |
 
 ## BlueBoat-SSS
 

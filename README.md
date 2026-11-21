@@ -1,85 +1,191 @@
-# BlueBoat — aspect-aware side-scan sonar survey (superproject)
+# BlueBoat — aspect-aware side-scan sonar survey
 
-> ## 🚀 Start here: BlueBoat Hub
->
-> **[`hub/`](hub/) is the desktop app that ties every module together.** One window to:
-> - launch, watch and stop every app: Mission Control Station, GCS, QGroundControl, World
->   Builder, Gazebo viewer, Log Reviewer, Aug Studio;
-> - see each app's live terminal;
-> - build the workspace (`colcon build`);
-> - open the data folders.
->
-> Every app still opens in its own window. Stopping an app closes it the way its own ✕ does,
-> so MCS still runs its safe shutdown.
->
-> **Install:** follow [hub/INSTALL.md](hub/INSTALL.md) (`cd hub && ./install.sh`); it ends
-> as an icon on your Desktop. Details and how to add a module: [hub/README.md](hub/README.md).
+A BlueRobotics **BlueBoat** USV with two **Cerulean Omniscan 450 SS** side-scan sonars surveys
+shallow enclosed water (harbours) on its own. It changes its path during the survey to look at
+possible targets again from new headings ("aspect-aware" survey).
 
-## Project at a glance
+**All project software runs on the operator laptop**, in the ROS 2 workspace `~/ros2_ws`. The
+laptop talks to the boat through the BlueBoat Base Station WiFi. The boat carries only its
+hardware and its own firmware (ArduPilot / BlueOS, sonars, GPS, USBL). The one exception is the
+connection-loss script in [`link_guardian/`](link_guardian/), copied onto the autopilot.
 
-A BlueRobotics BlueBoat USV with two Cerulean Omniscan 450 SS runs autonomous, heading-aware
-side-scan sonar survey in shallow enclosed water. **All project software runs on the operator
-laptop** (this workspace, `~/ros2_ws`), linked to the boat through the BlueBoat Base Station
-WiFi; the boat carries only its hardware and its own firmware (plus the connection-loss script in
-`link_guardian/`).
-
-The scientific goal is a model-conditional, simulated comparison of adaptive heading-aware
-replanning against a seriously tuned two-pass orthogonal survey, with real water used to
-validate the simulator, run the heading-response experiment and demonstrate the system.
+## How it works
 
 ```
-sonar module (seabed images + metadata) → Perception → Belief → Replanner → Control
+sonar (seabed images + metadata) → Perception → Belief → Replanner → Control
 ```
 
-| Module (submodule) | State |
+| Step | What it does |
 |---|---|
-| `BlueBoat-Control` — vehicle motion, run bags / replay, **live path update** | existing (additions only) |
-| `BlueBoat-MCS` — Mission Control Station | existing (additions only) |
-| `BlueBoat-SSS` — sonar driver, processor, Ground Control Station | existing |
-| `BlueBoat-SSS-Sim` — Gazebo worlds, sonar and sea-state simulation | **frozen 2026-11-18** (`sim-freeze-v1.0-2026-11-18`): literal acceptance verdict NOT READY, used as a model-conditional tool under `SIM_VALIDITY_CONDITIONS.md` |
-| `BlueBoat-Perception` — detector (dummy by default; YOLO over tiles, not yet trained), per-image records, simulated dataset mode, tile-dataset / training / evaluation tools | existing; lever arm (CR-PER-2) applied |
-| `SSS-Dataset-Aug-Studio` — dataset augmentation | optional |
-| `BlueBoat-Belief` — belief map: processed pings + detections → `BeliefGrid` (coverage, aspect history, contacts), the Replanner's only target evidence | built; run under ROS and live in Gazebo, never yet with a real detector |
-| `BlueBoat-Replanner` — aspect-aware replanner: generates every survey condition (single pass, two-pass orthogonal baseline, append-on-completion, informative) and changes the path mid-run through Control's live path update | built, in `~/ros2_ws/install`; dev loop on Belief's own core; run under ROS on an isolated graph, and once in Gazebo beside Control's node (a C2 development run in a built world, 2026-11-18); never on the boat |
-| Evaluation | **planned, not built** |
+| Sonar | `BlueBoat-SSS` drives both sonars, builds seabed images, records `.svlog` files |
+| Perception | Finds targets in the seabed images (`/sss_ai/detections`) |
+| Belief | Turns pings + detections into a belief map (`BeliefGrid`) |
+| Replanner | Reads only the belief map and sends a new path |
+| Control | Follows the path (`/blueboat/update_path`) and drives the thrusters |
 
-## Where the project stands (2026-11-18)
+## Modules
 
-The simulator was frozen on **2026-11-18** after the acceptance round (sessions 01–10). The acceptance
-protocol's literal verdict is **NOT READY**; the owner froze it anyway as a **model-conditional tool**
-(`~/ros2_ws/sim_runs/sim_acceptance/freeze_decision.md`). Every simulated result is produced and stated under
-[`SIM_VALIDITY_CONDITIONS.md`](SIM_VALIDITY_CONDITIONS.md). Next work, in order: the dataset and the detector
-(Perception), the whole pipeline in Gazebo (one C2 development run on 2026-11-18; C4 not yet), the ICAROB Experiment 2 re-run on
-the frozen simulator, then the E4/E5 campaign. Details: [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md); open
-items across every repository: [`docs/OPEN_ITEMS.md`](docs/OPEN_ITEMS.md).
+Eight git submodules, plus three folders of this repository.
+
+| Module | Role | State |
+|---|---|---|
+| [BlueBoat-Control](BlueBoat-Control/README.md) | Motion, pose, thrust, path following, live path update, run bags and replay; owns `blueboat_interfaces` | Frozen at `v1.0`, additions only |
+| [BlueBoat-MCS](BlueBoat-MCS/README.md) | Mission Control Station: launch and watch missions (real or simulated), Pattern Designer, safe shutdown | Frozen at `v1.0`, additions only |
+| [BlueBoat-SSS](BlueBoat-SSS/README.md) | Sonar driver and processor (`blueboat_sss`); GCS app: mosaic, recording, seabed images (`blueboat_gcs`) | In use |
+| [BlueBoat-SSS-Sim](BlueBoat-SSS-Sim/README.md) | Gazebo worlds (World Builder), simulated sonar, sea state | **Frozen** (see Status) |
+| [BlueBoat-Perception](BlueBoat-Perception/README.md) | The only detector; dataset mode for training data | Dummy detector by default; YOLO built, not trained |
+| [BlueBoat-Belief](BlueBoat-Belief/README.md) | Belief map from pings and detections | Built; never run with a real detector |
+| [BlueBoat-Replanner](BlueBoat-Replanner/README.md) | Aspect-aware replanner; generates every survey type | Built; run once in Gazebo; never on the boat |
+| [SSS-Dataset-Aug-Studio](SSS-Dataset-Aug-Studio/README.md) | Offline augmentation of YOLO datasets | Optional; nothing depends on it |
+| [hub/](hub/README.md) | Desktop app that starts, watches and stops every app | Built |
+| [link_guardian/](link_guardian/README.md) | Brings the boat back if the laptop link is lost | Built; **not yet tested on the boat** |
+| [tools/sim_record/](tools/sim_record/README.md) | Runs and records a simulated survey from the command line | Built |
+| Evaluation | Experiment evaluation | **Planned, not built** |
+
+## First-time setup
+
+Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic. The full dependency list (ROS packages, the two
+source packages, acados for the MPC controller) is in
+[BlueBoat-Control/README.md](BlueBoat-Control/README.md).
+
+**1. Get the code** (with all submodules):
+
+```bash
+mkdir -p ~/ros2_ws/src && cd ~/ros2_ws/src
+git clone --recurse-submodules https://github.com/Kyyrron/BlueBoat-SideScanSonar.git
+# already cloned without submodules:
+cd BlueBoat-SideScanSonar && git submodule update --init --recursive
+```
+
+**2. Python environment.** `~/ros2_ws/env.sh` expects a venv at `~/ros2_ws/.venv`:
+
+```bash
+cd ~/ros2_ws
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r src/BlueBoat-SideScanSonar/requirements.txt
+```
+
+Then build the acados C library (BlueBoat-Control README) and point `~/.bashrc` at it:
+
+```bash
+export ACADOS_SOURCE_DIR=$HOME/ros2_ws/.venv/src/acados-template
+export LD_LIBRARY_PATH=$ACADOS_SOURCE_DIR/lib:$LD_LIBRARY_PATH
+```
+
+For the ray-cast sonar (GPU), the simulated sonar node runs on the system Python, so it also
+needs `warp-lang` there:
+
+```bash
+/usr/bin/python3 -m pip install --user --break-system-packages warp-lang==1.19.0
+```
+
+**3. `env.sh`.** It lives in `~/ros2_ws` (not in this repository) and holds:
+
+```bash
+source .venv/bin/activate
+source install/setup.bash
+```
+
+**4. Build.** From a fresh terminal with only ROS sourced (not `env.sh`):
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select blueboat_interfaces   # first: every module uses its types
+colcon build
+```
+
+Good to know:
+- `colcon build` always runs from `~/ros2_ws`. This repository is not the workspace.
+- Two ROS packages sit one folder below their git root:
+  `BlueBoat-SSS-Sim/blueboat_sss_sim/` and `BlueBoat-Perception/blueboat_perception/`.
+- `blueboat_belief_interfaces` builds before `blueboat_belief`; `blueboat_replanner` needs both
+  interface packages. colcon orders these itself.
+- `blueboat_gcs` and `BlueBoat-MCS` are not colcon packages: they run from their folders.
+
+**5. Every new terminal:**
+
+```bash
+cd ~/ros2_ws && source env.sh
+```
+
+## Start here: BlueBoat Hub
+
+The easiest way in. [`hub/`](hub/README.md) is one desktop window that launches, watches and
+stops every app (MCS, GCS, QGroundControl, World Builder, Gazebo viewer, Log Reviewer, Belief,
+Replanner, Aug Studio), shows each app's terminal, runs `colcon build` and opens the data
+folders. Install: [hub/INSTALL.md](hub/INSTALL.md) (`cd hub && ./install.sh`).
+
+Without the Hub, start the two main apps by hand:
+
+```bash
+cd ~/ros2_ws && source env.sh
+cd src/BlueBoat-SideScanSonar/BlueBoat-MCS && python3 run.py              # Mission Control Station
+cd ~/ros2_ws/src/BlueBoat-SideScanSonar/BlueBoat-SSS/blueboat_sss && python3 -m blueboat_gcs.main   # GCS
+```
+
+## Run a simulated survey
+
+1. Build a world with the **World Builder** (`ros2 run blueboat_sss_sim world_builder`), or
+   generate one headless (BlueBoat-SSS-Sim README).
+2. In **MCS**: *Launch Mission* → simulation, pick the world, the survey path, the
+   **Sonar model** and the **Slow-down**.
+3. In the **GCS**: start the pipeline, **START**, then **Record**.
+4. Stop with MCS's **Stop Mission** (it runs the safe shutdown first).
+
+Same thing from one command, no clicking: [tools/sim_record/](tools/sim_record/README.md).
+
+Check the simulator before producing results:
+
+```bash
+python3 -m blueboat_sss_sim.core.provenance --check   # exit 1 = stale install, rebuild
+```
+
+## Run a real survey
+
+1. Boat in the water, Base Station WiFi up, laptop on its network.
+2. In **MCS**: *Launch Mission* → real robot, controller, path, motors. The link guardian
+   switches ON by itself; check its **GUARDIAN** box ([link_guardian/](link_guardian/README.md)).
+3. In the **GCS**: pipeline, **START**, **Record**.
+4. End with MCS's **Stop Mission**. E-STOP, servo release and ending the mission are three
+   separate buttons.
+
+Details: [BlueBoat-MCS/README.md](BlueBoat-MCS/README.md),
+[BlueBoat-SSS/README.md](BlueBoat-SSS/README.md),
+[BlueBoat-Control/README.md](BlueBoat-Control/README.md).
+
+## Status
+
+- **Simulator frozen** (2026-11-18, tag `sim-freeze-v1.0-2026-11-18`). The acceptance
+  protocol's literal verdict is **NOT READY**. The owner froze it anyway as a
+  **model-conditional tool**. A simulated result counts only if produced and stated under
+  [`SIM_VALIDITY_CONDITIONS.md`](SIM_VALIDITY_CONDITIONS.md): a comparison of survey strategies
+  in simulation, never a field detection rate.
+- A world-generation update (v1.1, World Builder only) is pending the owner's signature; the
+  sonar engine is unchanged.
+- **Detector not trained yet.** Perception runs a dummy detector by default.
+- **Whole chain in Gazebo:** ran end to end once (development run). Never on the boat.
+- **Evaluation:** planned, not built.
+
+Current state and next steps: [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
 
 ## Documents
 
-| Read | For |
+| File | Read it for |
 |---|---|
-| `project_synthesis.md` | scope, evidence architecture, system architecture, the ⚠ rules (the authority) |
-| `.claude/CLAUDE.md` | how the modules relate (loaded by every Claude Code session here); full text `docs/DESIGN.md` |
-| `SIM_VALIDITY_CONDITIONS.md` | the conditions under which simulated results may be used |
-| `docs/PROJECT_STATE.md` · `docs/OPEN_ITEMS.md` · `docs/HISTORY.md` | state, open items, dated history |
-| `docs/DOC_MAP.md` | where every merged or moved document went (2026-11-18) |
-| `target_families_and_surrogates.md` | harbour target set and its simulation specification |
-| `literature_conclusions.md` · `project_review.md` · `sim_review.md` | literature directives; the dated reviews (cited by section from code) |
-| `link_guardian/README.md` · `tools/sim_record/README.md` · `hub/README.md` | connection-loss guardian; command-line simulated runs; the Hub |
+| [`project_synthesis.md`](project_synthesis.md) | Scope, system architecture, design rules (the reference) |
+| [`SIM_VALIDITY_CONDITIONS.md`](SIM_VALIDITY_CONDITIONS.md) | When and how a simulated result may be used |
+| [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md) | Where the project stands |
+| [`docs/OPEN_ITEMS.md`](docs/OPEN_ITEMS.md) | Open work across all repositories |
+| [`docs/DESIGN.md`](docs/DESIGN.md) | How the modules fit together, interfaces, project-wide rules |
+| [`docs/HISTORY.md`](docs/HISTORY.md) | Dated history |
+| [`docs/DOC_MAP.md`](docs/DOC_MAP.md) | Where moved or merged documents went |
+| [`target_families_and_surrogates.md`](target_families_and_surrogates.md) | Harbour target set and how it is simulated |
+| [`literature_conclusions.md`](literature_conclusions.md) | Conclusions from the literature |
+| [`project_review.md`](project_review.md), [`sim_review.md`](sim_review.md) | Dated reviews (cited by section from code) |
 
-Each submodule has its own `README.md` and `.claude/CLAUDE.md`. Building, launching and operating the control
-stack (robot description, launch files, terminal commands on `/blueboat/input_str`):
-[`BlueBoat-Control/README.md`](BlueBoat-Control/README.md). This README carried an older copy of that text until
-2026-11-18.
+Each submodule has its own `README.md`.
 
-## Build
+## License
 
-```bash
-cd ~/ros2_ws && colcon build        # the only workspace; blueboat_interfaces first
-source /opt/ros/jazzy/setup.bash && source install/setup.bash
-python3 -m blueboat_sss_sim.core.provenance --check   # the frozen simulator: code digest cc29e08780aac4cd
-```
-
-Build order and per-module gates: `.claude/CLAUDE.md` §2 and the skill `module-gates`.
-
-# License
-blueboat package is open-sourced under the MIT License. See the LICENSE file for details.
+Apache License 2.0. See [LICENSE](LICENSE).

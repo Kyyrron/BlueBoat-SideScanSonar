@@ -1,10 +1,29 @@
 # sim_record — run and record a simulated survey from the command line
 
-One command does what the operator does with the two Apps: the **Mission Control Station** launches a
-personalized world with a survey path and a Sonar model, the **GCS** runs its processing pipeline,
-START, Record, and writes a recording session (`.svlog`, seabed images, mosaic, waterfall,
-`metadata.json`). Nothing is re-implemented: the station's own `LaunchManager` and the GCS's own
-window run offscreen and are driven through the signals their buttons emit. No package is modified.
+One command does what the operator does by hand with the two apps:
+
+1. **MCS** launches a Gazebo world with a survey path and a sonar model;
+2. the **GCS** runs its pipeline, START, Record, and writes a recording session (`.svlog`,
+   seabed images, mosaic, waterfall, `metadata.json`).
+
+Nothing is re-implemented: MCS's own launcher and the GCS's own window run offscreen and are
+driven through the same signals as their buttons. No package is modified.
+
+## Before a run
+
+- One run at a time. Nothing else may be running (no simulation, no GCS); the tool refuses and
+  lists what it found.
+- The installed simulator must match its source tree. Check:
+  `python3 -m blueboat_sss_sim.core.provenance --check`. If it fails, rebuild:
+  ```bash
+  cd ~/ros2_ws && rm -rf build/blueboat_sss_sim install/blueboat_sss_sim && colcon build --packages-select blueboat_sss_sim
+  ```
+- For a result run, stay inside [`SIM_VALIDITY_CONDITIONS.md`](../../SIM_VALIDITY_CONDITIONS.md)
+  (sensor `harbour_fast`, 20 m range, 4.5–7 m altitude, allowed seas and controllers).
+- A world folder (`~/worlds/<path>/<world>/` with `metadata.yaml`) and an MCS trajectory
+  (name in `~/.config/blueboat_mcs/trajectories/`, or a file path).
+
+## Run
 
 ```bash
 cd ~/ros2_ws/src/BlueBoat-SideScanSonar
@@ -13,111 +32,111 @@ python3 tools/sim_record/record_run.py \
     --sensor harbour_fast --name my_run --rtf 2.0
 ```
 
-It needs no sourced shell (the drivers source `~/ros2_ws/env.sh` themselves) and no display.
+No sourced shell and no display needed: the drivers source `~/ros2_ws/env.sh` themselves.
+Ctrl-C ends the run cleanly. Exit code 0 = `completed` or `stop_after`; 1 otherwise.
 
-## What happens, in order
+## Options
 
-1. **Refusals.** It does not start when a simulation or a GCS is already running, when `<out>/<name>`
-   exists, or when the installed simulator is not the source tree
-   (`blueboat_sss_sim.core.provenance --check`; `--allow-stale` overrides).
-2. **Launch** (`mcs_driver.py`): `LaunchManager.start` with the launch dialog's parameters — world,
-   controller (`--controller`, MPC by default), Sonar model (`--sensor`), Slow-down (`--rtf`),
-   Extra args (`headless:=true`, the start range, `--extra`). The Perception companion starts as in
-   the App. The survey path is **not deployed yet**, so `path_generation` holds the boat at the origin.
-3. **GCS** (`gcs_driver.py`), once the launch log says the sonar is ready: the processing pipeline,
-   START, and when pings flow, Record ON.
-4. **Deploy.** The station's own `io_yaml.deploy_mission` writes the path in the world frame (the
-   world's GPS anchor is the georeference). The boat leaves; the whole path is in the recording.
-   With `--record-from-m S` the order is reversed: the boat leaves first and Record ON comes `S`
-   metres along the path (a path that begins with a lead-in).
-5. **Range changes.** At each `--range-at S:R` the GCS's "Apply range" is used (ping off, set
-   `range_length_mm`, ping on), `S` metres along the path.
-6. **End.** Last waypoint reached (inside 2.5 m, at least 80 % of the path covered, 3 s more), or a
-   stall (90 simulated seconds without 1 m of progress), `--stop-after-s`, `--max-wall-min`
-   (120 by default) or Ctrl-C. Then Record OFF, STOP, `default` on `/blueboat/input_str`, and the
-   station's own stop.
-7. **Record.** `<out>/<name>/run.json`, also copied into the session as `recorder_run.json`.
+| Option | Default | Meaning |
+|---|---|---|
+| `--world` | required | World folder |
+| `--trajectory` | required | MCS trajectory name or file (GPS-anchored) |
+| `--sensor` | required | `geometric`, a profile file, or a ray-cast short name: `harbour_fast`, `harbour_live`, `fast`, `live`, `default` (= `config/raycast_<name>_sonar.yaml`, installed copy first) |
+| `--name` | required | Run name: the folder under `--out` (must not exist) |
+| `--out` | `~/ros2_ws/sim_runs/recorded_runs` | Where run folders go |
+| `--rtf` | 1.0 | Slow-down (Gazebo real-time factor). x2 for the fast variants, x0.5 for the others |
+| `--controller` | `MPC` | Controller |
+| `--range-m` | 0 (profile's) | Sonar range at the start, metres |
+| `--range-at S:R` | — | Change the range to `R` m at `S` m along the path (repeatable) |
+| `--waves`, `--waves-from` | calm, 0 | Wave preset of the MCS dialog (e.g. `harbour_chop`), direction it comes from (compass °) |
+| `--current`, `--current-from` | none, 0 | Current preset (e.g. `weak`, `moderate`), direction |
+| `--sea-seed` | 7 | Sea-state seed |
+| `--sonar-seed` | 0 (fresh, logged) | Sensor-noise seed |
+| `--record-from-m S` | 0 | Boat leaves first; Record ON `S` m along the path (after a lead-in) |
+| `--stop-after-s` | 0 (off) | Stop this many simulated seconds after the boat leaves |
+| `--max-wall-min` | 120 | Wall-clock limit, minutes |
+| `--session-name` | — | Rename the session folder |
+| `--private-data-root` | off | Write the session under the run folder instead of the GCS data root |
+| `--ground-truth-bag` | off | Also record the simulator's ground truth (see below) |
+| `--allow-stale` | off | Run even if the installed simulator is stale |
+| `--extra K:=V ...` | — | Extra launch arguments (`headless:=true` is always added) |
 
-**Ground truth (`--ground-truth-bag`, 2026-11-12).** The GCS does not record the simulator's ground
-truth, so a session alone cannot be labelled. With this option the recorder also runs the command of
-Perception's launch file, `ros2 bag record --use-sim-time --topics
-/side_scan_sonar/ground_truth/contacts /side_scan_sonar/ground_truth/sensor`, into
-`<out>/<name>/ground_truth_bag` from the moment the sonar is ready until the GCS has closed the
-session. The labels are then made offline exactly as the live dataset mode makes them:
+## What happens
+
+1. **Checks** (see *Before a run*).
+2. **Launch.** MCS's launcher starts the world with the chosen sonar, controller, slow-down
+   and sea. The path is not deployed yet, so the boat holds at the origin.
+3. **GCS**, once the sonar is ready: pipeline, START, then Record ON when pings flow.
+4. **Deploy.** The path is written in the world frame (MCS's own deploy); the boat leaves. With
+   `--record-from-m`, Record ON comes later instead.
+5. **Range changes** at each `--range-at` (GCS "Apply range").
+6. **End:** last waypoint reached (within 2.5 m, after at least 80 % of the path), a stall
+   (90 simulated s without 1 m of progress), `--stop-after-s`, `--max-wall-min` or Ctrl-C.
+   Then Record OFF, STOP, `default` on `/blueboat/input_str`, and MCS's own stop.
+7. **Write** `run.json`.
+
+## Output
+
+| What | Where |
+|---|---|
+| Session | Where the GCS writes it: `~/ros2_ws/data/SSS_data/sessions/<stamp>/` (or under the run folder with `--private-data-root`); `recorder_run.json` = a copy of `run.json` |
+| Run folder | `<out>/<name>/`: `run.json`, `run.log`, `mcs_launch.log`, `gcs_driver.log`, `gcs_summary.json`, `boat_track.csv`, `gpu_mem.csv`, `deployed_path.yaml`, `ground_truth_bag/` (with `--ground-truth-bag`) |
+
+`run.json` holds:
+
+- `status`: `completed`, `stall`, `wall_limit`, `stop_after`, `aborted`, `launch_failed`
+  (replanner runs also `no_first_path`, `replanner_<state>`);
+- world, trajectory and sensor-profile digests, the provenance line, the session path;
+- pings, seabed images, range changes applied, cross-track error while recording;
+- wall time, GPU peak, counts of `render failed` / `behind the sim clock` / `process has died`
+  in the launch log (the first two should be 0), and anything left running;
+- the simulator's run configuration, copied from its run record
+  (`~/.cache/blueboat_sss_sim/runs/<run_id>.json`): `sim_config`, `thrust_gain`,
+  `sea_schedule` and its SHA-256, simulator commit and dirty flag, running digest;
+- `control_code`: a SHA-256 over the installed `~/ros2_ws/install/blueboat_control`;
+- `path_source`: `mission` or `replanner`.
+
+A value the simulator did not record is `null`, never guessed.
+
+## Ground truth for labelling
+
+The GCS session holds no ground truth. `--ground-truth-bag` records
+`/side_scan_sonar/ground_truth/contacts` and `/side_scan_sonar/ground_truth/sensor` into
+`<out>/<name>/ground_truth_bag`. Make the labels offline afterwards:
 
 ```bash
 ros2 run blueboat_perception blueboat-perception-offline <session> --dataset <name> \
     --world <world folder> --ground-truth-bag <out>/<name>/ground_truth_bag [--data-dir <root>]
 ```
 
-(`--data-dir` keeps the dataset out of `~/ros2_ws/data/Dataset_data`; the tool is not on the PATH,
-hence `ros2 run`.)
+`--data-dir` keeps the dataset out of `~/ros2_ws/data/Dataset_data`.
 
-## Where things go
+## Replanner-owned runs
 
-| What | Where |
-|---|---|
-| The session | where the GCS writes it: `~/ros2_ws/data/SSS_data/sessions/<stamp>/` (`--session-name N` renames the folder; `--private-data-root` writes under the run folder instead) |
-| Run folder | `--out` (default `~/ros2_ws/sim_runs/recorded_runs`) `/<name>/`: `run.json`, `run.log`, `mcs_launch.log` (the launch output), `gcs_driver.log` (the GCS console), `boat_track.csv`, `gpu_mem.csv`, `deployed_path.yaml`, and with `--ground-truth-bag` the folder `ground_truth_bag/` |
+`--extra path_source:=replanner`: Control holds the boat at the spawn pose until the
+Replanner's first path. The MCS path is still deployed (the launch needs one) but not flown.
 
-`run.json` holds: status (`completed`, `stall`, `wall_limit`, `stop_after`, `aborted`,
-`launch_failed`), the world and profile digests, the provenance line, the session path, pings and
-images, the range changes actually applied, the cross-track error of the boat against the path while
-recording, wall time, GPU peak, the count of `render failed` / `behind the sim clock` lines in the
-launch log, and anything left running.
-
-**Run configuration (additive, 2026-11-16, CR-03-4).** `run.json` also copies the simulator's own run
-record (`run_info`, which `sss_sim_node` writes to `~/.cache/blueboat_sss_sim/runs/<run_id>.json`).
-The tool takes the newest such file written during the run for this world:
-
-| Key | From |
-|---|---|
-| `run_info` | `{file, run_id, event, has_context}` of that file, or `null` if none was found |
-| `sim_config` | `run_info.simulation_context.sim_config` |
-| `thrust_gain` | `simulation_context.simulation_interface.thrust_gain`; `null` with a context present means no `thrust_gain:=` override was passed, so `simulation_interface`'s default applied |
-| `sea_schedule`, `sea_schedule_sha256` | `simulation_context.sea_schedule`, `.sea_schedule_sha256` |
-| `simulator_commit`, `simulator_dirty`, `simulator_dirty_files` | `run_info.build.git`, the installed simulator's build stamp |
-| `simulator_running_digest` | `run_info.source_check.running_digest` |
-| `control_code` | `{path, sha256, files}`: a SHA-256 over every file of `~/ros2_ws/install/blueboat_control` (what the launch runs), computed at launch. It is a digest of the files as they are, not git |
-| `path_source` | (2026-11-18, R-3) the last `path_source:=` of `--extra`, else `mission`: the value `full_mission_launch.py` passes to `master_control`. The simulator's run context does not carry it |
-
-A value the `run_info` does not carry (an older simulator, no run context) is `null`, never inferred.
-Records written before this change simply lack these keys.
-
-## Replanner-owned runs (2026-11-18, R-3)
-
-`--extra path_source:=replanner` makes `master_control` hold at the spawn pose until the Replanner's first
-accepted `/blueboat/update_path`. The recorder still deploys the MCS path (`full_mission_launch.py` requires a
-`trajectory_file`), but nothing follows it, so the GCS side runs with `--follow replanner`:
-
-- the boat "leaves" once it is 1 m from its pose at the deploy; no first path within
-  `--first-path-timeout-s` (600 simulated s) of the deploy ends the run as `no_first_path`;
-- progress is the distance travelled (`boat_track.csv` column `travelled_m`, cross-track `nan`); a stall is
-  90 simulated s with less than 1 m travelled;
-- the end is the Replanner's latched `/replanner/status`: `done` or `stopped_holding` (then 3 s) →
-  `completed`; `failed` or `run_ended` → `replanner_<state>`. `--stop-after-s` and `--max-wall-min` work as
-  before;
-- `gcs_summary.json` gains `follow`, `travelled_m` (in place of `path_covered_m`) and `replanner_final`
-  (`state`, `reason`, `status_messages`); `path_length_m` is `null`;
+- The tool **does not start** Belief or the Replanner. Start them yourself, and call
+  `/replanner/start`, after the log says "path deployed".
+- The run ends on the Replanner's `/replanner/status`: `done` or `stopped_holding` →
+  `completed`; `failed` or `run_ended` → `replanner_<state>`.
+- No first path within 600 simulated s of the deploy → `no_first_path`.
+- Progress is distance travelled (`boat_track.csv` column `travelled_m`); a stall is 90
+  simulated s with less than 1 m travelled.
 - `--range-at` and `--record-from-m` are refused (they are distances along the deployed path).
-
-The recorder never starts Belief or the Replanner and never calls `/replanner/start`: the operator does, after
-the log says "path deployed" (Replanner `docs/LOCAL_CHECKLIST.md` L-G). Without `path_source:=replanner` the
-recorder behaves exactly as before.
-
-## Sensors
-
-`--sensor` is `geometric`, a profile file, or the short name of a ray-cast variant
-(`config/raycast_<name>_sonar.yaml`, the installed copy first, as MCS picks it): `default`, `live`,
-`fast`, `harbour_live`, `harbour_fast`. Slow-down: x2 for the fast variants, x0.5 for the others;
-the simulation is paused while a ping renders, so no ping is lost either way. Keep the range at
-30 m or below on the 8 GB GPU, 40 m at most.
 
 ## Limits
 
-- The boat always spawns at the world origin heading east. A path whose first leg heads elsewhere
-  is followed with a wide swing (5.8 m measured on a southward start): begin such a path with a
-  lead-in and use `--record-from-m`.
-- It never kills a process it did not start. `rviz2` exits at once in an offscreen launch; the launch
-  log's "process has died" lines at the end are the normal SIGINT teardown.
-- One run at a time: two simulations share the ROS graph.
+- The boat spawns at the world origin heading east. A path whose first leg heads elsewhere
+  starts with a wide swing: begin it with a lead-in and use `--record-from-m`.
+- Keep the ray-cast range at 30 m or less on an 8 GB GPU (never above 40 m).
+- It never kills a process it did not start. "process has died" lines at the end of the launch
+  log are the normal teardown.
+
+## Layout
+
+| File | What |
+|---|---|
+| `record_run.py` | The command you run; coordinates the two drivers, writes `run.json` |
+| `mcs_driver.py` | MCS side: launch, deploy, stop (started by `record_run.py`) |
+| `gcs_driver.py` | GCS side: pipeline, START, Record, range changes, end detection (started by `record_run.py`) |

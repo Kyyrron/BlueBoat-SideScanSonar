@@ -6,8 +6,10 @@ interface contract (topics, services, QoS, frames, parameters) is `.claude/inter
 modules and `project_synthesis.md` disagree: `.claude/synthesis-discrepancies.md`. Dated history:
 `docs/HISTORY.md`; where the project stands: `docs/PROJECT_STATE.md`.*
 
-**Simulator status (2026-11-18).** `BlueBoat-SSS-Sim` is frozen (`sim-freeze-v1.0-2026-11-18`, code digest
-`cc29e08780aac4cd`) as a model-conditional tool; the acceptance protocol's literal verdict is **NOT READY**.
+**Simulator status (2026-11-18; v1.1 2026-11-21).** `BlueBoat-SSS-Sim` is frozen (`sim-freeze-v1.0-2026-11-18`, code digest
+`cc29e08780aac4cd`) as a model-conditional tool; the acceptance protocol's literal verdict is **NOT READY**. v1.1
+(world generation only, pending the owner's signature) adds the World Builder's Mission-like mode: code digest
+`bbd4112928645e13`, engine digest unchanged.
 Simulated results are valid only under `SIM_VALIDITY_CONDITIONS.md`. Lines below that describe the simulator
 as still being built are its state before the freeze; the module states of 2026-11-18 are in
 `docs/PROJECT_STATE.md`.
@@ -136,7 +138,10 @@ setup and test ladder: `link_guardian/README.md`.
 **VERIFIED.** Each submodule's `.gitmodules` `path` equals its repository name, directly under
 the root; the surprise is that two ROS packages sit one level below their git roots: the
 simulator's at `BlueBoat-SSS-Sim/blueboat_sss_sim/` and Perception's at
-`BlueBoat-Perception/blueboat_perception/`. A `.../BlueBoat-SideScanSonar/blueboat_mcs/`
+`BlueBoat-Perception/blueboat_perception/`. Since 2026-11-21 (simulator v1.1) the simulator's repository holds a
+second `ament_python` package beside the first, `BlueBoat-SSS-Sim/blueboat_harbour_population/` (the mission-like
+population model: pure Python, no build-time dependency; it imports the simulator lazily, from the install or the
+source root); like Belief's two packages, two packages in one submodule. A `.../BlueBoat-SideScanSonar/blueboat_mcs/`
 path in an older document is history.
 
 `~/ros2_ws` is the project's **only** ROS workspace (§1.1). The superproject is checked out at

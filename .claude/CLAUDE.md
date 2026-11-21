@@ -24,7 +24,10 @@ exist yet on 2026-11-18), code digest `cc29e08780aac4cd`
 `~/ros2_ws/sim_runs/sim_acceptance/freeze_decision.md`). The acceptance work (sessions 01–10) is over.
 
 - **No simulator code change** (any `*.py` of the package or `config/*.yaml`). A change means a new
-  simulator version, by owner decision only.
+  simulator version, by owner decision only. **v1.1 (2026-11-21, session 14, owner order; pending signature):**
+  world generation only (World Builder Screen 5's Mission-like mode, `builder/` only), code digest `bbd4112928645e13`,
+  engine digest unchanged; the evidence-based population model is a second package of the simulator's repository,
+  `BlueBoat-SSS-Sim/blueboat_harbour_population/` (outside the code digest; `docs/population/` of that repository).
 - Every simulated result is produced and stated under the conditions file, imported here:
 
 @../SIM_VALIDITY_CONDITIONS.md
@@ -78,6 +81,7 @@ behaviour (`LGRD_ON`, neutral after 3 s, return along the trail after 15 s, auto
 `~/ros2_ws`). Two ROS packages sit one level below their git roots: `BlueBoat-SSS-Sim/blueboat_sss_sim/` and
 `BlueBoat-Perception/blueboat_perception/`. Build `blueboat_interfaces` first;
 `blueboat_belief_interfaces` before `blueboat_belief` (from a shell that has not sourced the venv);
+`blueboat_harbour_population` (beside `blueboat_sss_sim` in the simulator's repository) depends on nothing at build time;
 `blueboat_replanner` needs both interface packages. `blueboat_gcs` and `BlueBoat-MCS` are not colcon
 packages. **No file is owned twice.** Detail: `docs/DESIGN.md` §2.
 
