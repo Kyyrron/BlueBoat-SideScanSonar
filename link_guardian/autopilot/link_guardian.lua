@@ -40,6 +40,9 @@ What it does
             counts as reached within LGRD_RADIUS m; one not reached within LGRD_PT_MAX s
             is skipped. At the oldest point: LOITER (else HOLD) and wait there.
             No trail, or GUIDED refused: RTL (straight line to HOME) instead.
+         c'. SAFETY WAY BACK instead of (c), during a run of a GPS-anchored pattern that
+            has one (LGRD_SAFE = 2, see below): join the way back at the point closest to
+            the boat, follow its points in order to the last one, LOITER there.
     6. When the link comes back (first laptop heartbeat) the guardian hands control back
        at once: HOLD, SERVO1/3_FUNCTION back to what they were before the takeover,
        MANUAL. The station's RC override then drives again, so the run (or manual
@@ -61,8 +64,17 @@ Thruster output range (why the arming waits)
   (With ARMING_CHECK enabled Rover's own pre-arm motor check already prevents the bad
   case in practice; this does not rely on it.)
 
-HOME is set by ArduPilot at arming (the session start) and moved by the laptop to the
-start of each run while the link is up. Only the RTL fallback goes there.
+GUARDIAN HOME (2026-11-26) = the trail's first point: where the retrace ends and the boat
+LOITERs. It is where the guardian came ON (usually the session start) until the operator
+presses Set Home in the station: the laptop sets LGRD_HOME = 1, the script drops the trail,
+records the boat's position as its new first point and answers "home <lat> <lng> set"
+(1e-7 deg). The laptop shows that point on its map. LGRD_HOME = 3 asks for the line again.
+While the guardian is ON, ArduPilot's own HOME (the RTL fallback's destination) is kept on
+the Guardian Home: re-set every 5 s while armed, and once more at a takeover. Nothing else
+moves it (the laptop no longer moves HOME at run start / end).
+The last point of a route (the Guardian Home, or the end of a safety way back) counts as
+reached within WP_RADIUS + 0.5 m (at most LGRD_RADIUS), so the boat drives up to it
+before holding there.
 
 Parameters (appear after the first boot with the script; see README.md):
   LGRD_ENABLE   1     master switch; 0 = guardian off (stands down immediately)
@@ -78,9 +90,24 @@ Parameters (appear after the first boot with the script; see README.md):
   LGRD_NEUTRAL  3     s of laptop silence before holding the thrusters at neutral;
                       0 = off. Keep it below LGRD_TIMEOUT.
   LGRD_TRAIL_D  2     m between two trail points (the spacing doubles when it is full)
-  LGRD_PT_MAX   60    s to reach one trail point before skipping to the next
+  LGRD_PT_MAX   60    s to reach one point before skipping to the next (longer for a
+                      long leg: 2 x leg / WP_SPEED)
+  LGRD_SAFE     0     safety way back: 0 none, 1 requested by the laptop, 2 loaded and
+                      checked (set by this script), -1 invalid. Reset to 0 at every boot.
+  LGRD_SAFE_N   0     number of points the laptop uploaded
+  LGRD_HOME     0     Set Home: 1 = set it here (laptop), 3 = report it (laptop); the script
+                      answers 0 (done) or -1 (refused). Reset to 0 at every boot.
 (LGRD_STAGE1 / WAIT / S1_MAX, table entries 3-5, existed until 2026-10-28; the retrace
 replaced them. Their entries are not reused.)
+
+Safety way back (2026-11-25)
+  A GPS-anchored pattern may carry a hand-drawn "safety way back". At START RUN the laptop
+  (guardian.py) uploads it as the autopilot's MISSION (item 0 = home, items 1..N =
+  NAV_WAYPOINT; we never fly AUTO, so the mission storage is free), sets LGRD_SAFE_N = N
+  and LGRD_SAFE = 1. This script then reads and checks the mission (N items, all
+  NAV_WAYPOINT) and answers LGRD_SAFE = 2 (ready) or -1 (invalid). At STOP RUN the laptop
+  sets LGRD_SAFE = 0. A takeover while LGRD_SAFE = 2 follows the way back; otherwise the
+  trail.
 
 Messages are kept under 50 characters (one MAVLink STATUSTEXT, "LinkGuard: " included):
 longer ones are split and the station only shows the first piece.
@@ -95,6 +122,9 @@ local SCALING_SETTLE_MS = 2000   -- disarmed on 73/74 this long = output range a
 local NEUTRAL_PWM = 1500
 local MAX_TEXT = 50              -- MAVLink STATUSTEXT text field
 local TRAIL_MAX = 1000           -- trail points kept (thinned by half when full)
+local SAFE_MAX = 200             -- safety way back points accepted
+local SAFE_CHUNK = 25            -- mission items read per tick (VM instruction budget)
+local NAV_WAYPOINT = 16          -- MAV_CMD_NAV_WAYPOINT
 
 -- ArduPilot Rover mode numbers
 local MODE_MANUAL = 0
@@ -117,7 +147,7 @@ local SEV_CRITICAL, SEV_WARNING, SEV_NOTICE, SEV_INFO = 2, 4, 5, 6
 local PARAM_TABLE_KEY = 87     -- must be unique among the scripts on this autopilot
 local PARAM_PREFIX = "LGRD_"
 
-assert(param:add_table(PARAM_TABLE_KEY, PARAM_PREFIX, 16), "LinkGuard: could not add param table")
+assert(param:add_table(PARAM_TABLE_KEY, PARAM_PREFIX, 20), "LinkGuard: could not add param table")
 
 local function bind_add_param(name, idx, default_value)
   assert(param:add_param(PARAM_TABLE_KEY, idx, name, default_value),
@@ -140,10 +170,15 @@ local P_ON      = bind_add_param("ON",      12, 0)
 local P_NEUTRAL = bind_add_param("NEUTRAL", 13, 3)
 local P_TRAIL_D = bind_add_param("TRAIL_D", 14, 2)
 local P_PT_MAX  = bind_add_param("PT_MAX",  15, 60)
+local P_SAFE    = bind_add_param("SAFE",    16, 0)
+local P_SAFE_N  = bind_add_param("SAFE_N",  17, 0)
+local P_HOME    = bind_add_param("HOME",    18, 0)
 
 -- A session flag must never outlive the session: every boot starts OFF until the
 -- laptop sets it again (runtime value only; the laptop's own set is what is saved).
 param:set(PARAM_PREFIX .. "ON", 0)
+param:set(PARAM_PREFIX .. "SAFE", 0)    -- likewise: a way back belongs to one run
+param:set(PARAM_PREFIX .. "HOME", 0)    -- no Set Home request survives a reboot
 
 ---------------------------------------------------------------------------
 -- Helpers
@@ -300,19 +335,29 @@ local trail_lat, trail_lng = {}, {}
 local trail_n = 0
 local trail_scale = 1        -- spacing = LGRD_TRAIL_D x this (doubled at every thinning)
 
+local home_said = false       -- the current Guardian Home was announced to the laptop
+local home_src = "on"        -- "on" (where the guardian came ON) | "set" (Set Home)
+
 local function trail_clear()
   trail_lat, trail_lng, trail_n, trail_scale = {}, {}, 0, 1
+  home_said, home_src = false, "on"
 end
 
--- Trail point i as a Location (a copy of `template` keeps its altitude frame).
-local function trail_point(i, template)
+-- A Location from 1e-7 deg integers (a copy of `template` keeps its altitude frame).
+local function make_loc(lat, lng, template)
   local loc = template and template:copy() or Location()
-  loc:lat(trail_lat[i])
-  loc:lng(trail_lng[i])
+  loc:lat(lat)
+  loc:lng(lng)
   return loc
 end
 
--- Keep every other point, always the newest, and double the spacing.
+-- Trail point i as a Location.
+local function trail_point(i, template)
+  return make_loc(trail_lat[i], trail_lng[i], template)
+end
+
+-- Keep every other point, always the newest and the first (the Guardian Home), and
+-- double the spacing.
 local function trail_spacing()
   return math.max(P_TRAIL_D:get(), 0.5) * trail_scale
 end
@@ -320,7 +365,7 @@ end
 local function trail_thin()
   local lat, lng, k = {}, {}, 0
   for i = 1, trail_n do
-    if (trail_n - i) % 2 == 0 then
+    if i == 1 or (trail_n - i) % 2 == 0 then
       k = k + 1
       lat[k], lng[k] = trail_lat[i], trail_lng[i]
     end
@@ -348,13 +393,186 @@ local function trail_cut(n)
 end
 
 ---------------------------------------------------------------------------
+-- Guardian Home = trail point 1 (2026-11-26, see the header)
+---------------------------------------------------------------------------
+local HOME_SYNC_MS = 5000
+local last_home_sync_ms = 0
+
+local function say_home()
+  if trail_n < 1 then
+    say(SEV_INFO, "home none")
+    return
+  end
+  say(SEV_NOTICE, string.format("home %d %d %s", math.floor(trail_lat[1]),
+      math.floor(trail_lng[1]), home_src))
+  home_said = true
+end
+
+-- ArduPilot's HOME (the RTL fallback's destination) onto the Guardian Home. Never fatal:
+-- an older firmware without the binding keeps its own HOME.
+local function home_sync(here)
+  if trail_n < 1 or not here then return end
+  last_home_sync_ms = now_ms()
+  pcall(function()
+    local pt = trail_point(1, here)
+    local h = ahrs:get_home()
+    if h == nil or h:get_distance(pt) > 1.0 then
+      ahrs:set_home(pt)
+    end
+  end)
+end
+
+-- Set Home: the trail restarts at the boat's position, which becomes the Guardian Home.
+local function set_home(here)
+  trail_clear()
+  trail_n = 1
+  trail_lat[1], trail_lng[1] = here:lat(), here:lng()
+  home_src = "set"
+  home_sync(here)
+  say_home()
+end
+
+-- The laptop's LGRD_HOME request (1 = Set Home, 3 = report). Only while watching: the
+-- guardian ON and the link up (the only time the laptop can write it anyway).
+local function update_home_request(watching, here)
+  local want = math.floor(P_HOME:get())
+  if want ~= 1 and want ~= 3 then return end
+  if want == 3 then
+    say_home()
+    param:set(PARAM_PREFIX .. "HOME", 0)
+    return
+  end
+  if not watching then
+    say(SEV_WARNING, "set home refused: guardian not ON")
+    param:set(PARAM_PREFIX .. "HOME", -1)
+    return
+  end
+  if not here then
+    say(SEV_WARNING, "set home refused: no position")
+    param:set(PARAM_PREFIX .. "HOME", -1)
+    return
+  end
+  set_home(here)
+  param:set(PARAM_PREFIX .. "HOME", 0)
+end
+
+---------------------------------------------------------------------------
+-- Safety way back: read from the autopilot's mission when the laptop asks
+---------------------------------------------------------------------------
+-- The loaded way back (LGRD_SAFE = 2), nil when there is none: lat/lng (1e-7 deg), and
+-- for the closest-point search, north/east metres from point 1 (`origin`) plus each
+-- segment's vector and 1/length^2. All of it is computed while the mission is read,
+-- SAFE_CHUNK items per tick, so no tick exceeds the VM instruction budget.
+local safe = nil
+local loading = nil          -- the same while it is being read, plus `i` (next item)
+
+local function safe_fail(why)
+  loading = nil
+  safe = nil
+  param:set(PARAM_PREFIX .. "SAFE", -1)
+  say(SEV_WARNING, "way back invalid: " .. why)
+end
+
+-- One tick of the loader: called every update, whatever the guardian state.
+local function update_safe()
+  local want = math.floor(P_SAFE:get())
+  if want == 2 and safe == nil then
+    -- "ready" without a loaded way back (set from outside): load it properly.
+    param:set(PARAM_PREFIX .. "SAFE", 1)
+    want = 1
+  end
+  if want ~= 1 then
+    loading = nil
+    if want ~= 2 and safe ~= nil then
+      safe = nil
+      if want == 0 then say(SEV_INFO, "way back cleared") end
+    end
+    return
+  end
+  if loading == nil then
+    local n = math.floor(P_SAFE_N:get())
+    local items = mission:num_commands() - 1        -- item 0 is HOME
+    if n < 2 or n > SAFE_MAX then
+      safe_fail(string.format("N=%d", n))
+      return
+    end
+    if items ~= n then
+      safe_fail(string.format("%d items, want %d", items, n))
+      return
+    end
+    safe = nil
+    loading = {lat = {}, lng = {}, n = n, north = {}, east = {}, dn = {}, de = {}, inv2 = {},
+               i = 1}
+  end
+  local L = loading
+  local last = math.min(L.n, L.i + SAFE_CHUNK - 1)
+  for i = L.i, last do
+    local item = mission:get_item(i)
+    if item == nil or item:command() ~= NAV_WAYPOINT then
+      safe_fail(string.format("item %d", i))
+      return
+    end
+    local lat, lng = item:x(), item:y()
+    local loc = make_loc(lat, lng)
+    if i == 1 then L.origin = loc end
+    local ne = L.origin:get_distance_NE(loc)
+    L.lat[i], L.lng[i], L.north[i], L.east[i] = lat, lng, ne:x(), ne:y()
+    if i > 1 then
+      local dn, de = L.north[i] - L.north[i - 1], L.east[i] - L.east[i - 1]
+      local len2 = dn * dn + de * de
+      L.dn[i - 1], L.de[i - 1] = dn, de
+      L.inv2[i - 1] = len2 > 1e-6 and 1 / len2 or 0
+    end
+  end
+  L.i = last + 1
+  if L.i <= L.n then return end
+  safe, loading = L, nil
+  param:set(PARAM_PREFIX .. "SAFE", 2)
+  say(SEV_INFO, string.format("way back %d pts ready", safe.n))
+end
+
+-- Closest point of the way back to `here`: returns (index of the end point of its
+-- segment, the closest point as a Location).
+local function safe_closest(here)
+  local p = safe.origin:get_distance_NE(here)
+  local pn, pe = p:x(), p:y()
+  local N, E, DN, DE, INV2 = safe.north, safe.east, safe.dn, safe.de, safe.inv2
+  local best_d2, best_i, best_t = math.huge, 1, 0
+  for i = 1, safe.n - 1 do
+    local dn, de = DN[i], DE[i]
+    local qn, qe = pn - N[i], pe - E[i]
+    local t = (qn * dn + qe * de) * INV2[i]
+    if t < 0 then t = 0 elseif t > 1 then t = 1 end
+    qn, qe = qn - t * dn, qe - t * de
+    local d2 = qn * qn + qe * qe
+    if d2 < best_d2 then
+      best_d2, best_i, best_t = d2, i, t
+    end
+  end
+  local join = safe.origin:copy()
+  join:offset(N[best_i] + best_t * DN[best_i], E[best_i] + best_t * DE[best_i])
+  return best_i + 1, join
+end
+
+---------------------------------------------------------------------------
+-- Route being driven: the trail (newest -> oldest) or the safety way back (in order)
+---------------------------------------------------------------------------
+-- {lat, lng, step = -1 | 1, last = index of the end point, trail = true | nil}
+local route = nil
+
+local function route_point(i, template)
+  return make_loc(route.lat[i], route.lng[i], template)
+end
+
+---------------------------------------------------------------------------
 -- State machine
 ---------------------------------------------------------------------------
 local state = "idle"         -- idle | watch | arming | retrace | stage2 | held
 local expected_mode = nil    -- mode the guardian put the vehicle in
 local saved_fn = nil         -- {SERVO1, SERVO3}_FUNCTION before the takeover
-local retrace_i = nil        -- trail point being driven to
-local retrace_pt_ms = nil    -- when it became the target
+local retrace_i = nil        -- route point being driven to
+local retrace_pt_ms = nil    -- when the current target was set
+local retrace_allow_ms = 0   -- time allowed to reach it
 local link_was_ok = true
 local neutral_active = false
 local last_reassert_ms = 0
@@ -370,6 +588,7 @@ local function set_state(s, age)
 end
 
 local function start_rtl(age)
+  route = nil
   -- Mode first, then thrusters: the autopilot must already be steering when the
   -- outputs are handed over.
   if not ahrs:home_is_set() then
@@ -386,12 +605,36 @@ local function start_rtl(age)
   end
 end
 
--- First trail point, from the newest down, farther than LGRD_RADIUS from `here`.
-local function next_point(i, here)
-  while i > 1 and here:get_distance(trail_point(i, here)) <= P_RADIUS:get() do
-    i = i - 1
+-- Arm the per-target timer: LGRD_PT_MAX, or longer for a long leg at a slow WP_SPEED.
+local function start_target_timer(here)
+  retrace_pt_ms = now_ms()
+  local speed = param:get("WP_SPEED") or 0.5
+  if speed < 0.1 then speed = 0.1 end
+  local leg = here:get_distance(route_point(retrace_i, here))
+  retrace_allow_ms = math.max(P_PT_MAX:get(), 2 * leg / speed) * 1000
+end
+
+-- From point i along the route, skip the points already within LGRD_RADIUS of `here`
+-- (never past the route's end point).
+local function skip_near(i, here)
+  while i ~= route.last and here:get_distance(route_point(i, here)) <= P_RADIUS:get() do
+    i = i + route.step
   end
   return i
+end
+
+-- GUIDED towards the current route point; RTL if that is refused.
+local function drive_route(age, here, text)
+  if vehicle:set_mode(MODE_GUIDED) and vehicle:set_target_location(route_point(retrace_i, here)) then
+    thrusters_to_autopilot()
+    expected_mode = MODE_GUIDED
+    start_target_timer(here)
+    set_state("retrace", age)
+    say(SEV_CRITICAL, text)
+    return
+  end
+  say(SEV_WARNING, "GUIDED refused - RTL instead")
+  start_rtl(age)
 end
 
 local function start_retrace(age)
@@ -401,23 +644,37 @@ local function start_retrace(age)
     start_rtl(age)
     return
   end
-  retrace_i = next_point(trail_n, here)
-  if vehicle:set_mode(MODE_GUIDED)
-     and vehicle:set_target_location(trail_point(retrace_i, here)) then
-    thrusters_to_autopilot()
-    expected_mode = MODE_GUIDED
-    retrace_pt_ms = now_ms()
-    set_state("retrace", age)
-    say(SEV_CRITICAL, string.format("retracing the path (%d pts)", retrace_i))
-    return
-  end
-  say(SEV_WARNING, "GUIDED refused - RTL instead")
-  start_rtl(age)
+  route = {lat = trail_lat, lng = trail_lng, step = -1, last = 1, trail = true}
+  retrace_i = skip_near(trail_n, here)
+  drive_route(age, here, string.format("retracing the path (%d pts)", retrace_i))
 end
 
--- Armed: start the return proper.
+-- The safety way back: its closest point to the boat, then its points to the end.
+local function start_safe(age)
+  local here = ahrs:get_location()
+  if not here then
+    start_retrace(age)
+    return
+  end
+  local first, join = safe_closest(here)
+  local lat, lng, n = {join:lat()}, {join:lng()}, 1
+  for k = first, safe.n do
+    n = n + 1
+    lat[n], lng[n] = safe.lat[k], safe.lng[k]
+  end
+  route = {lat = lat, lng = lng, step = 1, last = n}
+  retrace_i = skip_near(1, here)
+  drive_route(age, here, string.format("safety way back from pt %d/%d", first, safe.n))
+end
+
+-- Armed: start the return proper (the safety way back if one is loaded).
 local function go(age)
-  start_retrace(age)
+  home_sync(ahrs:get_location())   -- the RTL fallback goes to the Guardian Home too
+  if safe then
+    start_safe(age)
+  else
+    start_retrace(age)
+  end
 end
 
 -- Disarmed: hold, hand the thrusters over (so pre-arm can pass) and arm once Rover has
@@ -463,10 +720,12 @@ end
 -- The laptop is back: give the boat straight back to the station (HOLD, its servo
 -- mapping, MANUAL - what `guardian.py reclaim` does), so the run goes on by itself.
 local function resume(age)
-  if state == "retrace" and retrace_i then
-    trail_cut(retrace_i)
-  elseif state == "held" then
-    trail_cut(1)
+  if route and route.trail then
+    if state == "retrace" and retrace_i then
+      trail_cut(retrace_i)
+    elseif state == "held" then
+      trail_cut(1)
+    end
   end
   enter_first({MODE_HOLD})
   local ok = true
@@ -483,6 +742,7 @@ local function resume(age)
   saved_fn = nil
   expected_mode = nil
   retrace_i = nil
+  route = nil
   neutral_active = false
   set_state("watch", age)
   say(SEV_NOTICE, "laptop back - mission resumed")
@@ -497,7 +757,7 @@ local function reassert(age)
   last_reassert_ms = t
   if state == "retrace" then
     if not (vehicle:set_mode(MODE_GUIDED)
-            and vehicle:set_target_location(trail_point(retrace_i, ahrs:get_location()))) then
+            and vehicle:set_target_location(route_point(retrace_i, ahrs:get_location()))) then
       start_rtl(age)
     end
   elseif state == "arming" then
@@ -512,31 +772,45 @@ local function reassert(age)
   end
 end
 
+-- Arrival distance: LGRD_RADIUS on the way, but at the route's last point (the Guardian
+-- Home, or the end of the way back) ArduPilot's own WP_RADIUS + 0.5 m, so the boat drives
+-- up to the point before holding (at most LGRD_RADIUS).
+local function arrival_radius(i)
+  local r = P_RADIUS:get()
+  if i ~= route.last then return r end
+  local wp = param:get("WP_RADIUS")
+  if wp == nil then return r end
+  return math.min(r, math.max(wp, 0.2) + 0.5)
+end
+
 local function update_retrace()
   local here = ahrs:get_location()
   if not here then return end
-  local reached = here:get_distance(trail_point(retrace_i, here)) <= P_RADIUS:get()
-  local late = now_ms() - retrace_pt_ms > P_PT_MAX:get() * 1000
+  local reached = here:get_distance(route_point(retrace_i, here)) <= arrival_radius(retrace_i)
+  local late = now_ms() - retrace_pt_ms > retrace_allow_ms
   if not (reached or late) then return end
   if late and not reached then
     say(SEV_WARNING, string.format("point %d not reached, skipped", retrace_i))
   end
-  if retrace_i <= 1 then
+  if retrace_i == route.last then
     expected_mode = enter_first({MODE_LOITER, MODE_HOLD})
     set_state("held")
-    say(SEV_CRITICAL, "back at path start - holding")
+    say(SEV_CRITICAL, route.trail and "back at path start - holding"
+                                   or "end of way back - holding")
     return
   end
-  retrace_i = next_point(retrace_i - 1, here)
-  retrace_pt_ms = now_ms()
-  if not vehicle:set_target_location(trail_point(retrace_i, here)) then
+  retrace_i = skip_near(retrace_i + route.step, here)
+  if not vehicle:set_target_location(route_point(retrace_i, here)) then
     say(SEV_WARNING, "GUIDED target refused - RTL")
     start_rtl()
+    return
   end
+  start_target_timer(here)
 end
 
 local function update()
   drain_heartbeats()
+  update_safe()
 
   local armed = arming:is_armed()
   track_scaling(armed)
@@ -548,6 +822,7 @@ local function update()
     end
     neutral_active = false
     set_state("idle")
+    update_home_request(false, nil)
     return
   end
 
@@ -562,6 +837,8 @@ local function update()
       link_was_ok = true
       say(SEV_NOTICE, string.format("ON, retrace after %.0f s silence%s",
           P_TIMEOUT:get(), armed and "" or ", disarmed"))
+    else
+      update_home_request(false, nil)
     end
     return
   end
@@ -574,7 +851,14 @@ local function update()
   if state == "watch" then
     -- Armed or not, link up or not: the trail is always recorded.
     local here = ahrs:get_location()
+    update_home_request(true, here)
     if here then trail_record(here) end
+    -- The Guardian Home: announced once (the laptop draws it), ArduPilot's HOME kept on
+    -- it while armed (disarmed, Rover moves its HOME itself; a takeover re-syncs).
+    if trail_n >= 1 and not home_said then say_home() end
+    if armed and here and now_ms() - last_home_sync_ms >= HOME_SYNC_MS then
+      home_sync(here)
+    end
     if link_ok then
       local neutral_s = P_NEUTRAL:get()
       if neutral_s > 0 and age >= neutral_s * 1000 then
@@ -594,6 +878,7 @@ local function update()
   end
 
   -- From here on the guardian is in charge (arming / retrace / stage2 / held).
+  update_home_request(false, nil)
   if link_ok then
     -- The laptop is back: its mission goes on, nothing for the operator to do.
     resume(age)

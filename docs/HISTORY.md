@@ -60,3 +60,15 @@ Control and MCS: skill `git-history`). Created 2026-11-18 (session 11) from the 
   (outside the code digest, default unchanged); the Replanner's node clock `time_source` (`ros` in Gazebo, `wall`
   byte-identical by default); the whole chain ran once in Gazebo (a C2 development run, Replanner `done`, CR-PER-2
   confirmed live); `sim_acceptance/` reviewed again, nothing removed: `~/ros2_ws/sim_runs/replanner/handoff_13_R-3.md`.
+- **2026-11-25.** The link guardian (`link_guardian/`) has been tested on the real boat (owner); the
+  "not yet tested on the boat" status lines were updated (`link_guardian/README.md`, `docs/PROJECT_STATE.md`).
+- **2026-11-25.** Owner order: the **safety way back**. A GPS-anchored designer pattern can carry a hand-drawn
+  route; during a run of it a link-guardian takeover follows that route (from the point closest to the boat to its
+  end, LOITER) instead of the trail. MCS additions (designer, run session, GUARDIAN box, map), `guardian.py`
+  (mission upload) and `link_guardian.lua` (`LGRD_SAFE`, route logic); offline tests `link_guardian/test/`. Not yet
+  tried on the boat (`link_guardian/README.md` §7 step 5).
+- **2026-11-26.** Owner order: the **Guardian Home**. The point a link-loss retrace ends at (the trail's first
+  point) is drawn on the MCS map (*Guardian Home*); **Set Home** in the GUARDIAN box moves it to the boat's position
+  (the trail restarts there; `LGRD_HOME`); only Set Home moves it (no more HOME move at run start / end). A path's
+  safety way back is drawn whenever the path is shown, on its own map layer (ON by default). Offline tests pass
+  (`link_guardian/test/`, MCS smoke); not yet tried on the boat (`link_guardian/README.md` §7 step 6).

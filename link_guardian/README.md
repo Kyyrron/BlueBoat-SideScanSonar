@@ -1,250 +1,230 @@
-# Link Guardian — bring the boat back if the laptop link is lost
+# Link Guardian — brings the boat back if the laptop link is lost
 
-All our software runs on the operator laptop and reaches the boat over the Base Station WiFi.
-If that link drops, or the laptop dies, nothing can steer the boat any more.
+All our software runs on the laptop and steers the boat over the Base Station WiFi. If that link
+drops, nothing steers the boat any more and it keeps its last thrust. The **Link Guardian** is a
+Lua script on the boat's autopilot (ArduPilot Rover): when the laptop goes silent it stops the
+thrusters, then drives the boat back along the path it came (or along a **safety way back** drawn
+for the run, §2), and hands it back as soon as the laptop is heard again.
 
-The **Link Guardian** is a Lua script that runs **on the boat's autopilot** (ArduPilot Rover).
-When it stops hearing the laptop, it drives the boat back **along the path it just took**.
-When the laptop is heard again, it hands the boat back to the station and the run goes on.
+**ON by default in every real-robot session**, shown in the **GUARDIAN** box of MCS.
+Tested on the real boat.
 
-- **ON by default in every real-robot session.** You operate it from the **GUARDIAN** box of
-  the Mission Control Station (MCS).
-- The on-boat script is installed **once** (see *One-time setup*).
+## 1. The parts
 
-> ⚠ **Not yet tested on the real boat.** It has been tested only against a mocked autopilot
-> and fake MAVROS. Follow *Testing it safely* before relying on it in the water.
+- `autopilot/link_guardian.lua`: the guardian, installed once on the autopilot (§3).
+- `laptop/guardian.py`: its helper on the laptop. MCS starts `guardian.py watch` with every
+  real-robot session; it switches the guardian ON, reports the **Guardian Home** (§2) and feeds
+  the GUARDIAN box. Its other commands (`check`, `setup`, `on`, `off`, `reclaim`, `set_home`) are
+  what the box's buttons call; `safety_load` / `safety_clear` are sent by MCS at START RUN / STOP RUN.
+- `test/`: offline checks (no boat): `lua_harness.py` runs the real script against a simulated
+  autopilot, `test_guardian_safety.py` checks `guardian.py`'s upload logic (§7).
 
-## What it does
+The script decides that the laptop is gone by watching the heartbeat MAVROS sends once a second
+(MAVLink system 1, component 191).
 
-| Laptop silent for | The boat |
+## 2. What happens, and when
+
+**At session start** the guardian switches ON by itself and the autopilot is armed (so it can
+drive the boat later). From then on the script records the boat's **trail**: one point every
+2 m. Its first point is the **Guardian Home** (below).
+
+**When the link drops**, counting from the last laptop heartbeat:
+
+| After | The boat |
 |---|---|
-| 0–3 s | Keeps its last thrust command (no RC receiver: ArduPilot keeps the last RC override). |
-| **3 s** (`LGRD_NEUTRAL`) | Thrusters held at **neutral** (RC channels 1 and 3 at 1500). If the link returns now, the station drives again at once. |
-| **15 s** (`LGRD_TIMEOUT`) | **Takeover:** thrusters handed to the autopilot (`SERVO1/3_FUNCTION` 51/53 → 74/73); the autopilot **arms itself** if needed; the boat **retraces its trail** backwards in GUIDED, then holds (LOITER) at the trail start. |
+| 0 – 3 s | Nothing changes: the thrusters keep the laptop's last command. |
+| **3 s** | **Thrusters to neutral**: zero thrust, the boat drifts to a stop (see below). |
+| **15 s** | **Takeover**: the autopilot takes the thrusters, arms itself if needed (after an E-STOP, for example), and drives back along the trail, newest point first — or along the run's **safety way back** if it has one (below). |
+| at the Guardian Home (or the way back's last point) | **Holds position there** (LOITER) and waits. |
 
-**Link back:** at the **first** laptop heartbeat the script hands back by itself: HOLD,
-thrusters back to the station's mapping, MANUAL. A path run continues where it stopped, a
-manual target is pursued again, arrow control is at zero. No operator action is needed. This
-also works mid-arming, mid-retrace or while holding at the trail start.
+If the trail is empty, the boat goes straight to HOME instead (RTL; HOME is kept on the Guardian
+Home, so it is the same point).
 
-Details:
+**When the link comes back**, at the first heartbeat, at any point of the above:
 
-- **Guardian ON** = the flag `LGRD_ON = 1` on the autopilot. MCS sets it when a session
-  connects (`guardian.py watch`). The script resets it to 0 at every autopilot boot.
-- **Trail:** while ON, a point every 2 m (`LGRD_TRAIL_D`), armed or not. Kept in memory: lost
-  at an autopilot restart, restarted when the guardian goes OFF → ON. Up to 1000 points;
-  when full, every other point is dropped and the spacing doubles.
-- **Retrace:** a point counts as reached within 3 m (`LGRD_RADIUS`); a point not reached in
-  60 s (`LGRD_PT_MAX`) is skipped. After a hand-back the trail is cut at the point reached, so
-  a second loss retraces from there.
-- **Fallback:** no trail, or GUIDED refused → **RTL**, a straight line to HOME. HOME is the
-  session start, moved to each run's start while a run is active.
-- **E-STOP does not switch the guardian off.** After an E-STOP and a link loss, the boat arms
-  itself and retraces. Only **Turn OFF** in the GUARDIAN box (or `LGRD_ENABLE = 0`) does.
-- **Arming:** at connection, `robot_interface` (BlueBoat-Control) arms the autopilot. Our stack
-  does not need it armed (thrusters on RC passthrough work disarmed); ArduPilot needs it armed
-  to drive the boat itself.
+- before 15 s: the laptop simply drives again;
+- after the takeover: the script hands back by itself (thrusters back to the laptop, mode
+  MANUAL). The run continues where it stopped. **Nothing to press.**
 
-```
-        LAPTOP (MCS session)                       BOAT (ArduPilot autopilot)
- ┌───────────────────────────────┐  WiFi  ┌──────────────────────────────────────┐
- │ MAVROS ── heartbeat 1/s ──────┼───────►│ link_guardian.lua (checks 5×/s)      │
- │ robot_interface: arms the     │        │  records the trail (every 2 m)       │
- │   autopilot at connection     │        │  silent > 3 s: thrusters neutral     │
- │ guardian.py watch (by MCS):   │        │  silent > 15 s: take over, arm,      │
- │   LGRD_ON = 1, HOME, status   │        │    retrace the trail, hold           │
- └───────────────────────────────┘        │  laptop heard: hand back             │
-                                          └──────────────────────────────────────┘
-```
+A second loss later drives back from where the first one stopped.
 
-## Layout
+### Guardian Home and Set Home
 
-| File | Runs on | What it is |
-|---|---|---|
-| `autopilot/link_guardian.lua` | autopilot | The guardian. Copied once onto the boat. |
-| `laptop/guardian.py` | laptop | Its companion. MCS starts `guardian.py watch` with every real-robot session. |
+The **Guardian Home** is where a drive back along the trail ends and the boat holds (LOITER):
 
-Related code elsewhere: `robot_interface.py` in BlueBoat-Control (arming at connection, the
-`rearm` command); the GUARDIAN box in BlueBoat-MCS (`mcs/gui/guardian_box.py`,
-`mcs/core/guardian.py`).
+- by default, **where the guardian came ON** (the session start);
+- after **Set Home** (GUARDIAN box, guardian ON and connected; it asks for confirmation), **the
+  boat's position at that moment**: the trail recorded so far is dropped and starts again from
+  there. A link loss then brings the boat back along its path **to exactly this point**, then
+  LOITER. Use it when the run has no safety way back (a loaded way back still wins during its
+  run; the Guardian Home is used again after STOP RUN).
 
-## One-time setup
+MCS draws it on the map as a green point **Guardian Home** (layer *Guardian Home*, ON by default)
+and shows it in the box's **HOME** row (*guardian ON · lat, lon* or *Set Home · lat, lon*).
 
-Do it on the shore, props off or boat out of the water.
+- **Only Set Home moves it** (since 2026-11-26; START RUN / STOP RUN no longer move HOME). The
+  script keeps ArduPilot's own HOME on it (the RTL fallback goes to the same point).
+- **"Exactly"**: the last point counts as reached within `WP_RADIUS` + 0.5 m (at most
+  `LGRD_RADIUS`), so the boat drives up to it; LOITER then holds it within `LOIT_RADIUS`. Add the
+  GPS error (≈ 1–2 m). Lower `WP_RADIUS` for a tighter stop.
+- **How:** MCS sends `set_home`; `guardian.py` sets `LGRD_HOME = 1`; the script answers
+  *home … set* with the coordinates and `LGRD_HOME = 0` (or *set home refused: …* and −1:
+  guardian not ON, no GPS position).
+- Lost with the trail when the autopilot restarts: the Guardian Home is then where the guardian
+  comes ON again.
 
-1. **Start a real-robot session from MCS.** The GUARDIAN box says *NOT INSTALLED* (expected).
-2. **Press Apply settings** in the GUARDIAN box. It sets:
+### Safety way back (GPS-anchored patterns)
 
-   | Parameter | Value | Why |
-   |---|---|---|
-   | `SCR_ENABLE` | 1 | Turns on Lua scripting |
-   | `FS_GCS_ENABLE` | 1 | ArduPilot's own GCS failsafe, as a limited backstop |
-   | `FS_ACTION` | 1 | Backstop action = RTL |
-   | `FS_GCS_TIMEOUT` | 20 | Backstop fires after the guardian (15 s) |
-   | `FS_THR_ENABLE` | 0 | No RC receiver on the boat. Set 1 only with a hand transmitter. |
-   | `LGRD_TIMEOUT` | 15 | Takeover delay (only once the script runs) |
+A GPS-anchored pattern can carry a hand-drawn **safety way back**: in the Pattern Designer,
+**✚ Safety way back** (key **B**), click its points in order; the **last point is where the boat
+will hold**. It is saved with the pattern.
 
-   It never changes `ARMING_CHECK`. Keep `ARMING_CHECK` non-zero (*Check* warns if it is 0).
-3. **Turn Off Connection, then restart the autopilot.** BlueOS (`http://192.168.2.2`) →
-   *Autopilot Firmware* → *Restart Autopilot*. This creates the `scripts` folder.
-4. **Upload the script.** BlueOS → *File Browser*. Put `autopilot/link_guardian.lua` in the
+- **When it is used:** from **START RUN to STOP RUN** of a run on that pattern (the path, and the
+  position keeping after its end). Outside a run, the trail as above.
+- **What the boat does on a takeover:** it goes to the **point of the way back closest to it**
+  (straight there), follows the way back **in the drawn order** to its last point, and LOITERs
+  there. A hand-back works as above; a second loss re-joins at the new closest point.
+- **On the MCS map** it is drawn like in the designer (dashed orange line, its points, *LOITER*
+  at its end) whenever its path is the mission shown: the next run's, the running one's, or a
+  Gazebo launch's. Layer *Safety way back (guardian)*, ON by default.
+- **How it gets to the boat:** at START RUN, MCS sends it to `guardian.py`, which uploads it as the
+  autopilot's **mission** (we never use AUTO, so that storage is free), reads it back to check it,
+  then sets `LGRD_SAFE = 1`. The script checks it and answers `LGRD_SAFE = 2` (*way back N pts
+  ready*). At STOP RUN, `LGRD_SAFE = 0`.
+- **If it cannot be loaded** (old script, upload refused, …) **the run starts anyway**: the GUARDIAN
+  box's **Way back** row turns red and the state says *safety way back NOT loaded*, and a link
+  loss uses the trail.
+
+### What "neutral", HOLD and LOITER mean
+
+- **Neutral (from 3 s)** = the script sends **1500 µs (zero thrust)** to both thrusters in place
+  of the laptop's last command.
+  - It is **not an emergency stop**: the autopilot stays armed, nothing latches, nothing has to be
+    released. The laptop's next command simply takes over again.
+  - It is **not position holding**: nothing steers, so the boat drifts with wind and current.
+- **HOLD** (an ArduPilot mode, used for a moment while arming and handing back): the autopilot
+  stops the thrusters. No position keeping either.
+- **LOITER** (at the end of the drive back): **active position holding**. The autopilot drives the
+  thrusters to keep the boat within `LOIT_RADIUS` of that point.
+
+The guardian's neutral is also different from MCS's **E-STOP**: E-STOP stops the thrusters,
+latches until you release it, and does **not** switch the guardian off. After an E-STOP and a
+link loss, the boat still arms itself and drives back.
+
+## 3. Setup (once)
+
+On the shore, props off or boat out of the water.
+
+1. Start a real-robot session in MCS. The GUARDIAN box says *NOT INSTALLED* (expected).
+2. Press **Apply settings**. It turns on Lua scripting (`SCR_ENABLE = 1`) and sets ArduPilot's own
+   failsafe as a backstop that fires later than the guardian (`FS_GCS_ENABLE = 1`,
+   `FS_ACTION = 1` RTL, `FS_GCS_TIMEOUT = 20`, `FS_THR_ENABLE = 0`). Keep `ARMING_CHECK`
+   non-zero.
+3. Turn Off Connection, then restart the autopilot: BlueOS (`http://192.168.2.2`) →
+   *Autopilot Firmware* → *Restart Autopilot*.
+4. Upload the script: BlueOS → *File Browser* → put `autopilot/link_guardian.lua` in the
    `scripts` folder: `configs/ardupilot-manager/firmware/scripts/` (older BlueOS) or
-   `ardupilot_logs/firmware/scripts/` (newer). If step 6 still says *NOT INSTALLED*, try the
-   other folder. The right folder has not been checked on our boat.
-5. **Restart the autopilot again.**
-6. **Start a session and press Apply settings once more** (now `LGRD_TIMEOUT` exists). The box
-   should show **ON — retraces its path after 15 s without this laptop**, Setup **READY**, and
-   *LinkGuard: …* messages from the boat.
+   `ardupilot_logs/firmware/scripts/` (newer - to try first).
+5. Restart the autopilot again.
+6. Start a session, press **Apply settings** once more. The box must show
+   **ON — retraces its path after 15 s without this laptop** and Setup **READY**.
 
-**Updating the script:** upload the new file over the old one, restart the autopilot, start a
-session, press **Apply settings**.
+**To update the script:** upload the new file over the old one, restart the autopilot, press
+**Apply settings**, then re-test (§7).
 
-## Every session
+## 4. Every session
 
-Nothing to do: the guardian turns ON when the session connects. Before the boat leaves, look at
-the GUARDIAN box:
+Nothing to do. Before the boat leaves, read the GUARDIAN box:
 
-| Box says | Meaning / what to do |
+| Box says | Do |
 |---|---|
-| **ON — retraces its path after 15 s without this laptop** | All good. |
-| **ON — autopilot disarmed: arms itself on link loss** | Arming failed at connection, or an E-STOP disarmed it. Press **Arm again** (no run active) so a pre-arm problem shows now. *PreArm:* messages say why. |
-| **NOT READY / NOT INSTALLED** | See *One-time setup* and the Setup row's tooltip. |
-| **OFF — the boat will NOT return** | Someone pressed **Turn OFF**. Press **Turn ON**. |
-| **LINK LOST — the boat retraces its path on its own** | Nothing to do: the station drives again when the link is back. |
-| **TAKEN OVER — boat in GUIDED; handing back…** | Shown briefly after the link returns. If it stays, press **Take back control**. |
+| **ON — retraces its path after 15 s…** | Nothing, all good. The boat comes back to the **Guardian Home** on the map; press **Set Home** to move it to where the boat is now. |
+| **ON — follows the safety way back after 15 s…** | Nothing: a run with a safety way back is in progress (row **Way back**: *N pts until STOP RUN*). |
+| **ON — safety way back NOT loaded…** | The run goes on, but a link loss would use the trail. The **Way back** row says why. |
+| **ON — autopilot disarmed: arms itself on link loss** | Press **Arm again** (no run active) so a pre-arm problem shows now. *PreArm:* messages say why. |
+| **OFF — the boat will NOT return** | Press **Turn ON**. |
+| **NOT INSTALLED / NOT READY** | See §3 and the Setup row's tooltip. |
+| **LINK LOST / TAKEN OVER** | Wait: it hands back by itself. If *TAKEN OVER* stays once the link is back, press **Take back control**. |
 
-The **HOME** row shows where the RTL fallback would go.
+**Ending the session.** *Turn Off Connection* asks: **Guardian OFF + disarm** (usual: the boat
+stays where it is), **Keep ON** (the boat comes back by itself after 15 s), or **Cancel**.
 
-**Ending a session.** *Turn Off Connection* (or closing MCS) with the guardian ON asks:
+**Switching it off:** **Turn OFF** in the box, or `LGRD_ENABLE = 0` from QGroundControl.
 
-- **Guardian OFF + disarm, then turn off** — the usual choice. The boat stays where it is. If
-  the guardian cannot be confirmed OFF, nothing is turned off.
-- **Keep ON — the boat comes back** — after 15 s the boat retraces its trail and holds.
-- **Cancel.**
-
-**Ways to stop the guardian:** **Turn OFF** in the GUARDIAN box, or `LGRD_ENABLE = 0` from
-QGroundControl connected directly to the boat (stands down at once). E-STOP stops the
-thrusters but does **not** switch the guardian off.
-
-**Take back control** (fallback, `guardian.py reclaim`): does the hand-back from the laptop
-when the box still says *TAKEN OVER* a few seconds after the link is back.
-
-## `guardian.py` from a terminal
-
-MCS's buttons call these; they also work by hand, with a BlueBoat launch (MAVROS) running:
-
-```bash
-source ~/ros2_ws/install/setup.bash
-python3 link_guardian/laptop/guardian.py check [--json]   # read-only: installed, configured, ready?
-python3 link_guardian/laptop/guardian.py setup            # write the recommended parameters
-python3 link_guardian/laptop/guardian.py on | off         # set LGRD_ON
-python3 link_guardian/laptop/guardian.py reclaim [--force]  # take control back (--force: even with a run active)
-python3 link_guardian/laptop/guardian.py watch            # session companion (MCS starts it)
-```
-
-`watch` publishes on `/link_guardian/status` and listens on `/link_guardian/command`.
-
-## Settings (`LGRD_*`, editable in QGroundControl)
+## 5. Settings (`LGRD_*`, in QGroundControl)
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `LGRD_ENABLE` | 1 | Master switch. 0 = off immediately, whatever MCS says. |
-| `LGRD_ON` | 0 | Session flag, set by MCS; reset to 0 at every boot. |
-| `LGRD_TIMEOUT` | 15 | Seconds of silence before takeover. |
-| `LGRD_NEUTRAL` | 3 | Seconds of silence before neutral thrust. 0 = off. Keep below `LGRD_TIMEOUT`. |
-| `LGRD_TRAIL_D` | 2 | Metres between trail points. |
-| `LGRD_RADIUS` | 3 | Metres: a trail point counts as reached. Keep above `LGRD_TRAIL_D`. |
-| `LGRD_PT_MAX` | 60 | Seconds to reach one trail point before skipping it. |
-| `LGRD_SYSID` / `LGRD_COMPID` | 1 / 191 | MAVLink identity of the laptop's MAVROS. `LGRD_COMPID` 0 = any. |
-| `LGRD_SRV1_FN` / `LGRD_SRV3_FN` | 74 / 73 | Thruster functions given to the autopilot on takeover. |
-| `LGRD_DETECT` | 1 | 1 = watch the MAVROS heartbeat itself (recommended). 0 = ArduPilot's GCS timer, which on-boat services can fool. |
+| `LGRD_NEUTRAL` | 3 s | Silence before neutral thrust (0 = off; keep below `LGRD_TIMEOUT`). |
+| `LGRD_TIMEOUT` | 15 s | Silence before the takeover. |
+| `LGRD_TRAIL_D` | 2 m | Distance between trail points. |
+| `LGRD_RADIUS` | 3 m | A trail point counts as reached (keep above `LGRD_TRAIL_D`). |
+| `LGRD_PT_MAX` | 60 s | A point not reached in this time is skipped (longer for a long leg: 2 × its length / `WP_SPEED`). |
+| `LGRD_SAFE` | 0 | Safety way back: 0 none, 1 asked by the laptop, 2 loaded and checked, −1 invalid. Reset at every boot. Set by `guardian.py`, not by hand. |
+| `LGRD_SAFE_N` | 0 | Number of points of the uploaded way back. |
+| `LGRD_HOME` | 0 | Set Home: 1 = set it here, 3 = report it (both from `guardian.py`); the script answers 0 (done) or −1 (refused). Reset at every boot. Not by hand. |
+| `LGRD_ENABLE` | 1 | Master switch; 0 = off at once. |
+| `LGRD_ON` | 0 | Set by MCS each session; reset at every autopilot boot. |
+| `LGRD_SYSID` / `LGRD_COMPID` | 1 / 191 | Identity of the laptop's MAVROS heartbeat. |
 
-`LGRD_STAGE1`, `LGRD_WAIT`, `LGRD_S1_MAX` belong to an old script version and do nothing.
+Drive-back speed is `WP_SPEED`, RTL speed `RTL_SPEED`: keep both slow in enclosed water.
 
-Also check `WP_SPEED` (retrace speed) and `RTL_SPEED` (RTL fallback): keep them slow in
-enclosed water. Rally points also count as RTL destinations.
+## 6. Limits
 
-## Testing it safely
+- **The first 3 s keep the last thrust.** With the guardian OFF, nothing ever stops the boat.
+- **It goes back to the Guardian Home** (where the guardian came ON, or the last Set Home), not
+  to the run start, and only over water the boat already crossed since then.
+- **It needs a GPS fix and passing pre-arm checks** to arm. Otherwise it waits in HOLD (thrusters
+  stopped, drifting) and keeps retrying.
+- **The trail is lost if the autopilot restarts.** The safety way back is not: `guardian.py`
+  loads it again by itself after the restart (if the laptop is connected).
+- **Safety way back:** the boat goes **straight** to the closest point of the way back, so draw it
+  where a straight approach from the survey area is safe. At most 200 points. It needs
+  `guardian.py` running when the run starts (it always does in an MCS session).
+- **Thrust range:** ArduPilot sets the thrusters' zero point only while disarmed. Armed too
+  early, "zero thrust" comes out as full reverse (about 1100 µs). So arming always waits 3.5 s
+  disarmed first. Keep `ARMING_CHECK` non-zero as a second guard.
+- **Firmware:** Rover 4.5 or newer.
 
-Move to the next step only when the current one behaves exactly as described. **Restart the
-autopilot before every trial**, and keep QGroundControl's *MAVLink Inspector →
-`SERVO_OUTPUT_RAW`* open (`servo1_raw` / `servo3_raw` are what the ESCs receive).
+## 7. Re-test after any change
 
-**1. Desk (boat on the bench, props removed).** Start a session: ON, Setup READY, HOME set.
-No *thrusters neutral* message while the link is fine (if there is one, the heartbeat is late:
-raise `LGRD_NEUTRAL` and `LGRD_TIMEOUT`). E-STOP → box says *arms itself on link loss*. Release
-E-STOP, **Arm again** → armed.
+Props removed, QGroundControl's *MAVLink Inspector → `SERVO_OUTPUT_RAW`* open.
 
-**2. Bench link loss (props removed).**
-1. Start a short run.
-2. Cut the Base Station power (or the laptop's WiFi) for 25 s.
-3. Expect: from 3 s `servo1_raw` / `servo3_raw` = 1500 and *thrusters neutral*; from 15 s
-   *link lost 15 s - taking over*, then *retracing the path (N pts)* (on a bench:
-   *back at path start - holding*, LOITER).
-4. **While holding, `servo1_raw` and `servo3_raw` must read 1500 ± 100 µs.** About 1100 is a
-   **FAIL** (idle at full reverse, see *Limits*): stop and report it.
-5. Restore power. Within a second or two: *laptop back - mission resumed*, MANUAL,
-   `SERVO1/3_FUNCTION` 51/53, the run going on, box back to ON.
-6. Repeat with **E-STOP first**: *disarmed - arming it*, then *armed* about 4 s later, then the
-   retrace. Same 1500 ± 100 µs check.
-7. **Hiccup:** cut for about 8 s. Expect *thrusters neutral*, then
-   *laptop back - thrusters released*, no takeover.
-8. **Turn Off Connection → Keep ON:** takeover after 15 s.
-9. **Turn Off Connection → Guardian OFF + disarm:** nothing happens.
+1. Start a short run, cut the Base Station power for 25 s. Expect *thrusters neutral* at 3 s
+   (`servo1_raw` / `servo3_raw` = 1500), *taking over* at 15 s, then *retracing the path* and
+   *holding*. **While holding, both must read 1500 ± 100 µs**; about 1100 is a failure.
+2. Restore power: *laptop back - mission resumed*, run continuing, box back to ON.
+3. Repeat after an E-STOP: *disarmed - arming it*, *armed*, then the drive back.
+4. Cut for 8 s only: *thrusters neutral*, then *thrusters released*, no takeover.
+5. **Safety way back:** draw a short one on a GPS-anchored pattern, start a run; the **Way back**
+   row must say *safety way back (N pts)*. Cut the power: at 15 s *safety way back from pt k/N*;
+   the boat goes to the closest point, follows the way back and holds at its end (*end of way back
+   - holding*). Restore power: hand-back as in step 2. After STOP RUN the row says *its own trail*.
+6. **Set Home:** with no safety way back, drive a little, press **Set Home**: the HOME row says
+   *Set Home · …* and the green *Guardian Home* point moves to the boat. Drive 20 m away, cut the
+   power: the boat retraces to that point (*back at path start - holding*) and LOITERs on it.
 
-**3. Detection.** Step 2 proves the guardian fires when the laptop disappears. On-boat BlueOS
-services that also use system id 1 must not count as the laptop.
+**Offline, before going to the boat** (no hardware needed):
 
-**4. Shallow water, calm day, short distance.** Have a hand RC transmitter or a second person
-on QGroundControl ready. Drive 20–30 m along an L or a curve, cut the Base Station power. After
-15 s the boat must drive back along the same curve. Restore power halfway: it must turn round
-and continue the run.
+```bash
+python3 -m venv /tmp/luavenv && /tmp/luavenv/bin/pip install lupa      # once
+/tmp/luavenv/bin/python link_guardian/test/lua_harness.py              # ALL SCENARIOS PASSED
+source ~/ros2_ws/install/setup.bash && python3 link_guardian/test/test_guardian_safety.py
+```
 
-**Optional, without hardware:** ArduPilot SITL (`sim_vehicle.py -v Rover`, script in its
-`scripts/` folder), launch with `fcu_url:=udp://:14551@127.0.0.1:14550`. Our Gazebo simulator
-does not run ArduPilot, so it cannot test the guardian.
+## 8. Troubleshooting
 
-## Limits (read before using it)
-
-- **Until 3 s of silence the boat keeps its last thrust.** With the guardian **OFF**, nothing
-  stops it: the boat keeps going.
-- **The return crosses only water the boat already crossed** (within `LGRD_RADIUS`). Only the
-  RTL fallback is a straight line.
-- **It returns to the trail start** (where the guardian was turned ON, usually the session
-  start), not to the run start.
-- **A flapping link** switches between retracing and station control; each new loss waits the
-  full 15 s again.
-- **It needs a GPS fix and passing pre-arm checks** to arm and drive. Without them the boat
-  holds with thrusters off and keeps retrying; *PreArm:* messages say why.
-- **ArduPilot's own GCS failsafe is only a backstop.** It also hears on-boat services using
-  system id 1, fires after 20 + 1.5 s and never in HOLD, and its RTL cannot drive thrusters
-  still on passthrough. `FS_GCS_TIMEOUT` must stay above `LGRD_TIMEOUT`.
-- **Thruster output range.** On functions 73/74 ArduPilot sets each thruster's ±1000 range only
-  while disarmed, once a second. Armed too early, zero thrust comes out near 1100 µs (full
-  reverse). So `robot_interface` and the script wait 3.5 s disarmed before arming, and the
-  script re-arms first if it never saw the range applied. Keep `ARMING_CHECK` non-zero.
-- **Connection window.** At connection and on *Arm again*, the boat sits about 4 s disarmed,
-  then about 1 s armed in MANUAL at neutral, before override.
-- **The servo change is not saved:** an autopilot restart restores the stored values.
-- **Firmware:** Rover 4.5 or newer recommended (Lua with MAVLink receive). On older firmware the
-  script says *no MAVLink rx, GCS timer* and uses ArduPilot's GCS timer instead.
-- This script is the one piece of project code on the boat. It is autopilot configuration, not
-  a ROS node.
-
-## Troubleshooting
-
-| Symptom | Cause / fix |
+| Symptom | Fix |
 |---|---|
-| *NOT INSTALLED* | Script not running: `SCR_ENABLE` not 1, wrong folder, or no restart. Look for *LinkGuard: loaded* or a Lua error in the boat messages. |
-| Pre-arm error about scripting or memory | Lua error, or too little script memory: raise `SCR_HEAP_SIZE` a little and restart. |
-| Setup: *Laptop identity* fails | MAVROS's identity differs from `LGRD_SYSID` / `LGRD_COMPID`. The tooltip shows the real values; copy them in. |
-| *autopilot disarmed* after connecting | Arming failed (no GPS fix, EKF not ready). Read *PreArm:*, then **Arm again**. |
-| Guardian never fires in test step 2 | Identity mismatch, or `LGRD_DETECT = 0` with on-boat services on system id 1. |
-| Guardian fires while the laptop is fine | WiFi drops longer than 15 s. Check the Base Station placement. |
-| *thrusters neutral* while the laptop is fine | Heartbeats arrive late. Raise `LGRD_NEUTRAL` (below `LGRD_TIMEOUT`). |
-| Idle at ~1100 µs after a takeover | Output range not applied (see *Limits*). Report it with the dataflash log (`LGRD` records). |
-| RTL but the boat does not move | Thrusters still on passthrough (*could not set SERVO…*), or *no HOME set*. |
-| Box stays *TAKEN OVER* | Old script on the boat (Check: *Script version*), or the hand-back failed (*could not restore SERVO1/3*, *MANUAL refused*). Press **Take back control**. |
-| *Take back control* greyed | Normal: the script already handed back. |
-| Boat stops at every trail point | `LGRD_RADIUS` too small against `LGRD_TRAIL_D`, or `WP_RADIUS` large. |
-| *guardian.py not found* | MCS cannot find this folder: incomplete checkout, or set `guardian.script` in `~/.config/blueboat_mcs/config.json`. |
+| *NOT INSTALLED* | `SCR_ENABLE` not 1, wrong folder (try the other one in §3), or no restart. |
+| Setup: *Laptop identity* fails | Copy the values from the tooltip into `LGRD_SYSID` / `LGRD_COMPID`. |
+| *thrusters neutral* while the link is fine | Heartbeats arrive late: raise `LGRD_NEUTRAL`. |
+| Takeover while the laptop is fine | WiFi drops over 15 s: move the Base Station. |
+| Idle near 1100 µs after a takeover | Thrust range not set (§6). Report it with the dataflash log (`LGRD` records). |
+| Box stays *TAKEN OVER* | Press **Take back control**; check Setup for *Script version*. |
+| Boat stops at every trail point | `LGRD_RADIUS` too small against `LGRD_TRAIL_D`. |
+| Way back: *script too old (no LGRD_SAFE)* | Upload the current `link_guardian.lua` (§3, *To update the script*). |
+| Way back: *mission read back differs* / *upload refused* | Start the run again; if it repeats, check the WiFi link. The trail is used meanwhile. |
+| *Safety way back* tool greyed in the designer | The pattern is not GPS-anchored: *Set GPS Origin…* first. |
+| **Set Home** greyed: *no Set Home* | Upload the current `link_guardian.lua` (no `LGRD_HOME` on the autopilot). |
+| *set home refused: no position* | No GPS fix yet on the autopilot. |

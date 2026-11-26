@@ -220,7 +220,7 @@ OPERATOR LAPTOP (via the BlueBoat Base Station WiFi) — the module chain
 | Replanner | **built** (`BlueBoat-Replanner`, in `~/ros2_ws/install` since 2026-11-13): offline-gated; dev loop on Belief's own core; run under ROS on 2026-11-12 on an isolated graph with made-up inputs; once in Gazebo beside Control's node (a C2 development run in a built world, 2026-11-18); never on the boat | Reads **only** Belief for target evidence (plus Control's progress and events, odometry and its mission file, which carry none). Acts on its own, in simulation and on the boat. Generates **every survey type** (including the two-pass baseline and the plain boustrophedon) and sends it through Control's live path update |
 | Control (`blueboat_control`) | existing | Follows the path; owns the **live path update** service (`/blueboat/update_path`) and its progress / event topics. Built and tested in Gazebo; **not tested on water**; its one client (the Replanner) has not yet run against it |
 | Mission Control Station | existing | Operator station: launch, supervise, E-STOP. It does not use the path update yet; a survey-mission launch mode is planned |
-| Link guardian | existing (not yet tested on the boat) | ArduPilot Lua script + laptop companion that brings the boat home if the link drops |
+| Link guardian | existing, tested on the boat (owner, 2026-11-25) | ArduPilot Lua script + laptop companion that brings the boat home if the link drops |
 | Evaluation framework | **planned, not built** | Conditions, metrics, campaigns (§7.3, §8.4) |
 | SSS-Dataset-Aug-Studio | optional | Offline augmentation of YOLO datasets; nothing depends on it |
 

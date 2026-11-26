@@ -27,7 +27,7 @@ stated beside the decision wherever the simulator is described.
 | BlueBoat-Replanner | Built and installed; dev loop on Belief's core (preliminary: at the full budget no adaptive condition is distinguishable from C2; it predates Belief's arm, CR-REP-1). Run under ROS on an isolated graph, and **once in Gazebo** (2026-11-18): a C2 development run in a built world beside Control's node, Belief, Perception (dummy) and the GCS, the node on simulated time (`time_source: ros`); never on the boat |
 | SSS-Dataset-Aug-Studio | Optional; nothing depends on it |
 | Evaluation | Planned, not built |
-| `link_guardian/` | Built; not yet tested on the boat |
+| `link_guardian/` | Built; tested on the boat (owner, 2026-11-25) |
 
 ## Next work, in order
 

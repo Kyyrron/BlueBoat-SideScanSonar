@@ -13,9 +13,17 @@ drives everything else from its GUARDIAN box; the subcommands also work from a t
     guardian.py on | off        set the session flag LGRD_ON on the autopilot
     guardian.py reclaim         manual fallback: give control back to our stack (the script
                                 does it by itself as soon as the laptop is heard again)
+    guardian.py set-home        Guardian Home = the boat's position now (the trail restarts
+                                there: a link loss brings the boat back to this point)
     guardian.py watch           session companion (started by MCS): keeps the guardian ON,
-                                moves HOME to each run start, reports on
-                                /link_guardian/status, obeys /link_guardian/command
+                                reports on /link_guardian/status (with the Guardian Home the
+                                script announces), obeys /link_guardian/command (including
+                                set_home, and safety_load / safety_clear: the run's safety way
+                                back, uploaded as the autopilot's mission - README §2)
+
+The Guardian Home (2026-11-26) is the script's: where the guardian came ON, or where the
+operator pressed Set Home. The script keeps ArduPilot's HOME on it; nothing here moves HOME
+any more (until 2026-11-26 `watch` moved it to each run start and back).
 
 Arming is not done here: robot_interface arms the autopilot when a session connects
 (before going to override), and the script arms it itself if it has to take over.
@@ -34,8 +42,8 @@ import time
 from collections import deque
 
 import rclpy
-from mavros_msgs.msg import HomePosition, State, StatusText
-from mavros_msgs.srv import CommandHome, ParamPull, SetMode
+from mavros_msgs.msg import HomePosition, State, StatusText, Waypoint, WaypointList
+from mavros_msgs.srv import ParamPull, SetMode, WaypointPull, WaypointPush
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import GetParameters, SetParameters
 from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
@@ -63,10 +71,23 @@ OPTIONAL_PARAMS = {"FS_GCS_TIMEOUT"}     # absent on older firmware
 SCRIPT_PARAMS = {"LGRD_TIMEOUT"}         # exist only once the script runs
 # Verified by `check` only, never written by `setup` (a bitmask the owner may have tuned).
 ARMING_CHECK_WHY = ("0 disables Rover's pre-arm motor check, which is what refuses arming on "
-                    "passthrough and before the thrusters' output range is set (README §9)")
+                    "passthrough and before the thrusters' output range is set (README §6)")
 # Created by the script itself on its first run.
 GUARDIAN_PARAMS = ["LGRD_ENABLE", "LGRD_ON", "LGRD_SYSID", "LGRD_COMPID", "LGRD_DETECT",
-                   "LGRD_NEUTRAL", "LGRD_TRAIL_D"]
+                   "LGRD_NEUTRAL", "LGRD_TRAIL_D", "LGRD_SAFE", "LGRD_HOME"]
+
+# Safety way back (2026-11-25): uploaded as the autopilot's mission, item 0 = HOME
+# placeholder, items 1..N = NAV_WAYPOINT. Limits match link_guardian.lua.
+SAFE_MIN_POINTS, SAFE_MAX_POINTS = 2, 200
+NAV_WAYPOINT = 16
+SAFE_MATCH_DEG = 1e-6              # read-back tolerance (the autopilot stores 1e-7 deg)
+SAFE_READY_TIMEOUT_S = 10.0        # wait for the script's "way back ... ready"
+
+# Guardian Home (2026-11-26): LGRD_HOME 1 = Set Home, 3 = report; the script answers 0 / -1
+# and announces "LinkGuard: home <lat 1e-7> <lon 1e-7> on|set".
+HOME_SET, HOME_REPORT, HOME_REFUSED = 1, 3, -1
+HOME_TIMEOUT_S = 5.0
+HOME_SOURCES = {"on": "guardian ON", "set": "Set Home"}
 
 # Thruster mapping, identical to blueboat_control's param_set.py.
 RCIN1_PASSTHROUGH, RCIN3_PASSTHROUGH = 51, 53     # 'override' (our stack drives)
@@ -101,14 +122,18 @@ class Guardian(Node):
         self.create_subscription(String, "/blueboat/run_state", self._on_run_state, 10)
         self.create_subscription(String, "/blueboat/param_mode", self._on_param_mode, 10)
         self.create_subscription(String, COMMAND_TOPIC, self._on_command, 10)
+        self.mission = None          # last mavros_msgs/WaypointList seen
+        self.mission_t = 0.0         # time.monotonic() it arrived
+        self.create_subscription(WaypointList, "/mavros/mission/waypoints", self._on_mission, 10)
 
         self.pull_cli = self.create_client(ParamPull, "/mavros/param/pull")
         self.get_cli = self.create_client(GetParameters, "/mavros/param/get_parameters")
         self.set_cli = self.create_client(SetParameters, "/mavros/param/set_parameters")
         self.mode_cli = self.create_client(SetMode, "/mavros/set_mode")
-        self.home_cli = self.create_client(CommandHome, "/mavros/cmd/set_home")
         self.home_req_cli = self.create_client(Trigger, "/mavros/home_position/req_update")
         self.mavros_get_cli = self.create_client(GetParameters, "/mavros/get_parameters")
+        self.wp_push_cli = self.create_client(WaypointPush, "/mavros/mission/push")
+        self.wp_pull_cli = self.create_client(WaypointPull, "/mavros/mission/pull")
         self.status_pub = self.create_publisher(String, STATUS_TOPIC, 10)
 
         self._executor = SingleThreadedExecutor()
@@ -138,10 +163,16 @@ class Guardian(Node):
 
     def _on_text(self, msg):
         if msg.text.startswith(MESSAGE_PREFIXES):
-            self.messages.append({"t": time.time(), "severity": int(msg.severity),
-                                  "text": msg.text})
+            if parse_home(msg.text) is None and msg.text != "LinkGuard: home none":
+                # (the Guardian Home line is shown as the HOME row and on the map)
+                self.messages.append({"t": time.time(), "severity": int(msg.severity),
+                                      "text": msg.text})
             if self.on_text:
                 self.on_text(msg.text)
+
+    def _on_mission(self, msg):
+        self.mission = msg
+        self.mission_t = time.monotonic()
 
     def _on_run_state(self, msg):
         try:
@@ -315,6 +346,16 @@ def op_check(node, pull=True):
              f"LGRD_NEUTRAL {_fmt(neutral)} s, LGRD_TIMEOUT {_fmt(timeout)} s"
              + ("" if good else " - LGRD_NEUTRAL must be below LGRD_TIMEOUT or it never acts"))
 
+    if script:
+        item("Set Home", "ok" if v["LGRD_HOME"] is not None else "warn",
+             "supported" if v["LGRD_HOME"] is not None else
+             "older script: no Set Home, no Guardian Home on the map; upload the current "
+             "link_guardian.lua and restart the autopilot")
+        item("Safety way back", "ok" if v["LGRD_SAFE"] is not None else "warn",
+             "supported" if v["LGRD_SAFE"] is not None else
+             "older script: a link loss always retraces the trail; upload the current "
+             "link_guardian.lua and restart the autopilot")
+
     # ArduPilot's own failsafe must not beat the guardian to it.
     fs, timeout = v["FS_GCS_TIMEOUT"], v["LGRD_TIMEOUT"]
     if fs is not None and timeout is not None and fs <= timeout:
@@ -346,6 +387,7 @@ def op_check(node, pull=True):
             "servo1": v["SERVO1_FUNCTION"], "servo3": v["SERVO3_FUNCTION"],
             "timeout": v["LGRD_TIMEOUT"],
             "retrace": v["LGRD_TRAIL_D"] is not None,
+            "set_home": v["LGRD_HOME"] is not None,
             "armed": bool(node.state and node.state.armed),
             "mode": node.state.mode if node.state else None, "t": time.time()}
 
@@ -391,6 +433,149 @@ def op_reclaim(node, force=False):
     node.set_mode("MANUAL")
     return True, (f"control back with the station: HOLD -> SERVO1/3 {servo[0]}/{servo[1]} "
                   f"('{mode}') -> MANUAL")
+
+
+def safety_points(raw):
+    """Validate a way back from MCS: [[lat, lon], ...] -> list of (lat, lon) floats."""
+    if not isinstance(raw, list):
+        raise TypeError("points must be a list of [lat, lon]")
+    pts = []
+    for p in raw:
+        if not (isinstance(p, (list, tuple)) and len(p) == 2):
+            raise ValueError("each point must be [lat, lon]")
+        lat, lon = float(p[0]), float(p[1])
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0) or (lat == 0.0 and lon == 0.0):
+            raise ValueError(f"bad point {lat}, {lon}")
+        pts.append((lat, lon))
+    if not SAFE_MIN_POINTS <= len(pts) <= SAFE_MAX_POINTS:
+        raise ValueError(f"{len(pts)} points (allowed {SAFE_MIN_POINTS}-{SAFE_MAX_POINTS})")
+    return pts
+
+
+def mission_items(points, home=None):
+    """The mission uploaded for a way back: HOME placeholder, then one NAV_WAYPOINT per
+    point (altitude 0 relative to HOME). ArduPilot keeps its own HOME in item 0."""
+    def wp(lat, lon):
+        w = Waypoint()
+        w.frame = Waypoint.FRAME_GLOBAL_REL_ALT
+        w.command = NAV_WAYPOINT
+        w.is_current = False
+        w.autocontinue = True
+        w.x_lat, w.y_long, w.z_alt = float(lat), float(lon), 0.0
+        return w
+    items = [wp(*(home or points[0]))]
+    items += [wp(lat, lon) for lat, lon in points]
+    return items
+
+
+def mission_matches(waypoints, points):
+    """True when the autopilot's mission items 1..N are exactly the way back."""
+    if len(waypoints) != len(points) + 1:
+        return False
+    for w, (lat, lon) in zip(waypoints[1:], points):
+        if (w.command != NAV_WAYPOINT or abs(w.x_lat - lat) > SAFE_MATCH_DEG
+                or abs(w.y_long - lon) > SAFE_MATCH_DEG):
+            return False
+    return True
+
+
+def _script_has_safe(node, pull=False):
+    """Does the script on the autopilot know LGRD_SAFE (i.e. support a way back)?"""
+    if pull:
+        node.pull_params()
+    return node.get_params(["LGRD_SAFE"])["LGRD_SAFE"] is not None
+
+
+def op_safety_upload(node, points, wait_text):
+    """Upload and verify the way back, then ask the script to load it.
+
+    ``wait_text(timeout)`` returns the script's answer ("way back N pts ready" or
+    "way back invalid: ...") or None. Returns (ok, detail)."""
+    if not (_script_has_safe(node) or _script_has_safe(node, pull=True)):
+        return False, "the script on the autopilot is too old (no LGRD_SAFE)"
+    node.set_param("LGRD_SAFE", 0)           # drop the previous way back first
+    home = None
+    if node.home is not None:
+        home = (node.home.geo.latitude, node.home.geo.longitude)
+    req = WaypointPush.Request()
+    req.start_index = 0
+    req.waypoints = mission_items(points, home)
+    res = node.call(node.wp_push_cli, req, timeout=30.0)
+    if not res.success:
+        return False, f"mission upload refused ({res.wp_transfered} items sent)"
+    t0 = time.monotonic()
+    res = node.call(node.wp_pull_cli, WaypointPull.Request(), timeout=30.0)
+    if not res.success:
+        return False, "mission read-back failed"
+    end = time.monotonic() + 5.0
+    while node.mission_t <= t0 and time.monotonic() < end:
+        time.sleep(0.05)
+    if node.mission_t <= t0 or not mission_matches(node.mission.waypoints, points):
+        return False, "mission read back differs from the way back"
+    node.set_param("LGRD_SAFE_N", len(points))
+    node.set_param("LGRD_SAFE", 1)
+    answer = wait_text(SAFE_READY_TIMEOUT_S)
+    if answer is None:
+        return False, "the script did not confirm the way back"
+    if "ready" not in answer:
+        return False, answer.replace("LinkGuard: ", "")
+    return True, f"safety way back loaded ({len(points)} pts)"
+
+
+def op_safety_clear(node):
+    if not _script_has_safe(node):
+        return True, "no safety way back (older script)"
+    node.set_param("LGRD_SAFE", 0)
+    return True, "safety way back cleared: a link loss retraces the trail"
+
+
+def parse_home(text):
+    """'LinkGuard: home <lat7> <lon7> on|set' -> {lat, lon, source}, else None."""
+    parts = text.split()
+    if len(parts) != 5 or parts[0] != "LinkGuard:" or parts[1] != "home":
+        return None
+    try:
+        lat, lon = int(parts[2]) * 1e-7, int(parts[3]) * 1e-7
+    except ValueError:
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    return {"lat": lat, "lon": lon, "source": HOME_SOURCES.get(parts[4], parts[4])}
+
+
+def _script_has_home(node, pull=False):
+    if pull:
+        node.pull_params()
+    return node.get_params(["LGRD_HOME"])["LGRD_HOME"] is not None
+
+
+def op_set_home(node, wait_text):
+    """Set Home: the Guardian Home = the boat's position now, the trail restarts there.
+
+    ``wait_text(timeout)`` returns the script's next "home ..." / "set home refused ..."
+    line or None. Returns (ok, detail, home or None)."""
+    if not (_script_has_home(node) or _script_has_home(node, pull=True)):
+        return False, "the script on the autopilot is too old (no LGRD_HOME)", None
+    node.set_param("LGRD_HOME", HOME_SET)
+    answer = wait_text(HOME_TIMEOUT_S)
+    if answer is None:
+        # The answer line may have been lost on the WiFi: the parameter says what happened.
+        state = node.get_params(["LGRD_HOME"])["LGRD_HOME"]
+        if state is not None and int(state) == HOME_REFUSED:
+            return False, "the script refused Set Home (guardian not ON, or no position)", None
+        if state is None or int(state) != 0:
+            return False, "the script did not answer Set Home", None
+        node.set_param("LGRD_HOME", HOME_REPORT)     # done, line lost: ask for it again
+        answer = wait_text(HOME_TIMEOUT_S)
+        if answer is None:
+            return False, "the script did not confirm Set Home", None
+    home = parse_home(answer)
+    if home is None:
+        return False, answer.replace("LinkGuard: ", ""), None
+    if home["source"] != HOME_SOURCES["set"]:
+        return False, "the script reports a Guardian Home that was not set now", home
+    return True, (f"Guardian Home set here ({home['lat']:.7f}, {home['lon']:.7f}); "
+                  "the trail restarts from it"), home
 
 
 # ======================================================================
@@ -449,14 +634,19 @@ class Watch:
         self.busy = None               # operator command being executed
         self.running_job = None        # any job being executed (ensure included)
         self.ack = None
-        self.session_home = None
-        self.home_source = None
+        # The Guardian Home the script announced: {lat, lon, source} or None.
+        self.guardian_home = None
+        self.home_text = queue.Queue()     # the script's "home ..." answers
+        self.next_home_report = 0.0
         self.was_armed = False
-        self.was_running = False
         self.was_connected = False
         self.last_mode = None
         self.next_ensure = 0.0
         self.pending_home_req = None
+        # Safety way back of the current run: what MCS asked for, and where it stands.
+        self.want_safety = None        # {"points": [...], "run": name} or None
+        self.safety = {"state": "none", "n": 0, "run": None, "detail": ""}
+        self.safety_text = queue.Queue()   # the script's "way back ..." messages
         self.jobs = queue.Queue()
         node.on_command = self._on_command
         node.on_text = self._on_text
@@ -468,8 +658,53 @@ class Watch:
     def _on_text(self, text):
         self.log.warning(f"[boat] {text}")
         if text.startswith("LinkGuard: loaded"):
-            # The autopilot (re)booted: the script reset LGRD_ON - set it again now.
+            # The autopilot (re)booted: the script reset LGRD_ON and LGRD_SAFE - set them
+            # again now (the way back is uploaded again by the next ensure).
             self.next_ensure = 0.0
+            if self.want_safety is not None:
+                self._set_safety("loading", "autopilot restarted: loading it again")
+        if text.startswith("LinkGuard: way back") and "cleared" not in text:
+            self.safety_text.put(text)
+        # The Guardian Home (2026-11-26).
+        if text.startswith(("LinkGuard: loaded", "LinkGuard: ON,")):
+            self.guardian_home = None          # a new trail: its Home is announced next
+        home = parse_home(text)
+        if home is not None:
+            self.guardian_home = home
+            self.home_text.put(text)
+        elif text == "LinkGuard: home none" or text.startswith("LinkGuard: set home refused"):
+            if text == "LinkGuard: home none":
+                self.guardian_home = None
+            self.home_text.put(text)
+
+    def _wait_home_text(self, timeout):
+        try:
+            return self.home_text.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def _set_safety(self, state, detail):
+        ws = self.want_safety
+        self.safety = {"state": state, "n": len(ws["points"]) if ws else 0,
+                       "run": ws["run"] if ws else None, "detail": detail}
+
+    def _wait_safety_text(self, timeout):
+        try:
+            return self.safety_text.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def _safety_load(self):
+        while not self.safety_text.empty():      # stale answers from an older load
+            self.safety_text.get_nowait()
+        self._set_safety("loading", "uploading")
+        try:
+            ok, detail = op_safety_upload(self.node, self.want_safety["points"],
+                                          self._wait_safety_text)
+        except RuntimeError as e:
+            ok, detail = False, str(e)
+        self._set_safety("ready" if ok else "failed", detail)
+        return ok, detail
 
     # -- worker: one job at a time --
     def worker(self):
@@ -498,8 +733,26 @@ class Watch:
     def _run(self, job):
         n = self.node
         name = job["cmd"]
-        if name in ("ensure", "check", "setup", "on", "off", "reclaim") and not n.connected:
+        if name in ("ensure", "check", "setup", "on", "off", "reclaim", "safety_load",
+                    "safety_clear", "set_home") and not n.connected:
+            if name == "safety_load":
+                self._set_safety("failed", "autopilot not connected")
             return False, "autopilot not connected"
+        if name == "safety_load":
+            try:
+                points = safety_points(job.get("points"))
+            except (TypeError, ValueError) as e:
+                self.want_safety = None
+                self._set_safety("failed", f"bad way back: {e}")
+                return False, self.safety["detail"]
+            self.want_safety = {"points": points, "run": str(job.get("run") or "")}
+            return self._safety_load()
+        if name == "safety_clear":
+            # Sent by MCS at STOP RUN (the only way a run ends, and every MCS path that
+            # ends a session stops the run first).
+            self.want_safety = None
+            self._set_safety("none", "")
+            return op_safety_clear(n)
         if name == "ensure":
             return self._ensure()
         if name == "check":
@@ -516,6 +769,13 @@ class Watch:
             return ok, detail
         if name == "reclaim":
             return op_reclaim(n, force=bool(job.get("force")))
+        if name == "set_home":
+            while not self.home_text.empty():      # stale lines
+                self.home_text.get_nowait()
+            ok, detail, home = op_set_home(n, self._wait_home_text)
+            if home is not None:
+                self.guardian_home = home
+            return ok, detail
         return False, f"unknown command '{name}'"
 
     def _ensure(self):
@@ -530,6 +790,16 @@ class Watch:
             if self.guardian_on != self.want_on:
                 self.log.info(f"guardian {'ON' if self.want_on else 'OFF'} ({detail})")
             self.guardian_on = self.want_on
+        # The way back after an autopilot restart (the script reset LGRD_SAFE to 0).
+        if ok and self.want_safety is not None and self.safety["state"] == "loading":
+            _ok, sdetail = self._safety_load()
+            self.log.info(f"safety way back: {sdetail}")
+        # The Guardian Home not known here (this companion restarted, or its line was
+        # lost): ask the script for it, at most every 30 s.
+        if (ok and self.want_on and self.guardian_home is None and self.check.get("set_home")
+                and time.monotonic() >= self.next_home_report):
+            self.next_home_report = time.monotonic() + 30.0
+            self.node.set_param("LGRD_HOME", HOME_REPORT)
         return ok, detail
 
     # -- main loop --
@@ -565,11 +835,9 @@ class Watch:
             self.next_ensure = now + self.ENSURE_PERIOD_S
             self.jobs.put({"cmd": "ensure"})
 
-        # Arming = session start: ArduPilot sets HOME there.
+        # Arming: ArduPilot may move its HOME (the script puts it back on the Guardian
+        # Home); refresh MAVROS's copy for an older script's HOME row.
         if st.armed and not self.was_armed:
-            log.info("Autopilot armed: HOME = session start.")
-            self.session_home = None
-            self.home_source = "session start"
             self.pending_home_req = now + 2.0
         if not st.armed and self.was_armed:
             log.warning("Autopilot disarmed (E-STOP?). The guardian stays ON and arms the "
@@ -581,26 +849,8 @@ class Watch:
             if n.home_req_cli.service_is_ready():
                 n.home_req_cli.call_async(Trigger.Request())
 
-        if (st.armed and self.session_home is None and n.home is not None
-                and self.home_source == "session start"):
-            g = n.home.geo
-            self.session_home = (g.latitude, g.longitude, g.altitude)
-            log.info(f"Session-start HOME: {g.latitude:.7f}, {g.longitude:.7f}")
-
-        # Run start / run end move HOME.
-        running = n.run_running
-        if running and not self.was_running and st.connected and n.home_cli.service_is_ready():
-            n.home_cli.call_async(_home_req(True))
-            self.home_source = "run start"
-            self.pending_home_req = now + 1.5
-            log.info("Run started: HOME moved to the run start.")
-        if (not running and self.was_running and st.connected and self.session_home
-                and n.home_cli.service_is_ready()):
-            n.home_cli.call_async(_home_req(False, *self.session_home))
-            self.home_source = "session start"
-            self.pending_home_req = now + 1.5
-            log.info("Run ended: HOME back to the session start.")
-        self.was_running = running
+        # (Until 2026-11-26 HOME was moved here to each run start and back. The Guardian
+        # Home now moves only with Set Home, and the script owns it.)
 
         if st.mode != self.last_mode:
             if st.mode in AUTONOMOUS_MODES and st.connected and self.busy != "reclaim":
@@ -611,10 +861,13 @@ class Watch:
 
     def publish_status(self):
         n, st = self.node, self.node.state
-        home = None
-        if n.home is not None:
+        # The Guardian Home (where a link loss brings the boat back). An older script
+        # announces none: ArduPilot's HOME then, as before.
+        home = self.guardian_home
+        if (home is None and n.home is not None
+                and not (self.check or {}).get("set_home")):
             home = {"lat": n.home.geo.latitude, "lon": n.home.geo.longitude,
-                    "source": self.home_source}
+                    "source": "autopilot HOME"}
         msg = String()
         msg.data = json.dumps({
             "connected": bool(st and st.connected),
@@ -628,16 +881,27 @@ class Watch:
             "messages": list(n.messages),
             "busy": self.busy,
             "ack": self.ack,
+            "safety": self.safety,
         })
         n.status_pub.publish(msg)
 
 
-def _home_req(current, lat=0.0, lon=0.0, alt=0.0):
-    req = CommandHome.Request()
-    req.current_gps = current
-    req.yaw = 0.0
-    req.latitude, req.longitude, req.altitude = float(lat), float(lon), float(alt)
-    return req
+def cmd_set_home(node, args):
+    if not _need_connection(node):
+        return 1
+    lines = queue.Queue()
+    node.on_text = lambda text: lines.put(text) if (
+        parse_home(text) or text.startswith(("LinkGuard: home none",
+                                             "LinkGuard: set home refused"))) else None
+
+    def wait(timeout):
+        try:
+            return lines.get(timeout=timeout)
+        except queue.Empty:
+            return None
+    ok, detail, _home = op_set_home(node, wait)
+    print(("✓ " if ok else "✗ ") + detail)
+    return 0 if ok else 1
 
 
 def cmd_watch(node, args):
@@ -656,6 +920,7 @@ def main():
     sub.add_parser("off", help="guardian OFF (LGRD_ON = 0)")
     p = sub.add_parser("reclaim", help="take control back after a guardian return")
     p.add_argument("--force", action="store_true", help="even if a run is still active")
+    sub.add_parser("set-home", help="Guardian Home = the boat's position now")
     sub.add_parser("watch", help="session companion (started by MCS)")
     args = ap.parse_args()
 
@@ -665,6 +930,7 @@ def main():
         "on": cmd_simple(lambda n, a: op_flag(n, True)),
         "off": cmd_simple(lambda n, a: op_flag(n, False)),
         "reclaim": cmd_simple(lambda n, a: op_reclaim(n, force=a.force)),
+        "set-home": cmd_set_home,
         "watch": cmd_watch,
     }
     rclpy.init()

@@ -111,3 +111,26 @@ command line are unchanged (pinned by the existing asserts). BlueBoat-Control wa
 clock's ratio caps 2.0 / 1.5 → `_RATIO_CAP` 5.0, and the SIM badge shows a requested factor above x1 (it printed
 "SIM x1"). The smoke test pins the new range, the hint and the badge; every command line is unchanged.
 BlueBoat-SSS-Sim's launch allows `real_time_factor` up to 4.0 to match. BlueBoat-Control was not edited.
+**On 2026-11-25 the user ordered the safety way back** ("update any module you need"): for a GPS-anchored
+designer pattern, a hand-drawn route the link guardian follows on a link loss during a run of it. MCS additions
+only: `MissionModel.safety_way_back` and its mutators, the runtime key `safety_way_back` (lat/lon,
+`io_yaml.save_mission` / `read_safety_way_back`), the designer's *✚ Safety way back* (B) / *Clear way back* tools
+(`EditMode.ADD_SAFETY`, `SafetyPointItem`), `RunSession._send_safety_way_back` (`safety_load` after `start`,
+`safety_clear` at STOP RUN), `SessionState.safety_way_back`, `GuardianReadout.safety`, `GuardianView.way_back`
+and the box's **Way back** row, the map's `safety_path`, the smoke test's `safety way back ok` block. Every
+existing command line, file key and box text is unchanged (the existing blocks pass as before). The guardian
+(`link_guardian/`, not frozen) gained `safety_load` / `safety_clear`, `LGRD_SAFE` / `LGRD_SAFE_N` and the route
+logic, with offline tests in `link_guardian/test/`. BlueBoat-Control was not edited.
+
+**On 2026-11-26 the user ordered the Guardian Home update** (guardian and MCS): the place a trail retrace ends is
+the **Guardian Home**, shown on the map; a **Set Home** button moves it to the boat's position (the script restarts
+its trail there); a path's safety way back is drawn whenever its path is shown, on its own layer. MCS additions:
+`GuardianView.set_home` / `home_point`, `guardian_home_point`, the box's **Set Home** button, `MapView.guardian_home`
+and `safety_points` (`VertexDotsItem`), layers `safety_way_back` and `guardian_home` (both ON),
+`SessionState.planned_safety_way_back` and `RunSession.plan_safety_way_back`, `theme.C_GUARDIAN_HOME`, smoke
+assertions in `guardian ok` and `safety way back ok`. **Behaviour changes by that order:** the safety way back
+no longer follows the mission-path checkbox (its own layer) and is drawn before START RUN too; the HOME row reads
+`<source> · lat, lon` (was `lat, lon (source)`), and its source is the Guardian Home, no longer the run start
+(owner's answer: only Set Home moves the Home). The guardian gained `LGRD_HOME`, `set_home`, the Guardian Home
+announcement, first-point-kept thinning, the end-point arrival radius (`WP_RADIUS` + 0.5 m), and lost the HOME
+moves at run start / end. BlueBoat-Control was not edited.

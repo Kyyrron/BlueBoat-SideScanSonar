@@ -6,10 +6,11 @@ interface contract (topics, services, QoS, frames, parameters) is `.claude/inter
 modules and `project_synthesis.md` disagree: `.claude/synthesis-discrepancies.md`. Dated history:
 `docs/HISTORY.md`; where the project stands: `docs/PROJECT_STATE.md`.*
 
-**Simulator status (2026-11-18; v1.1 2026-11-21).** `BlueBoat-SSS-Sim` is frozen (`sim-freeze-v1.0-2026-11-18`, code digest
+**Simulator status (2026-11-18; v1.1).** `BlueBoat-SSS-Sim` is frozen (`sim-freeze-v1.0-2026-11-18`, code digest
 `cc29e08780aac4cd`) as a model-conditional tool; the acceptance protocol's literal verdict is **NOT READY**. v1.1
-(world generation only, pending the owner's signature) adds the World Builder's Mission-like mode: code digest
-`bbd4112928645e13`, engine digest unchanged.
+(world generation only, pending the owner's signature) adds the World Builder's Mission-like mode and a finer seabed
+raster for one large world: code digest `ed13b523d1be4f07`, engine digest `40764206ab14c647` (only
+`worldgen/world_folder.py` differs from v1.0's engine set).
 Simulated results are valid only under `SIM_VALIDITY_CONDITIONS.md`. Lines below that describe the simulator
 as still being built are its state before the freeze; the module states of 2026-11-18 are in
 `docs/PROJECT_STATE.md`.
@@ -113,9 +114,14 @@ drives; RTL only as fallback). On the laptop's **first heartbeat** it hands cont
 itself — HOLD → the saved passthrough mapping → MANUAL — so the run goes on with no operator
 action (owner, 2026-10-28; MCS "Take back control" is a fallback). Its
 laptop companion `link_guardian/laptop/guardian.py` (plain script, not a colcon package) is
-started by MCS with every real-robot launch: sets the flag, moves HOME to each run start,
-serves MCS's GUARDIAN box over `/link_guardian/status` / `/link_guardian/command`. Design,
-setup and test ladder: `link_guardian/README.md`.
+started by MCS with every real-robot launch: sets the flag, reports the **Guardian Home**
+(the trail's first point: where the guardian came ON, or the operator's **Set Home**, owner
+2026-11-26; HOME is no longer moved at run start), serves MCS's GUARDIAN box over `/link_guardian/status` / `/link_guardian/command`.
+(Owner, 2026-11-25) During a run of a GPS-anchored designer path that carries a hand-drawn
+**safety way back**, a takeover follows that instead of the trail: from its point closest to the
+boat to its last point, LOITER there; `guardian.py` uploads it at START RUN as the autopilot's
+mission (`LGRD_SAFE`), clears it at STOP RUN. Design, setup and test ladder:
+`link_guardian/README.md`.
 
 | Module | Produces |
 |---|---|
@@ -125,7 +131,7 @@ setup and test ladder: `link_guardian/README.md`.
 | **BlueBoat-MCS** | Mission launch/supervision (incl. "From a ros2bag" replay launches and the link guardian's GUARDIAN box, v1.1), pattern designer, safe shutdown — **frozen at tag `v1.0`** (§3) |
 | **BlueBoat-SSS-Sim** | GPS-anchored Gazebo worlds (World Builder GUI over MCS anchored paths) + a drop-in replacement for the real sonar interface (two renderers: the GPU ray-cast run in a slowed simulation, whose `raycast_harbour_fast` profile is the production sensor since 2026-11-14, and the calibrated geometric renderer, legacy since then, §4.3) + the **sea state** (current/waves into Gazebo, `sea_state_node`) |
 | **SSS-Dataset-Aug-Studio** — *optional* | Physics-informed augmentation of YOLO datasets (offline, file-level only); nothing in the chain depends on it |
-| **Link guardian** (`link_guardian/`, not a submodule) | Connection-loss guardian: ArduPilot Lua script + laptop companion `guardian.py` (§1.1). Not yet tested on the boat |
+| **Link guardian** (`link_guardian/`, not a submodule) | Connection-loss guardian: ArduPilot Lua script + laptop companion `guardian.py` (§1.1). Tested on the boat (owner, 2026-11-25) |
 | **BlueBoat-Belief** — `blueboat_belief` + `blueboat_belief_interfaces` | The belief map (thesis deliverable D4, not discrepancy D4 of §6), built 2026-11-04; on 2026-11-12 built into `~/ros2_ws/install` and **run under ROS (isolated graph, live in Gazebo, one real recording), never yet with a real detector**. Reads `/sss_processor/processed`, `/sss_ai/detections`, `/blueboat/odom`, `/mavros/global_position/global`, optionally `/sss_ai/image_records` (which pings the detector searched), and a survey-area file (a world `metadata.yaml` or `blueboat_survey_area/1`). Publishes `/belief_map/belief_grid` (`BeliefGrid`, contract `belief_grid/0`, RELIABLE + TRANSIENT_LOCAL, 1 Hz), `/belief_map/query_belief`, display grids, contact markers and `/diagnostics`. Snapshots under `<root>/data/Belief_data/`. Pings placed from the transducers' point with each ping's `transducer_x_offset` (since 2026-11-15; installed node not yet rebuilt). ROS-free deterministic core; offline replay of recorded inputs. Scores are uncalibrated: `p_exists` is not a probability until Perception calibrates; modelled coverage is a planning aid, not a metric for comparing survey policies |
 | **BlueBoat-Replanner** — `blueboat_replanner` | The aspect-aware replanner (thesis deliverable D6). Reads `BeliefGrid` as its only target evidence, plus `/blueboat/path_progress`, `/blueboat/path_update_event`, `/blueboat/odom` and a mission file (one WGS-84 polygon inside Belief's area). Generates every survey condition through one coverage generator (C1 single pass, C2 two-pass orthogonal = the baseline, C3 append-on-completion, C4 informative and its ablations) and changes the followed path only through `/blueboat/update_path`. Publishes `/replanner/plan`, `/replanner/decision`, `/replanner/status`; serves `/replanner/start`, `/replanner/stop`; run records under `<root>/data/Replanner_data/`. ROS-free deterministic core; gate 278/0/0. Dev loop on BlueBoat-Belief's own core, run by the node's executor (C2 frozen; 690 + 150 missions; preliminary): at the full budget no adaptive condition is distinguishable from C2, mid-mission and under a budget cut they are ahead, the aspect model shows no effect. Ran under ROS only on an isolated graph with made-up inputs; **never with Control's node, in Gazebo or on the boat**; built into `~/ros2_ws/install` (2026-11-13) |
 | **Evaluation** | **Planned, not built**. Open requirements `project_synthesis.md` §5.2, §8.4 |

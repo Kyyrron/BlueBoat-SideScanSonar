@@ -24,10 +24,13 @@ exist yet on 2026-11-18), code digest `cc29e08780aac4cd`
 `~/ros2_ws/sim_runs/sim_acceptance/freeze_decision.md`). The acceptance work (sessions 01–10) is over.
 
 - **No simulator code change** (any `*.py` of the package or `config/*.yaml`). A change means a new
-  simulator version, by owner decision only. **v1.1 (2026-11-21, session 14, owner order; pending signature):**
-  world generation only (World Builder Screen 5's Mission-like mode, `builder/` only), code digest `bbd4112928645e13`,
-  engine digest unchanged; the evidence-based population model is a second package of the simulator's repository,
-  `BlueBoat-SSS-Sim/blueboat_harbour_population/` (outside the code digest; `docs/population/` of that repository).
+  simulator version, by owner decision only. **v1.1 (sessions 14 and 16, owner orders; pending signature):**
+  world generation only: World Builder Screen 5's Mission-like mode (`builder/`) and a finer seabed raster for one
+  large world (`BuilderState.raster_resolution_m`; `builder/state.py` and `worldgen/world_folder.py`). Code digest
+  `ed13b523d1be4f07`, **engine digest `40764206ab14c647`** (only `worldgen/world_folder.py` differs in the engine
+  set); default behaviour bit-identical. The evidence-based population model is a second package of the simulator's
+  repository, `BlueBoat-SSS-Sim/blueboat_harbour_population/` (outside the code digest; `docs/population/` of that
+  repository).
 - Every simulated result is produced and stated under the conditions file, imported here:
 
 @../SIM_VALIDITY_CONDITIONS.md
@@ -44,8 +47,8 @@ sonar module (seabed images + metadata) → Perception → Belief → Replanner 
 
 | Module | Role (detail: `docs/DESIGN.md` §1, state: `docs/PROJECT_STATE.md`) |
 |---|---|
-| BlueBoat-Control | Motion, pose, thrust, trajectories, run bags and replay, live path update `/blueboat/update_path`; owns `blueboat_interfaces`. Frozen at `v1.0`, additions only |
-| BlueBoat-MCS | Mission launch and supervision, Pattern Designer, safe shutdown. Frozen at `v1.0`, additions only |
+| BlueBoat-Control | Motion, pose, thrust, trajectories, run bags and replay, live path update `/blueboat/update_path`; owns `blueboat_interfaces`; the USBL pinger pipeline (`pinger_estimator`, pinger modes off/follow/log, rewritten 2026-11-24 by owner order). Frozen at `v1.0`, additions only outside that order |
+| BlueBoat-MCS | Mission launch and supervision, Pattern Designer, safe shutdown; pinger modes, filter settings and the filtered / legacy pinger layers (2026-11-24, owner order); the designer's "Return to start" / "Repeat forever" split. Frozen at `v1.0`, additions only outside that order |
 | BlueBoat-SSS | `blueboat_sss` (sonar driver, processor, `.svlog`) and `blueboat_gcs` (mosaic, overlays, recording, seabed images) |
 | BlueBoat-SSS-Sim | Gazebo worlds, the drop-in simulated sonar (ray-cast `raycast_harbour_fast` = production sensor; the geometric renderer is legacy), sea state. **Frozen 2026-11-18** |
 | BlueBoat-Perception | The station's one detection source (`/sss_ai/detections`, `/sss_ai/image_records`); dummy detector by default, YOLO over tiles not yet trained; dataset mode |

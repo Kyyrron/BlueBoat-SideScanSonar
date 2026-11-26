@@ -38,7 +38,7 @@ Eight git submodules, plus three folders of this repository.
 | [BlueBoat-Replanner](BlueBoat-Replanner/README.md) | Aspect-aware replanner; generates every survey type | Built; run once in Gazebo; never on the boat |
 | [SSS-Dataset-Aug-Studio](SSS-Dataset-Aug-Studio/README.md) | Offline augmentation of YOLO datasets | Optional; nothing depends on it |
 | [hub/](hub/README.md) | Desktop app that starts, watches and stops every app | Built |
-| [link_guardian/](link_guardian/README.md) | Brings the boat back if the laptop link is lost | Built; **not yet tested on the boat** |
+| [link_guardian/](link_guardian/README.md) | Brings the boat back if the laptop link is lost | Built; **tested on the boat** |
 | [tools/sim_record/](tools/sim_record/README.md) | Runs and records a simulated survey from the command line | Built |
 | Evaluation | Experiment evaluation | **Planned, not built** |
 
@@ -161,7 +161,7 @@ Details: [BlueBoat-MCS/README.md](BlueBoat-MCS/README.md),
   **model-conditional tool**. A simulated result counts only if produced and stated under
   [`SIM_VALIDITY_CONDITIONS.md`](SIM_VALIDITY_CONDITIONS.md): a comparison of survey strategies
   in simulation, never a field detection rate.
-- A world-generation update (v1.1, World Builder only) is pending the owner's signature; the
+- A world-generation update (v1.1, world generation only) is pending the owner's signature; the
   sonar engine is unchanged.
 - **Detector not trained yet.** Perception runs a dummy detector by default.
 - **Whole chain in Gazebo:** ran end to end once (development run). Never on the boat.
